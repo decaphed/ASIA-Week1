@@ -1,0 +1,60 @@
+// ─────────────────────────────────────────────────────────────────────────
+// db.js — the single, shared SQLite connection.
+//
+// WHY a single shared connection?
+//   SQLite is an embedded database: it is just a file on disk. Opening one
+//   connection and reusing it everywhere (a "module singleton") avoids file
+//   locking headaches and is exactly how better-sqlite3 is designed to be
+//   used. Every model in the app imports THIS db object.
+//
+// WHY better-sqlite3?
+//   Its API is *synchronous*. `db.prepare(sql).get()` returns the row
+//   immediately — no callbacks, no async/await. For a small server like ours
+//   that makes the storage code trivial to read and reason about, which is
+//   perfect for learning. (Node's own event loop is not blocked in a way that
+//   matters here because each query is sub-millisecond.)
+// ─────────────────────────────────────────────────────────────────────────
+
+import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import { dirname, join, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { logger } from '../utils/logger.js';
+
+// __dirname is not defined in ES modules, so we reconstruct it from the URL.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Resolve the DB file path. If DB_PATH is relative (e.g. "./data.db") we
+// anchor it to the current working directory; if it is unset we default to a
+// data.db that sits next to the server/ folder.
+const rawPath = process.env.DB_PATH || join(__dirname, '..', 'data.db');
+const DB_PATH = isAbsolute(rawPath) ? rawPath : resolve(process.cwd(), rawPath);
+
+// Opening the Database creates the file automatically if it does not exist.
+const db = new Database(DB_PATH);
+
+// WAL (Write-Ahead Logging) lets readers (all our GET endpoints) run while a
+// writer (POST /api/data) is committing. Great for a "constantly writing,
+// constantly reading" dashboard.
+db.pragma('journal_mode = WAL');
+
+// Run the schema file to guarantee the SensorData table + index exist.
+const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
+db.exec(schema);
+
+logger.info(`SQLite ready at ${DB_PATH}`);
+
+/**
+ * Lightweight health probe used by GET /api/health. Runs the cheapest
+ * possible query; if it throws, the database is unavailable.
+ */
+export function isDatabaseHealthy() {
+  try {
+    db.prepare('SELECT 1').get();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export default db;

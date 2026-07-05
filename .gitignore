@@ -1,3 +1,15 @@
+# Node.js
+node_modules/
+npm-debug.log*
+dist/
+.env
+!.env.example
+
+# SQLite database files (auto-created at runtime)
+*.db
+*.db-wal
+*.db-shm
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

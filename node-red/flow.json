@@ -1,0 +1,82 @@
+[
+  {
+    "id": "iot_sim_tab",
+    "type": "tab",
+    "label": "IoT Sensor Simulator",
+    "disabled": false,
+    "info": "Generates one simulated sensor reading every second and POSTs it to the Express backend at http://localhost:3000/api/data.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST) -> debug (response)"
+  },
+  {
+    "id": "inject_1s",
+    "type": "inject",
+    "z": "iot_sim_tab",
+    "name": "every 1s",
+    "props": [
+      { "p": "payload" },
+      { "p": "topic", "vt": "str" }
+    ],
+    "repeat": "1",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "0.5",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 150,
+    "y": 140,
+    "wires": [["gen_reading"]]
+  },
+  {
+    "id": "gen_reading",
+    "type": "function",
+    "z": "iot_sim_tab",
+    "name": "generate reading",
+    "func": "// Generate one simulated sensor reading.\n// rand() returns a value in [min, max] rounded to 1 decimal place.\nfunction rand(min, max) {\n    return Math.round((Math.random() * (max - min) + min) * 10) / 10;\n}\n\nmsg.payload = {\n    temperature: rand(20, 35),   // degrees Celsius\n    humidity: rand(40, 80),      // percent\n    pressure: rand(980, 1040),   // hectopascals (hPa)\n    light: Math.random() > 0.5,  // random on/off\n    timestamp: new Date().toISOString()\n};\n\n// Tell the backend the body is JSON so Express parses it correctly.\nmsg.headers = { \"Content-Type\": \"application/json\" };\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 370,
+    "y": 140,
+    "wires": [["post_api_data"]]
+  },
+  {
+    "id": "post_api_data",
+    "type": "http request",
+    "z": "iot_sim_tab",
+    "name": "POST /api/data",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "http://localhost:3000/api/data",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 600,
+    "y": 140,
+    "wires": [["debug_out"]]
+  },
+  {
+    "id": "debug_out",
+    "type": "debug",
+    "z": "iot_sim_tab",
+    "name": "backend response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 820,
+    "y": 140,
+    "wires": []
+  }
+]
