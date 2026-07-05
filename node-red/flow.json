@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "IoT Sensor Simulator",
     "disabled": false,
-    "info": "Generates one simulated sensor reading every second and POSTs it to the Express backend at http://localhost:3000/api/data.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST) -> debug (response)"
+    "info": "Generates one simulated sensor reading every second and POSTs it to the Express backend.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST) -> debug (response)\n\nNOTE on the 'POST /api/data' node's URL:\n- Running Node-RED NATIVELY (npx node-red / node-red, no container) -> use http://localhost:3000/api/data\n- Running Node-RED INSIDE DOCKER (e.g. the official nodered/node-red image) -> 'localhost' means the container itself, not your host machine, so use http://host.docker.internal:3000/api/data instead (Docker Desktop's special DNS name for reaching the host)."
   },
   {
     "id": "inject_1s",
@@ -50,7 +50,7 @@
     "method": "POST",
     "ret": "obj",
     "paytoqs": "ignore",
-    "url": "http://localhost:3000/api/data",
+    "url": "http://host.docker.internal:3000/api/data",
     "tls": "",
     "persist": false,
     "proxy": "",

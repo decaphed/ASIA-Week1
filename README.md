@@ -196,6 +196,12 @@ below to import `node-red/flow.json` and start the simulator.
 > If you prefer a permanent install: `npm install -g node-red`, then just run
 > `node-red`.
 
+> **Running Node-RED in Docker instead?** The shipped `flow.json` targets
+> `http://host.docker.internal:3000/api/data` in its "POST /api/data" node,
+> since `localhost` inside a container refers to the container itself, not
+> your host machine. If you're running Node-RED **natively** (no container),
+> open that node and change the URL back to `http://localhost:3000/api/data`.
+
 ---
 
 ## Why SQLite
@@ -598,6 +604,7 @@ Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 | Backend offline | Dashboard shows an "Backend offline" banner; Backend indicator turns red | Start the server: `cd server && npm run dev` |
 | SQLite unavailable | `/api/health` returns `503` with `"database": "unavailable"` | Check the `DB_PATH` in `server/.env` is writable; ensure no other process has locked `data.db` |
 | Node-RED disconnected | Node-RED indicator turns red while Backend/Database stay green | Deploy the flow in Node-RED again; confirm the `inject` node's Repeat is set |
+| `ECONNREFUSED` from the `http request` node, backend confirmed running | You're running Node-RED **inside Docker** (stack trace shows a path like `file:///usr/src/node-red/...`), so `localhost` inside the container refers to the container itself, not your host machine | In the "POST /api/data" node, change the URL from `http://localhost:3000/api/data` to `http://host.docker.internal:3000/api/data` (Docker Desktop's special DNS name for reaching the host), then Deploy again |
 | Invalid sensor data (400) | Node-RED's `http request` node shows an error status | Check the function node's generated ranges match `server/utils/validation.js`'s `RANGES` |
 | Empty history / "No readings yet" | Normal on first run | Start Node-RED so readings begin flowing |
 | CORS error in browser console | Dashboard requests fail, console shows a CORS message | Make sure `client/.env`'s `VITE_API_URL` origin matches `server/.env`'s `CLIENT_ORIGIN` (default `http://localhost:5173`) |
