@@ -31,7 +31,7 @@
     "type": "function",
     "z": "iot_sim_tab",
     "name": "generate reading",
-    "func": "// Generate one simulated sensor reading.\n// rand() returns a value in [min, max] rounded to 1 decimal place.\nfunction rand(min, max) {\n    return Math.round((Math.random() * (max - min) + min) * 10) / 10;\n}\n\nmsg.payload = {\n    temperature: rand(20, 35),   // degrees Celsius\n    humidity: rand(40, 80),      // percent\n    pressure: rand(980, 1040),   // hectopascals (hPa)\n    light: Math.random() > 0.5,  // random on/off\n    timestamp: new Date().toISOString()\n};\n\n// Tell the backend the body is JSON so Express parses it correctly.\nmsg.headers = { \"Content-Type\": \"application/json\" };\n\nreturn msg;",
+    "func": "// Generate one simulated pump sensor reading.\n// rand() returns a value in [min, max] rounded to 1 decimal place.\nfunction rand(min, max) {\n    return Math.round((Math.random() * (max - min) + min) * 10) / 10;\n}\n\nconst STATUSES = ['RUNNING', 'STOPPED', 'FAULT'];\n\nmsg.payload = {\n    flowRate:          rand(50, 300),   // litres/minute\n    rpm:               rand(1000, 3600), // revolutions/minute\n    vibration:         rand(0.5, 12),   // mm/s\n    suctionPressure:   rand(0.5, 3),    // bar\n    dischargePressure: rand(2, 12),     // bar\n    motorTemp:         rand(20, 90),    // degrees Celsius\n    status:            STATUSES[Math.floor(Math.random() * STATUSES.length)],\n    timestamp:         new Date().toISOString()\n};\n\n// Tell the backend the body is JSON so Express parses it correctly.\nmsg.headers = { \"Content-Type\": \"application/json\" };\n\nreturn msg;",
     "outputs": 1,
     "timeout": 0,
     "noerr": 0,

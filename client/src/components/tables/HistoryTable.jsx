@@ -11,11 +11,14 @@ import { useMemo, useState } from 'react';
 import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 
 const COLUMNS = [
-  { key: 'timestamp', label: 'Timestamp' },
-  { key: 'temperature', label: 'Temp (°C)' },
-  { key: 'humidity', label: 'Humidity (%)' },
-  { key: 'pressure', label: 'Pressure (hPa)' },
-  { key: 'light', label: 'Light' },
+  { key: 'timestamp',         label: 'Timestamp' },
+  { key: 'flowRate',          label: 'Flow (L/min)' },
+  { key: 'rpm',               label: 'RPM' },
+  { key: 'vibration',         label: 'Vib (mm/s)' },
+  { key: 'suctionPressure',   label: 'Suction (bar)' },
+  { key: 'dischargePressure', label: 'Discharge (bar)' },
+  { key: 'motorTemp',         label: 'Motor Temp (°C)' },
+  { key: 'status',            label: 'Status' },
 ];
 
 const PAGE_SIZE = 10;
@@ -31,7 +34,16 @@ export default function HistoryTable({ rows }) {
 
     const matched = q
       ? rows.filter((r) =>
-          [r.timestamp, r.temperature, r.humidity, r.pressure, r.light ? 'on' : 'off']
+          [
+            r.timestamp,
+            r.flowRate,
+            r.rpm,
+            r.vibration,
+            r.suctionPressure,
+            r.dischargePressure,
+            r.motorTemp,
+            r.status,
+          ]
             .join(' ')
             .toLowerCase()
             .includes(q)
@@ -44,9 +56,6 @@ export default function HistoryTable({ rows }) {
       if (sortKey === 'timestamp') {
         av = new Date(a.timestamp).getTime();
         bv = new Date(b.timestamp).getTime();
-      } else if (sortKey === 'light') {
-        av = a.light ? 1 : 0;
-        bv = b.light ? 1 : 0;
       }
       if (av < bv) return sortDir === 'asc' ? -1 : 1;
       if (av > bv) return sortDir === 'asc' ? 1 : -1;
@@ -110,12 +119,15 @@ export default function HistoryTable({ rows }) {
               pageRows.map((r) => (
                 <tr key={r.id}>
                   <td>{formatDateTime(r.timestamp)}</td>
-                  <td>{formatNumber(r.temperature)}</td>
-                  <td>{formatNumber(r.humidity)}</td>
-                  <td>{formatNumber(r.pressure)}</td>
+                  <td>{formatNumber(r.flowRate)}</td>
+                  <td>{formatNumber(r.rpm, 0)}</td>
+                  <td>{formatNumber(r.vibration)}</td>
+                  <td>{formatNumber(r.suctionPressure)}</td>
+                  <td>{formatNumber(r.dischargePressure)}</td>
+                  <td>{formatNumber(r.motorTemp)}</td>
                   <td>
-                    <span className={`pill ${r.light ? 'pill--on' : 'pill--off'}`}>
-                      {r.light ? 'ON' : 'OFF'}
+                    <span className={`pill pill--${(r.status ?? 'unknown').toLowerCase()}`}>
+                      {r.status ?? '--'}
                     </span>
                   </td>
                 </tr>

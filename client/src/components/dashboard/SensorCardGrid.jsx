@@ -1,19 +1,26 @@
 // ─────────────────────────────────────────────────────────────────────────
 // SensorCardGrid.jsx — the row of live cards.
 //
-// Renders the three numeric SensorCards from the SENSORS config plus a special
-// Light card (boolean on/off) and the timestamp of the latest reading. When
-// `reading` is null (no data yet / backend down) every card shows "--".
+// Renders the six numeric SensorCards from the SENSORS config plus a special
+// Status card (RUNNING / STOPPED / FAULT) and the timestamp of the latest
+// reading. When `reading` is null (no data yet / backend down) every card
+// shows "--".
 // ─────────────────────────────────────────────────────────────────────────
 
 import SensorCard from './SensorCard.jsx';
 import { SENSORS } from '../../utils/constants.js';
 import { formatTime } from '../../utils/formatters.js';
-import { BulbIcon } from '../ui/Icons.jsx';
+import { StatusIcon } from '../ui/Icons.jsx';
+
+const STATUS_ACCENT = {
+  RUNNING: 'status--running',
+  STOPPED: 'status--stopped',
+  FAULT:   'status--fault',
+};
 
 export default function SensorCardGrid({ reading }) {
   const hasReading = reading !== null && reading !== undefined;
-  const light = hasReading ? reading.light : null;
+  const status = hasReading ? reading.status : null;
 
   return (
     <div className="sensor-grid">
@@ -25,14 +32,14 @@ export default function SensorCardGrid({ reading }) {
         />
       ))}
 
-      {/* Light is boolean, so it gets its own on/off card. */}
-      <article className={`sensor-card sensor-card--light ${light ? 'is-on' : 'is-off'}`}>
+      {/* Status is a text enum (RUNNING / STOPPED / FAULT), so it gets its own card. */}
+      <article className={`sensor-card sensor-card--status ${status ? STATUS_ACCENT[status] ?? '' : ''}`}>
         <div className="sensor-card__top">
-          <span className="sensor-card__icon"><BulbIcon /></span>
-          <span className="sensor-card__label">Light</span>
+          <span className="sensor-card__icon"><StatusIcon /></span>
+          <span className="sensor-card__label">Status</span>
         </div>
         <div className="sensor-card__value sensor-card__value--text">
-          {!hasReading ? '--' : light ? 'ON' : 'OFF'}
+          {!hasReading ? '--' : status ?? '--'}
         </div>
         <div className="sensor-card__timestamp">
           Updated {formatTime(hasReading ? reading.timestamp : null)}

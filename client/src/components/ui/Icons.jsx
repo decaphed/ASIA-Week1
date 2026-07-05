@@ -53,3 +53,39 @@ export function BulbIcon(props) {
     </svg>
   );
 }
+
+export function FlowIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 12h4l3-7 4 14 3-7h4" />
+    </svg>
+  );
+}
+
+export function RpmIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 12 16 8" />
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function VibrationIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2 12h2l2-5 4 10 4-10 2 5h6" />
+    </svg>
+  );
+}
+
+export function StatusIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M9 12h6" />
+      <path d="M12 9v6" />
+    </svg>
+  );
+}

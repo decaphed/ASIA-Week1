@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────
-// SensorCard.jsx — one numeric live value (temperature / humidity / pressure).
+// SensorCard.jsx — one numeric live value (flowRate / rpm / vibration / etc.).
 //
 // Requirement: "Animate cards whenever values change." We remember the
 // previous value in a ref; when a new value differs we (a) flash the card via
@@ -9,12 +9,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { formatNumber } from '../../utils/formatters.js';
-import { ThermometerIcon, DropletIcon, GaugeIcon } from '../ui/Icons.jsx';
+import { ThermometerIcon, GaugeIcon, FlowIcon, RpmIcon, VibrationIcon } from '../ui/Icons.jsx';
 
 const ICONS = {
-  temperature: ThermometerIcon,
-  humidity: DropletIcon,
-  pressure: GaugeIcon,
+  flowRate:          FlowIcon,
+  rpm:               RpmIcon,
+  vibration:         VibrationIcon,
+  suctionPressure:   GaugeIcon,
+  dischargePressure: GaugeIcon,
+  motorTemp:         ThermometerIcon,
 };
 
 export default function SensorCard({ sensor, value }) {

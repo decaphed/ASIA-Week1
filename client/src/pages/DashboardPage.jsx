@@ -6,8 +6,9 @@
 //   • useStats(5000)    → aggregate stats panel.
 //   • useHistory(5000)  → latest 100 rows → history table.
 //
-// It also maintains a rolling window of recent points per metric (temperature,
-// humidity, pressure) so the live charts scroll. We de-duplicate by timestamp
+// It also maintains a rolling window of recent points per pump metric (flowRate,
+// rpm, vibration, suctionPressure, dischargePressure, motorTemp) so the live
+// charts scroll. We de-duplicate by timestamp
 // so a repeated poll (same reading) doesn't add a duplicate chart point.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -24,9 +25,12 @@ import { CHART_WINDOW } from '../utils/constants.js';
 import { formatTime } from '../utils/formatters.js';
 
 const CHART_DEFS = [
-  { key: 'temperature', label: 'Temperature', unit: '°C', color: '#f97316' },
-  { key: 'humidity', label: 'Humidity', unit: '%', color: '#38bdf8' },
-  { key: 'pressure', label: 'Pressure', unit: 'hPa', color: '#a78bfa' },
+  { key: 'flowRate',          label: 'Flow Rate',          unit: 'L/min', color: '#34d399' },
+  { key: 'rpm',               label: 'RPM',                unit: 'rpm',   color: '#f97316' },
+  { key: 'vibration',         label: 'Vibration',          unit: 'mm/s',  color: '#f43f5e' },
+  { key: 'suctionPressure',   label: 'Suction Pressure',   unit: 'bar',   color: '#38bdf8' },
+  { key: 'dischargePressure', label: 'Discharge Pressure', unit: 'bar',   color: '#a78bfa' },
+  { key: 'motorTemp',         label: 'Motor Temp',         unit: '°C',    color: '#fb923c' },
 ];
 
 export default function DashboardPage() {
@@ -34,8 +38,11 @@ export default function DashboardPage() {
   const { data: history, error: historyError } = useHistory(5000);
   const { data: stats } = useStats(5000);
 
-  // Rolling chart windows: { temperature: [{t,v}], humidity: [...], pressure: [...] }
-  const [series, setSeries] = useState({ temperature: [], humidity: [], pressure: [] });
+  // Rolling chart windows: one array per metric key
+  const [series, setSeries] = useState({
+    flowRate: [], rpm: [], vibration: [],
+    suctionPressure: [], dischargePressure: [], motorTemp: [],
+  });
   const lastTsRef = useRef(null);
 
   useEffect(() => {
@@ -46,7 +53,7 @@ export default function DashboardPage() {
     const t = formatTime(reading.timestamp);
     setSeries((prev) => {
       const next = {};
-      for (const key of ['temperature', 'humidity', 'pressure']) {
+      for (const key of ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp']) {
         next[key] = [...prev[key], { t, v: reading[key] }].slice(-CHART_WINDOW);
       }
       return next;
