@@ -12,12 +12,6 @@ import { SENSORS } from '../../utils/constants.js';
 import { formatTime } from '../../utils/formatters.js';
 import { StatusIcon } from '../ui/Icons.jsx';
 
-const STATUS_ACCENT = {
-  RUNNING: 'status--running',
-  STOPPED: 'status--stopped',
-  FAULT:   'status--fault',
-};
-
 export default function SensorCardGrid({ reading }) {
   const hasReading = reading !== null && reading !== undefined;
   const status = hasReading ? reading.status : null;
@@ -33,7 +27,7 @@ export default function SensorCardGrid({ reading }) {
       ))}
 
       {/* Status is a text enum (RUNNING / STOPPED / FAULT), so it gets its own card. */}
-      <article className={`sensor-card sensor-card--status ${status ? STATUS_ACCENT[status] ?? '' : ''}`}>
+      <article className={`sensor-card sensor-card--status ${status ? `status--${status.toLowerCase()}` : ''}`}>
         <div className="sensor-card__top">
           <span className="sensor-card__icon"><StatusIcon /></span>
           <span className="sensor-card__label">Status</span>

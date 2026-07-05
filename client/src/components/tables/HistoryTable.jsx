@@ -1,10 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────
-// HistoryTable.jsx — searchable, sortable, paginated table of past readings.
-//
-// The backend hands us the latest 100 rows every 5 seconds; searching,
-// sorting and paginating happen CLIENT-SIDE here. That gives instant
-// interaction (no extra requests) and is plenty for 100 rows. useMemo caches
-// the filtered+sorted result so we only recompute when inputs actually change.
+// HistoryTable.jsx — searchable, sortable, paginated readings table.
+// v2: aria-sort on headers, SVG sort chevrons, improved empty state.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from 'react';
@@ -22,6 +18,19 @@ const COLUMNS = [
 ];
 
 const PAGE_SIZE = 10;
+
+// Small SVG chevron for sort direction — cleaner than Unicode arrows
+function SortChevron({ dir }) {
+  return dir === 'asc' ? (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" style={{ marginLeft: 4, verticalAlign: 'middle' }}>
+      <path d="M2 7l3-4 3 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ) : (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" style={{ marginLeft: 4, verticalAlign: 'middle' }}>
+      <path d="M2 3l3 4 3-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
 
 export default function HistoryTable({ rows }) {
   const [search, setSearch] = useState('');
@@ -84,12 +93,13 @@ export default function HistoryTable({ rows }) {
       <div className="history__controls">
         <input
           className="history__search"
-          placeholder="Search readings…"
+          placeholder="Filter by value or status…"
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
             setPage(1);
           }}
+          aria-label="Search readings"
         />
         <span className="history__count">{filtered.length} rows</span>
       </div>
@@ -99,11 +109,13 @@ export default function HistoryTable({ rows }) {
           <thead>
             <tr>
               {COLUMNS.map((c) => (
-                <th key={c.key} onClick={() => toggleSort(c.key)}>
+                <th
+                  key={c.key}
+                  onClick={() => toggleSort(c.key)}
+                  aria-sort={sortKey === c.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                >
                   {c.label}
-                  {sortKey === c.key && (
-                    <span className="history__arrow">{sortDir === 'asc' ? ' ▲' : ' ▼'}</span>
-                  )}
+                  {sortKey === c.key && <SortChevron dir={sortDir} />}
                 </th>
               ))}
             </tr>
@@ -138,14 +150,16 @@ export default function HistoryTable({ rows }) {
       </div>
 
       <div className="history__pagination">
-        <button disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>
-          Prev
+        <button disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}
+          aria-label="Previous page">
+          ← Prev
         </button>
         <span>
-          Page {currentPage} / {totalPages}
+          {currentPage} / {totalPages}
         </span>
-        <button disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)}>
-          Next
+        <button disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)}
+          aria-label="Next page">
+          Next →
         </button>
       </div>
     </div>

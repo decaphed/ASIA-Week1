@@ -25,12 +25,12 @@ import { CHART_WINDOW } from '../utils/constants.js';
 import { formatTime } from '../utils/formatters.js';
 
 const CHART_DEFS = [
-  { key: 'flowRate',          label: 'Flow Rate',          unit: 'L/min', color: '#34d399' },
-  { key: 'rpm',               label: 'RPM',                unit: 'rpm',   color: '#f97316' },
-  { key: 'vibration',         label: 'Vibration',          unit: 'mm/s',  color: '#f43f5e' },
+  { key: 'flowRate',          label: 'Flow Rate',          unit: 'L/min', color: '#00b4d8' },
+  { key: 'rpm',               label: 'RPM',                unit: 'rpm',   color: '#f59e0b' },
+  { key: 'vibration',         label: 'Vibration',          unit: 'mm/s',  color: '#ef4444' },
   { key: 'suctionPressure',   label: 'Suction Pressure',   unit: 'bar',   color: '#38bdf8' },
-  { key: 'dischargePressure', label: 'Discharge Pressure', unit: 'bar',   color: '#a78bfa' },
-  { key: 'motorTemp',         label: 'Motor Temp',         unit: '°C',    color: '#fb923c' },
+  { key: 'dischargePressure', label: 'Discharge Pressure', unit: 'bar',   color: '#818cf8' },
+  { key: 'motorTemp',         label: 'Motor Temp',         unit: '°C',    color: '#f97316' },
 ];
 
 export default function DashboardPage() {
@@ -79,14 +79,14 @@ export default function DashboardPage() {
       </section>
 
       {/* Aggregate statistics (also the "Settings" nav target — the closest thing to a system/config view) */}
-      <Card id="settings" title="System Statistics" subtitle="Aggregated across all stored readings">
+      <Card id="settings" title="Aggregate Statistics" subtitle="Computed across all stored readings">
         <StatsPanel stats={stats} />
       </Card>
 
       {/* Live charts */}
       <section className="dashboard__charts" id="analytics">
         {CHART_DEFS.map((c) => (
-          <Card key={c.key} title={`${c.label} — live`}>
+          <Card key={c.key} title={`${c.label}`}>
             <LiveChart label={c.label} unit={c.unit} color={c.color} points={series[c.key]} />
           </Card>
         ))}
@@ -96,7 +96,7 @@ export default function DashboardPage() {
       <Card
         id="history"
         title="Historical Readings"
-        subtitle="Latest 100 stored readings · auto-refreshes every 5s"
+        subtitle="Latest 100 rows · client-side search &amp; sort · refreshes every 5 s"
       >
         {historyError && rows.length === 0 ? (
           <ErrorBanner title="Could not load history" message="Retrying automatically…" />

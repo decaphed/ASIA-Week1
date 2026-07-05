@@ -35,8 +35,8 @@ export default function Topbar({ health, healthError }) {
   return (
     <header className="topbar">
       <div className="topbar__title">
-        <h1>Industrial Monitoring</h1>
-        <p>Live sensor telemetry &amp; historical analytics</p>
+        <h1>Industrial Pump Monitor</h1>
+        <p>Live telemetry &amp; historical analytics</p>
       </div>
       <div className="topbar__status">
         <StatusIndicator label="Backend" status={backendStatus} />

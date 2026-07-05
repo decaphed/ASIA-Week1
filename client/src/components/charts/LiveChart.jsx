@@ -1,13 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────
-// LiveChart.jsx — a reusable Chart.js line chart (via react-chartjs-2).
-//
-// Chart.js is modular: you must register only the pieces you use (tree-shaking
-// keeps the bundle small). We register line/point elements, the two scales, a
-// tooltip and the Filler (for the soft area under the line) ONCE here.
-//
-// `points` is an array of { t: label, v: number }. We disable animation so the
-// chart redraws instantly each second instead of easing (which would look
-// laggy when new data arrives every 1s).
+// LiveChart.jsx — reusable Chart.js line chart (react-chartjs-2).
+// v2: tighter grid lines, improved tooltip, empty-state placeholder,
+//     unit shown in tooltip callback.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { Line } from 'react-chartjs-2';
@@ -24,6 +18,21 @@ import {
 ChartJS.register(LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler);
 
 export default function LiveChart({ label, color, unit, points }) {
+  // Empty state — show a placeholder instead of a blank canvas
+  if (!points || points.length === 0) {
+    return (
+      <div className="live-chart">
+        <div className="live-chart__header">
+          <span className="live-chart__label" style={{ color }}>{label}</span>
+          <span className="live-chart__latest" style={{ color: 'var(--text-faint)' }}>--</span>
+        </div>
+        <div className="live-chart__empty">Waiting for data…</div>
+      </div>
+    );
+  }
+
+  const latest = points[points.length - 1].v;
+
   const data = {
     labels: points.map((p) => p.t),
     datasets: [
@@ -31,11 +40,12 @@ export default function LiveChart({ label, color, unit, points }) {
         label,
         data: points.map((p) => p.v),
         borderColor: color,
-        backgroundColor: `${color}22`, // same colour, ~13% alpha for the fill
+        backgroundColor: `${color}18`,   // ~9% alpha fill
         fill: true,
-        tension: 0.35,
+        tension: 0.4,
         pointRadius: 0,
-        borderWidth: 2,
+        pointHitRadius: 12,
+        borderWidth: 1.5,
       },
     ],
   };
@@ -44,30 +54,57 @@ export default function LiveChart({ label, color, unit, points }) {
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
+    interaction: {
+      mode: 'index',
+      intersect: false,
+    },
     plugins: {
       legend: { display: false },
-      tooltip: { intersect: false, mode: 'index' },
+      tooltip: {
+        backgroundColor: 'rgba(13, 21, 32, 0.92)',
+        borderColor: 'rgba(30, 45, 61, 0.8)',
+        borderWidth: 1,
+        titleColor: '#8ca0b4',
+        bodyColor: '#dde6ee',
+        titleFont: { family: "'Consolas', monospace", size: 11 },
+        bodyFont: { family: "'Consolas', monospace", size: 13, weight: '700' },
+        padding: 10,
+        displayColors: false,
+        callbacks: {
+          label: (ctx) => `${ctx.parsed.y} ${unit}`,
+        },
+      },
     },
     scales: {
-      x: { display: false, grid: { display: false } },
+      x: {
+        display: false,
+        grid: { display: false },
+      },
       y: {
-        grid: { color: 'rgba(148,163,184,0.12)' },
+        position: 'right',
+        grid: {
+          color: 'rgba(30, 45, 61, 0.8)',
+          drawBorder: false,
+        },
+        border: { display: false },
         ticks: {
-          color: '#94a3b8',
-          maxTicksLimit: 5,
-          callback: (v) => `${v}${unit}`,
+          color: '#526070',
+          maxTicksLimit: 4,
+          font: { family: "'Consolas', monospace", size: 11 },
+          callback: (v) => `${v}`,
+          padding: 6,
         },
       },
     },
   };
 
-  const latest = points.length ? `${points[points.length - 1].v}${unit}` : '--';
-
   return (
     <div className="live-chart">
       <div className="live-chart__header">
         <span className="live-chart__label" style={{ color }}>{label}</span>
-        <span className="live-chart__latest">{latest}</span>
+        <span className="live-chart__latest" style={{ color }}>
+          {latest}<span style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: '4px', fontFamily: 'var(--font)', fontWeight: 400 }}>{unit}</span>
+        </span>
       </div>
       <div className="live-chart__canvas">
         <Line data={data} options={options} />
