@@ -48,6 +48,12 @@ export async function getHealth() {
   return res.data;
 }
 
+/** GET /api/forecast → per-metric { level, trend, forecast, lowerBound, upperBound } (or null). */
+export async function getForecast() {
+  const res = await client.get('/forecast');
+  return res.data.data;
+}
+
 /** POST /api/data → store a reading. (Handy for manual testing from the UI.) */
 export async function postReading(reading) {
   const res = await client.post('/data', reading);

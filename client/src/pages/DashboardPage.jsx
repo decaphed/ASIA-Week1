@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
-import { useLiveData, useHistory, useStats } from '../hooks/useSensorData.js';
+import { useLiveData, useHistory, useStats, useForecast } from '../hooks/useSensorData.js';
 import Card from '../components/ui/Card.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import ErrorBanner from '../components/ui/ErrorBanner.jsx';
@@ -13,6 +13,7 @@ import SensorCardGrid from '../components/dashboard/SensorCardGrid.jsx';
 import StatsPanel from '../components/dashboard/StatsPanel.jsx';
 import LiveChart from '../components/charts/LiveChart.jsx';
 import HistoryTable from '../components/tables/HistoryTable.jsx';
+import ManualReadingForm from '../components/dashboard/ManualReadingForm.jsx';
 import { CHART_WINDOW, SENSORS } from '../utils/constants.js';
 import { formatTime } from '../utils/formatters.js';
 
@@ -31,7 +32,7 @@ const MECHANICAL_CHARTS = [
   { key: 'motorTemp',         color: '#f97316' },
 ];
 
-function ChartGroup({ title, subtitle, defs, series, id }) {
+function ChartGroup({ title, subtitle, defs, series, forecast, id }) {
   return (
     <div className="chart-group" id={id}>
       <div className="chart-group__header">
@@ -50,6 +51,7 @@ function ChartGroup({ title, subtitle, defs, series, id }) {
                 points={series[key]}
                 warnHigh={sensor.warnHigh}
                 alarmHigh={sensor.alarmHigh}
+                forecast={forecast ? forecast[key] : null}
               />
             </div>
           );
@@ -63,6 +65,7 @@ export default function DashboardPage() {
   const { data: reading, error: liveError, loading: liveLoading, refresh } = useLiveData(1000);
   const { data: history, error: historyError } = useHistory(5000);
   const { data: stats } = useStats(5000);
+  const { data: forecast } = useForecast();
 
   const [series, setSeries] = useState(
     Object.fromEntries(SENSORS.map((s) => [s.key, []]))
@@ -111,6 +114,7 @@ export default function DashboardPage() {
           subtitle="Flow · Suction · Discharge"
           defs={HYDRAULIC_CHARTS}
           series={series}
+          forecast={forecast}
         />
 
         {/* ── 3. Trend Charts — Mechanical Condition ───────────────────── */}
@@ -120,10 +124,20 @@ export default function DashboardPage() {
           subtitle="Speed · Vibration · Temperature"
           defs={MECHANICAL_CHARTS}
           series={series}
+          forecast={forecast}
         />
       </section>
 
-      {/* ── 4. Aggregate Statistics ───────────────────────────────────── */}
+      {/* ── 4. Manual Test Reading ───────────────────────────────────── */}
+      <Card
+        id="manual-entry"
+        title="Manual Test Reading"
+        subtitle="Submit one reading directly to POST /api/data — bypasses Node-RED"
+      >
+        <ManualReadingForm onSubmitted={refresh} />
+      </Card>
+
+      {/* ── 5. Aggregate Statistics ───────────────────────────────────── */}
       <Card id="settings" title="Operating Statistics" subtitle="Session averages across all stored readings">
         <StatsPanel stats={stats} />
       </Card>

@@ -3,10 +3,11 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 export const POLL_INTERVALS = {
-  live:    1000,
-  stats:   5000,
-  health:  5000,
-  history: 5000,
+  live:     1000,
+  stats:    5000,
+  health:   5000,
+  history:  5000,
+  forecast: 15000,
 };
 
 export const CHART_WINDOW = 40;
