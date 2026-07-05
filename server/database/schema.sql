@@ -9,22 +9,23 @@
 CREATE TABLE IF NOT EXISTS SensorData (
   -- Surrogate primary key. INTEGER PRIMARY KEY in SQLite is an alias for the
   -- built-in ROWID, so it auto-increments automatically without extra keywords.
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
 
-  -- The three numeric measurements. REAL = floating-point column.
-  temperature REAL    NOT NULL,   -- degrees Celsius, ~20–35
-  humidity    REAL    NOT NULL,   -- percent, ~40–80
-  pressure    REAL    NOT NULL,   -- hectopascals (hPa), ~980–1040
+  -- Pump telemetry. REAL = floating-point column.
+  flowRate           REAL NOT NULL,   -- litres/minute, ~50–300
+  rpm                REAL NOT NULL,   -- revolutions/minute, ~1000–3600
+  vibration          REAL NOT NULL,   -- mm/s, ~0.5–12
+  suctionPressure    REAL NOT NULL,   -- bar, ~0.5–3
+  dischargePressure  REAL NOT NULL,   -- bar, ~2–12
+  motorTemp          REAL NOT NULL,   -- degrees Celsius, ~20–90
 
-  -- SQLite has no native BOOLEAN type, so we store the light status as an
-  -- INTEGER (0 = off / false, 1 = on / true) and convert back to a real
-  -- boolean in the service layer.
-  light       INTEGER NOT NULL DEFAULT 0,
+  -- Run state as a short text enum: 'RUNNING' | 'STOPPED' | 'FAULT'.
+  status             TEXT NOT NULL DEFAULT 'STOPPED',
 
   -- ISO-8601 timestamp of the reading (e.g. 2026-07-05T10:00:00.000Z). Stored
   -- as TEXT because SQLite has no dedicated date type; ISO strings sort
   -- chronologically as plain text, which is exactly what we want.
-  timestamp   TEXT    NOT NULL
+  timestamp          TEXT NOT NULL
 );
 
 -- Index on timestamp: the dashboard constantly asks for "the newest rows"

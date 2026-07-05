@@ -22,10 +22,13 @@ function rowToReading(row) {
   if (!row) return null;
   return {
     id: row.id,
-    temperature: row.temperature,
-    humidity: row.humidity,
-    pressure: row.pressure,
-    light: row.light === 1, // 0/1 → boolean
+    flowRate: row.flowRate,
+    rpm: row.rpm,
+    vibration: row.vibration,
+    suctionPressure: row.suctionPressure,
+    dischargePressure: row.dischargePressure,
+    motorTemp: row.motorTemp,
+    status: row.status,
     timestamp: row.timestamp,
   };
 }
@@ -36,11 +39,13 @@ function rowToReading(row) {
  */
 export function saveReading(data) {
   const record = {
-    temperature: data.temperature,
-    humidity: data.humidity,
-    pressure: data.pressure,
-    // better-sqlite3 cannot bind a JS boolean, so store 0/1.
-    light: data.light ? 1 : 0,
+    flowRate: data.flowRate,
+    rpm: data.rpm,
+    vibration: data.vibration,
+    suctionPressure: data.suctionPressure,
+    dischargePressure: data.dischargePressure,
+    motorTemp: data.motorTemp,
+    status: data.status || 'RUNNING',
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
     timestamp: data.timestamp || new Date().toISOString(),
   };
@@ -80,8 +85,11 @@ export function getStatistics() {
   return {
     totalRecords: model.getCount(),
     latestTimestamp: model.getLatestTimestamp(),
-    averageTemperature: round2(averages.avgTemperature),
-    averageHumidity: round2(averages.avgHumidity),
-    averagePressure: round2(averages.avgPressure),
+    averageFlowRate: round2(averages.avgFlowRate),
+    averageRpm: round2(averages.avgRpm),
+    averageVibration: round2(averages.avgVibration),
+    averageSuctionPressure: round2(averages.avgSuctionPressure),
+    averageDischargePressure: round2(averages.avgDischargePressure),
+    averageMotorTemp: round2(averages.avgMotorTemp),
   };
 }

@@ -17,8 +17,10 @@ import db from '../database/db.js';
 // INSERT a new reading. Named parameters (@temperature …) are filled from an
 // object passed to .run({...}). Returns info incl. lastInsertRowid.
 const insertStmt = db.prepare(`
-  INSERT INTO SensorData (temperature, humidity, pressure, light, timestamp)
-  VALUES (@temperature, @humidity, @pressure, @light, @timestamp)
+  INSERT INTO SensorData
+    (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, timestamp)
+  VALUES
+    (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @timestamp)
 `);
 
 // The single newest row. ORDER BY id DESC LIMIT 1 = "highest id" = latest
@@ -46,9 +48,12 @@ const countStmt = db.prepare(`
 // AVG() aggregates across the whole table. SQLite returns NULL for AVG of an
 // empty table, which the service layer handles.
 const averagesStmt = db.prepare(`
-  SELECT AVG(temperature) AS avgTemperature,
-         AVG(humidity)    AS avgHumidity,
-         AVG(pressure)    AS avgPressure
+  SELECT AVG(flowRate)          AS avgFlowRate,
+         AVG(rpm)                AS avgRpm,
+         AVG(vibration)          AS avgVibration,
+         AVG(suctionPressure)    AS avgSuctionPressure,
+         AVG(dischargePressure)  AS avgDischargePressure,
+         AVG(motorTemp)          AS avgMotorTemp
   FROM SensorData
 `);
 

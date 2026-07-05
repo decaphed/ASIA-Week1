@@ -12,15 +12,20 @@
 // database.
 // ─────────────────────────────────────────────────────────────────────────
 
-// Plausible physical ranges. Anything outside is almost certainly a bad
-// reading or a bug, so we refuse it.
+// Plausible physical ranges for a pump. Anything outside is almost certainly
+// a bad reading or a bug, so we refuse it. Ranges are wider than the
+// simulator's normal output so occasional fault-condition spikes still pass.
 export const RANGES = {
-  temperature: { min: -50, max: 150 }, // °C
-  humidity: { min: 0, max: 100 }, // %
-  pressure: { min: 800, max: 1100 }, // hPa
+  flowRate: { min: 0, max: 500 }, // L/min
+  rpm: { min: 0, max: 5000 }, // revolutions/minute
+  vibration: { min: 0, max: 25 }, // mm/s
+  suctionPressure: { min: 0, max: 10 }, // bar
+  dischargePressure: { min: 0, max: 25 }, // bar
+  motorTemp: { min: -20, max: 150 }, // °C
 };
 
-const NUMERIC_FIELDS = ['temperature', 'humidity', 'pressure'];
+const NUMERIC_FIELDS = Object.keys(RANGES);
+const VALID_STATUSES = ['RUNNING', 'STOPPED', 'FAULT'];
 
 /**
  * Validate a reading body.
@@ -46,10 +51,9 @@ export function validateReading(body) {
     }
   }
 
-  // light is optional. Accept real booleans as well as 0/1 for convenience.
-  if (body.light !== undefined) {
-    const ok = typeof body.light === 'boolean' || body.light === 0 || body.light === 1;
-    if (!ok) errors.push('light must be a boolean (or 0/1)');
+  // status is optional; if present it must be one of the known run states.
+  if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
+    errors.push(`status must be one of: ${VALID_STATUSES.join(', ')}`);
   }
 
   // timestamp is optional; if present it must be a parseable date string.
