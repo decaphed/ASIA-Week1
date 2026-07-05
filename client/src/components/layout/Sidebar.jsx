@@ -6,11 +6,11 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 const NAV_ITEMS = [
-  { label: 'Dashboard', icon: '▣', active: true },
-  { label: 'Sensors', icon: '◈' },
-  { label: 'History', icon: '≡' },
-  { label: 'Analytics', icon: '◉' },
-  { label: 'Settings', icon: '⚙' },
+  { label: 'Dashboard', icon: '▣', href: '#dashboard', active: true },
+  { label: 'Sensors', icon: '◈', href: '#sensors' },
+  { label: 'History', icon: '≡', href: '#history' },
+  { label: 'Analytics', icon: '◉', href: '#analytics' },
+  { label: 'Settings', icon: '⚙', href: '#settings' },
 ];
 
 export default function Sidebar() {
@@ -29,7 +29,7 @@ export default function Sidebar() {
         {NAV_ITEMS.map((item) => (
           <a
             key={item.label}
-            href="#"
+            href={item.href}
             className={`sidebar__link ${item.active ? 'is-active' : ''}`}
           >
             <span className="sidebar__icon">{item.icon}</span>

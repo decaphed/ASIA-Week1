@@ -39,6 +39,8 @@
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
+html { scroll-behavior: smooth; }
+#sensors, #settings, #analytics, #history { scroll-margin-top: calc(var(--topbar-h) + 16px); }
 
 body {
   margin: 0;
@@ -161,7 +163,7 @@ button { font-family: inherit; cursor: pointer; }
 
 /* ── Dashboard layout ───────────────────────────────────────────────────── */
 .dashboard__section { margin-bottom: 24px; }
-.dashboard__charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.dashboard__charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-bottom: 24px; }
 .dashboard__charts .card { margin-bottom: 0; }
 .dashboard__empty { padding: 24px; text-align: center; color: var(--text-dim); }
 

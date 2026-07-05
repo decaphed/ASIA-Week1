@@ -57,7 +57,7 @@ export default function DashboardPage() {
   const rows = history?.data ?? [];
 
   return (
-    <div className="dashboard">
+    <div className="dashboard" id="dashboard">
       {backendOffline && (
         <ErrorBanner
           title="Backend offline"
@@ -67,17 +67,17 @@ export default function DashboardPage() {
       )}
 
       {/* Live sensor cards */}
-      <section className="dashboard__section">
+      <section className="dashboard__section" id="sensors">
         <SensorCardGrid reading={reading} />
       </section>
 
-      {/* Aggregate statistics */}
-      <Card title="System Statistics" subtitle="Aggregated across all stored readings">
+      {/* Aggregate statistics (also the "Settings" nav target — the closest thing to a system/config view) */}
+      <Card id="settings" title="System Statistics" subtitle="Aggregated across all stored readings">
         <StatsPanel stats={stats} />
       </Card>
 
       {/* Live charts */}
-      <section className="dashboard__charts">
+      <section className="dashboard__charts" id="analytics">
         {CHART_DEFS.map((c) => (
           <Card key={c.key} title={`${c.label} — live`}>
             <LiveChart label={c.label} unit={c.unit} color={c.color} points={series[c.key]} />
@@ -87,6 +87,7 @@ export default function DashboardPage() {
 
       {/* Historical table */}
       <Card
+        id="history"
         title="Historical Readings"
         subtitle="Latest 100 stored readings · auto-refreshes every 5s"
       >

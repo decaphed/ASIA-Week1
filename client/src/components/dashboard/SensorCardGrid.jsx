@@ -9,6 +9,7 @@
 import SensorCard from './SensorCard.jsx';
 import { SENSORS } from '../../utils/constants.js';
 import { formatTime } from '../../utils/formatters.js';
+import { BulbIcon } from '../ui/Icons.jsx';
 
 export default function SensorCardGrid({ reading }) {
   const hasReading = reading !== null && reading !== undefined;
@@ -27,7 +28,7 @@ export default function SensorCardGrid({ reading }) {
       {/* Light is boolean, so it gets its own on/off card. */}
       <article className={`sensor-card sensor-card--light ${light ? 'is-on' : 'is-off'}`}>
         <div className="sensor-card__top">
-          <span className="sensor-card__icon">{light ? '💡' : '🌙'}</span>
+          <span className="sensor-card__icon"><BulbIcon /></span>
           <span className="sensor-card__label">Light</span>
         </div>
         <div className="sensor-card__value sensor-card__value--text">

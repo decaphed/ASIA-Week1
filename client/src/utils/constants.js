@@ -20,7 +20,7 @@ export const NODE_RED_FRESH_SECONDS = 5;
 // Definition of the numeric sensor cards. `min`/`max` drive the little
 // fill-bar under each value; `accent` maps to a CSS colour class.
 export const SENSORS = [
-  { key: 'temperature', label: 'Temperature', unit: '°C', icon: '🌡', min: 20, max: 35, accent: 'temp' },
-  { key: 'humidity', label: 'Humidity', unit: '%', icon: '💧', min: 40, max: 80, accent: 'humidity' },
-  { key: 'pressure', label: 'Pressure', unit: 'hPa', icon: '⏱', min: 980, max: 1040, accent: 'pressure' },
+  { key: 'temperature', label: 'Temperature', unit: '°C', min: 20, max: 35, accent: 'temp' },
+  { key: 'humidity', label: 'Humidity', unit: '%', min: 40, max: 80, accent: 'humidity' },
+  { key: 'pressure', label: 'Pressure', unit: 'hPa', min: 980, max: 1040, accent: 'pressure' },
 ];

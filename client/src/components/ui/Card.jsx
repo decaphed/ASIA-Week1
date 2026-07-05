@@ -5,10 +5,10 @@
 // Reusable UI primitives like this keep markup DRY and the styling uniform.
 // ─────────────────────────────────────────────────────────────────────────
 
-export default function Card({ title, subtitle, actions, className = '', children }) {
+export default function Card({ id, title, subtitle, actions, className = '', children }) {
   const hasHeader = title || subtitle || actions;
   return (
-    <section className={`card ${className}`}>
+    <section id={id} className={`card ${className}`}>
       {hasHeader && (
         <header className="card__header">
           <div>

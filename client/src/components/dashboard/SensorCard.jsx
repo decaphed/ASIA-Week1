@@ -9,8 +9,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { formatNumber } from '../../utils/formatters.js';
+import { ThermometerIcon, DropletIcon, GaugeIcon } from '../ui/Icons.jsx';
+
+const ICONS = {
+  temperature: ThermometerIcon,
+  humidity: DropletIcon,
+  pressure: GaugeIcon,
+};
 
 export default function SensorCard({ sensor, value }) {
+  const Icon = ICONS[sensor.key];
   const prevRef = useRef(null);
   const [pulse, setPulse] = useState(false);
   const [delta, setDelta] = useState(0);
@@ -40,7 +48,7 @@ export default function SensorCard({ sensor, value }) {
   return (
     <article className={`sensor-card sensor-card--${sensor.accent} ${pulse ? 'is-pulsing' : ''}`}>
       <div className="sensor-card__top">
-        <span className="sensor-card__icon">{sensor.icon}</span>
+        <span className="sensor-card__icon"><Icon /></span>
         <span className="sensor-card__label">{sensor.label}</span>
         <span className={`sensor-card__trend sensor-card__trend--${trend}`}>{arrow}</span>
       </div>
