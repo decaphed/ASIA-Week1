@@ -472,10 +472,13 @@ button { font-family: inherit; cursor: pointer; border: none; }
 
 /* ── Alarm badge ───────────────────────────────────────────────────────── */
 .sensor-card__alarm-badge {
-  position: absolute; top: 8px; right: 8px;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;   /* sits in normal flow, not overlapping anything */
   font-size: 8px; font-weight: 800; letter-spacing: 0.8px;
   text-transform: uppercase; font-family: var(--font);
-  padding: 2px 6px; border-radius: var(--radius-xs);
+  padding: 2px 7px; border-radius: var(--radius-xs);
+  line-height: 1.4;
 }
 .sensor-card__alarm-badge--warn {
   background: var(--warn-bg); color: var(--warn-bright);
@@ -507,13 +510,22 @@ button { font-family: inherit; cursor: pointer; border: none; }
 }
 
 .sensor-card__trend {
-  margin-left: auto; flex-shrink: 0; margin-top: 2px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-bottom: 2px;
 }
 .sensor-card__trend--up   { color: var(--ok-bright); }
 .sensor-card__trend--down { color: var(--danger-bright); }
 .sensor-card__trend--flat { color: var(--text-faint); }
 
 /* ── Value display ─────────────────────────────────────────────────────── */
+.sensor-card__value-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
 .sensor-card__value {
   font-size: 28px; font-weight: 700; font-family: var(--mono);
   display: flex; align-items: baseline; gap: 5px;
@@ -819,13 +831,27 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .live-chart__threshold {
   position: absolute; left: 0; right: 34px; /* right gap = y-axis tick width */
   height: 0; pointer-events: none;
+  /* transform moves the div so its top edge (the border-top line) sits
+     exactly at the bottom% coordinate — no half-pixel shift */
+  transform: translateY(0);
 }
 .live-chart__threshold--warn  { border-top: 1px dashed rgba(245,158,11,0.60); }
 .live-chart__threshold--alarm { border-top: 1px dashed rgba(239,68,68,0.65); }
 .live-chart__threshold-label {
-  position: absolute; right: -32px; top: -9px;
+  position: absolute;
+  left: 4px;           /* inside the chart area, left edge */
+  top: 0;              /* sits on the line */
+  transform: translateY(-100%); /* shift label up so bottom edge sits on line */
   font-family: var(--mono); font-size: 8px; font-weight: 800;
   letter-spacing: 0.5px; line-height: 1;
+  padding: 1px 3px;
+  border-radius: 2px;
 }
-.live-chart__threshold--warn  .live-chart__threshold-label { color: rgba(245,158,11,0.85); }
-.live-chart__threshold--alarm .live-chart__threshold-label { color: rgba(239,68,68,0.85); }
+.live-chart__threshold--warn  .live-chart__threshold-label {
+  color: rgba(245,158,11,0.9);
+  background: rgba(245,158,11,0.08);
+}
+.live-chart__threshold--alarm .live-chart__threshold-label {
+  color: rgba(239,68,68,0.9);
+  background: rgba(239,68,68,0.08);
+}

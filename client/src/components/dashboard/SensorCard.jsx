@@ -97,14 +97,17 @@ export default function SensorCard({ sensor, value }) {
           <span className="sensor-card__shortlabel">{sensor.shortLabel}</span>
           <span className="sensor-card__label">{sensor.label}</span>
         </div>
+        {/* Trend arrow is independent of alarm badge — sits in its own row */}
+      </div>
+
+      <div className="sensor-card__value-row">
+        <div className={`sensor-card__value sensor-card__value--alarm-${alarm}`}>
+          {hasValue ? formatNumber(value, precision) : '--'}
+          <span className="sensor-card__unit">{sensor.unit}</span>
+        </div>
         <span className={`sensor-card__trend sensor-card__trend--${trend}`}>
           <TrendArrow trend={trend} />
         </span>
-      </div>
-
-      <div className={`sensor-card__value sensor-card__value--alarm-${alarm}`}>
-        {hasValue ? formatNumber(value, precision) : '--'}
-        <span className="sensor-card__unit">{sensor.unit}</span>
       </div>
 
       {/* Fill bar with threshold markers */}
