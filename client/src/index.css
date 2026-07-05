@@ -618,6 +618,36 @@ button { font-family: inherit; cursor: pointer; border: none; }
 /* ══════════════════════════════════════════════════════════════════════════
    STATS PANEL
    ══════════════════════════════════════════════════════════════════════════ */
+.stats-panel-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.stat-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding-top: 4px;
+}
+.stat-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.stat-divider__label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.stats-panel--system {
+  margin-top: 10px;
+  grid-template-columns: repeat(3, 1fr);
+}
 .stats-panel {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
 }
@@ -782,16 +812,20 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .live-chart__canvas-wrap {
   position: relative;
 }
+.live-chart__canvas {
+  /* height is set inline on the canvas-wrap; this fills it */
+  height: 100%;
+}
 .live-chart__threshold {
-  position: absolute; left: 0; right: 28px; /* leave space for y-axis ticks */
-  height: 1px; pointer-events: none;
+  position: absolute; left: 0; right: 34px; /* right gap = y-axis tick width */
+  height: 0; pointer-events: none;
 }
-.live-chart__threshold--warn  { background: rgba(245,158,11,0.45); border-top: 1px dashed rgba(245,158,11,0.55); }
-.live-chart__threshold--alarm { background: rgba(239,68,68,0.45);  border-top: 1px dashed rgba(239,68,68,0.55); }
+.live-chart__threshold--warn  { border-top: 1px dashed rgba(245,158,11,0.60); }
+.live-chart__threshold--alarm { border-top: 1px dashed rgba(239,68,68,0.65); }
 .live-chart__threshold-label {
-  position: absolute; right: -26px; top: -8px;
+  position: absolute; right: -32px; top: -9px;
   font-family: var(--mono); font-size: 8px; font-weight: 800;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.5px; line-height: 1;
 }
-.live-chart__threshold--warn  .live-chart__threshold-label { color: rgba(245,158,11,0.8); }
-.live-chart__threshold--alarm .live-chart__threshold-label { color: rgba(239,68,68,0.8); }
+.live-chart__threshold--warn  .live-chart__threshold-label { color: rgba(245,158,11,0.85); }
+.live-chart__threshold--alarm .live-chart__threshold-label { color: rgba(239,68,68,0.85); }

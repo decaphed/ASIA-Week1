@@ -126,8 +126,8 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
       </div>
 
       {/* Canvas + threshold overlay */}
-      <div className="live-chart__canvas-wrap">
-        <div className="live-chart__canvas">
+      <div className="live-chart__canvas-wrap" style={{ position: 'relative', height: '150px' }}>
+        <div className="live-chart__canvas" style={{ height: '100%' }}>
           <Line data={data} options={options} />
         </div>
         {/* Threshold reference lines — CSS positioned from bottom */}

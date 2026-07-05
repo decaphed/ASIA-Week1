@@ -36,7 +36,7 @@ function MachineBanner({ reading }) {
   return (
     <div className={`machine-banner machine-banner--${statusKey}`} role="region" aria-label="Machine Status">
       <div className="machine-banner__left">
-        <div className={`machine-banner__indicator machine-banner__indicator--${statusKey}`}>
+        <div className="machine-banner__indicator">
           <StatusStateIcon />
         </div>
         <div className="machine-banner__identity">
