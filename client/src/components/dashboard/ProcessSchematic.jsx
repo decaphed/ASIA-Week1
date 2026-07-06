@@ -36,7 +36,8 @@ export default function ProcessSchematic({ reading }) {
       </div>
 
       <div className="schematic__body">
-        <svg viewBox="0 0 720 300" width="100%" height="100%" className="schematic__svg">
+       <div className="schematic__stage">
+        <svg viewBox="0 0 720 300" className="schematic__svg">
           <defs>
             <marker id="schematic-arrow-d" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto">
               <path d="M0 0l7 4.5-7 4.5z" fill="#818cf8" />
@@ -112,6 +113,7 @@ export default function ProcessSchematic({ reading }) {
           className={vibAlarm ? `schematic__tag--${vibState}` : ''}
         />
         <Tag position="temp"     label="MOTOR TEMP"    value={formatNumber(r.motorTemp, 1)}          unit="°C"    color="#f97316" />
+       </div>
       </div>
     </div>
   );
