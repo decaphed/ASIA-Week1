@@ -54,6 +54,12 @@ export async function getForecast() {
   return res.data.data;
 }
 
+/** GET /api/drift → per-metric { direction, z, referenceMean, recentMean, delta } (or null). */
+export async function getDrift() {
+  const res = await client.get('/drift');
+  return res.data.data;
+}
+
 /** POST /api/data → store a reading. (Handy for manual testing from the UI.) */
 export async function postReading(reading) {
   const res = await client.post('/data', reading);

@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { usePolling } from './usePolling.js';
-import { getLive, getHistory, getStats, getHealth, getForecast } from '../services/api.js';
+import { getLive, getHistory, getStats, getHealth, getForecast, getDrift } from '../services/api.js';
 import { POLL_INTERVALS } from '../utils/constants.js';
 
 /** Latest reading — polled every second to drive cards + charts. */
@@ -34,4 +34,9 @@ export function useHealth(intervalMs = POLL_INTERVALS.health) {
 /** ETS forecast per metric — polled every 15s (the model itself only moves every 60s). */
 export function useForecast(intervalMs = POLL_INTERVALS.forecast) {
   return usePolling(getForecast, intervalMs);
+}
+
+/** Sustained-degradation drift status per metric — polled every 15s (the model itself only re-checks every 60s). */
+export function useDrift(intervalMs = POLL_INTERVALS.drift) {
+  return usePolling(getDrift, intervalMs);
 }

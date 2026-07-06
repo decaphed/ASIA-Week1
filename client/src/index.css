@@ -353,7 +353,6 @@ button { font-family: inherit; cursor: pointer; border: none; }
    ══════════════════════════════════════════════════════════════════════════ */
 .hero-row {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 350px); gap: 16px;
-  margin-bottom: 0 !important; /* dashboard__section already adds spacing */
 }
 .hero-row__rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
@@ -384,7 +383,16 @@ button { font-family: inherit; cursor: pointer; border: none; }
    never letterboxes/pillarboxes inside it — tags below are positioned as
    percentages of this same box, so they stay pinned to their schematic
    element at any container width (window resize, browser zoom, split view). */
-.schematic__stage { position: relative; width: 100%; aspect-ratio: 720 / 300; }
+.schematic__stage {
+  position: relative; width: 100%; aspect-ratio: 720 / 300;
+  /* Makes `cqw` below mean "% of THIS box's own rendered width" — so tags
+     scale with the schematic itself (zoom, split-window, sidebar collapse),
+     not with the browser viewport. Without this, tag position scaled with
+     the stage (via %) but tag SIZE stayed fixed CSS px, so tags drifted in
+     and out of proportion (overlapping at some widths, tiny at others) as
+     the stage resized — the "weird auto-scaling" tags-only bug. */
+  container-type: inline-size;
+}
 .schematic__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .schematic__flow { stroke-dasharray: 8 10; animation: flowdash 1.1s linear infinite; }
 .schematic__impeller { transform-origin: 312px 150px; animation: impeller-spin 3s linear infinite; }
@@ -393,28 +401,39 @@ button { font-family: inherit; cursor: pointer; border: none; }
 
 .schematic__tag {
   position: absolute; background: var(--bg-elevated); border: 1px solid var(--border-light);
-  border-radius: 7px; padding: 6px 11px; min-width: 92px;
+  border-radius: 7px;
+  /* clamp(floor, scales-with-stage-width, ceiling) — same box proportions
+     whether the stage renders at 350px or 1400px wide. */
+  padding: clamp(4px, 0.9cqw, 8px) clamp(7px, 1.6cqw, 14px);
+  min-width: clamp(74px, 13.5cqw, 118px);
 }
-/* Positions are % of the 720×300 viewBox, matched to the schematic element
-   each tag reports on. */
-.schematic__tag--suction   { left: 3.9%;  top: 3.3%; }                              /* suction sensor bubble @ (174,128) */
-.schematic__tag--flow      { left: 50%; top: 3%; transform: translateX(-50%); min-width: 96px; } /* over the pump */
-.schematic__tag--discharge { right: 3.9%; top: 3.3%; min-width: 96px; }             /* discharge sensor / outlet side */
-.schematic__tag--rpm       { left: 23.6%; top: 76.7%; }                             /* below-left of pump/impeller */
-.schematic__tag--vibration { left: 54.9%; top: 76.7%; }                             /* below-right of pump/impeller */
-.schematic__tag--temp      { left: 51.4%; top: 15%; }                               /* beside the motor block */
+/* Two clean rows, each tag CENTERED (translateX(-50%)) over the x-position
+   of the component it reports on — top row sits in the empty canvas strip
+   above the pump/motor (nothing is drawn above y=62 in the 0-720×0-300
+   viewBox), bottom row sits in the empty strip below the pump/sump labels
+   (y > 232). left%/top%/bottom% are that x,y position expressed as a %
+   of the viewBox, so they track the diagram at any stage size. */
+.schematic__tag--suction   { left: 24.2%; top: 4%;    transform: translateX(-50%); } /* suction sensor bubble @ (174,128) */
+.schematic__tag--flow      { left: 43.3%; top: 4%;    transform: translateX(-50%); } /* over the pump centerline (x=312) */
+.schematic__tag--discharge { left: 61.1%; top: 4%;    transform: translateX(-50%); } /* discharge sensor bubble @ (440,128) */
+.schematic__tag--rpm       { left: 26%;   bottom: 4%; transform: translateX(-50%); } /* pump/impeller shaft, left of center */
+.schematic__tag--vibration { left: 43.3%; bottom: 4%; transform: translateX(-50%); } /* directly under the pump (x=312) */
+.schematic__tag--temp      { left: 60.6%; bottom: 4%; transform: translateX(-50%); } /* motor, right of center for spacing */
 .schematic__tag--warn  { border-color: rgba(245,158,11,0.45); }
 .schematic__tag--alarm { border-color: rgba(239,68,68,0.45); }
 .schematic__tag-label {
-  font-family: var(--mono); font-weight: 700; font-size: 8px;
-  color: var(--text-dim); letter-spacing: 0.8px;
+  font-family: var(--mono); font-weight: 700;
+  font-size: clamp(6.5px, 1.05cqw, 9px);
+  color: var(--text-dim); letter-spacing: 0.8px; white-space: nowrap;
 }
 .schematic__tag--warn  .schematic__tag-label { color: var(--warn-bright); }
 .schematic__tag--alarm .schematic__tag-label { color: var(--danger-bright); }
 .schematic__tag-value {
-  font-family: var(--mono); font-weight: 700; font-size: 17px; line-height: 1.1;
+  font-family: var(--mono); font-weight: 700;
+  font-size: clamp(11px, 2.2cqw, 18px); line-height: 1.1;
+  white-space: nowrap;
 }
-.schematic__tag-unit { font-size: 8px; color: var(--text-dim); font-weight: 400; }
+.schematic__tag-unit { font-size: clamp(6.5px, 1.05cqw, 9px); color: var(--text-dim); font-weight: 400; }
 
 /* ── Rail panels (Alarms & Events / System Health) ──────────────────────── */
 .rail-panel {
@@ -467,6 +486,30 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .system-health-divider { height: 1px; background: var(--border); margin: 1px 0; }
 .system-health-stat__label { font-size: 11px; color: var(--text-muted); }
 .system-health-stat__value { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--text); }
+.system-health-stat__value--ok    { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--ok-bright); }
+.system-health-stat__value--warn  { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--warn-bright); }
+.system-health-stat__value--muted { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--text-faint); }
+
+/* Fixed height regardless of how many metrics are drifting (0-6) — always
+   rendered, so the panel's total height never changes as drift data
+   refreshes. Without this, the panel grew/shrank with the row count, which
+   pushed on the panel below it in the rail. Scrolls internally on the rare
+   case where more rows are drifting than fit. */
+.drift-row-list { height: 64px; overflow-y: auto; }
+
+/* One row per drifting metric, under the "Condition Trend" stat line. */
+.drift-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 0 2px 4px;
+}
+.drift-row__label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; color: var(--text-muted);
+}
+.drift-row__arrow { font-size: 9px; line-height: 1; color: var(--warn-bright); }
+.drift-row__delta {
+  font-family: var(--mono); font-weight: 600; font-size: 10.5px; color: var(--text-dim);
+}
 .system-health-quality { display: flex; align-items: center; gap: 5px; }
 .system-health-quality__bars { display: flex; gap: 2px; align-items: flex-end; }
 .system-health-quality__bar { width: 3px; background: var(--text-faint); border-radius: 1px; }

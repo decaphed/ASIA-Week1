@@ -8,6 +8,7 @@ export const POLL_INTERVALS = {
   health:   5000,
   history:  5000,
   forecast: 15000,
+  drift:    15000,
 };
 
 export const CHART_WINDOW = 40;
