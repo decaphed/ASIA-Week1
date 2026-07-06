@@ -247,6 +247,20 @@ function refitAll() {
 export function onNewProcessedRecord(row) {
   if (!row) return;
 
+  // Bootstrap: if nothing has been fit yet (fresh database, or fewer than
+  // MIN_READINGS existed at the last refitAll()), a new record might be
+  // exactly the one that crosses the threshold. Without this, the only
+  // thing that re-attempts a fit is the 15-minute refit timer, so a forecast
+  // could sit at `null` for up to 15 minutes after enough data exists just
+  // because no *scheduled* refit happened to land after the threshold was
+  // crossed. Re-fitting here is cheap (a handful of rows, not the full
+  // REFIT_WINDOW) and refitAll() itself is the source of truth for "do we
+  // have enough data" (MIN_READINGS), so this can't produce a bad fit.
+  if (Object.keys(state).length === 0) {
+    refitAll();
+    return;
+  }
+
   const regimeChanged = lastStatus !== null && row.dominantStatus !== lastStatus;
 
   for (const metric of METRICS) {
