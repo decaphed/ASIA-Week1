@@ -15,8 +15,13 @@ import { onNewProcessedRecord as driftOnNewRecord } from '../services/driftServi
 export function createProcessedReading(req, res, next) {
   try {
     const record = service.saveProcessedReading(req.body);
-    forecastOnNewRecord(record);
-    driftOnNewRecord(record);
+    // forecastService/driftService read the FLAT database-row shape
+    // (row.flowRateMean, row.dominantStatus — matching processedModel's
+    // SELECT * rows), not the nested API shape `record` becomes above
+    // (record.metrics.flowRate.mean). req.body is already flat and
+    // validated, so pass that through instead of the reshaped `record`.
+    forecastOnNewRecord(req.body);
+    driftOnNewRecord(req.body);
     res.status(201).json({ success: true, data: record });
   } catch (err) {
     next(err);
