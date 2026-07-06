@@ -14,6 +14,7 @@ import { getHistory } from '../controllers/historyController.js';
 import { getStats } from '../controllers/statsController.js';
 import { getHealth } from '../controllers/healthController.js';
 import { getForecast } from '../controllers/forecastController.js';
+import { getDrift } from '../controllers/driftController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 
 const router = Router();
@@ -28,5 +29,6 @@ router.get('/history', getHistory);
 router.get('/stats', getStats);
 router.get('/health', getHealth);
 router.get('/forecast', getForecast);
+router.get('/drift', getDrift);
 
 export default router;
