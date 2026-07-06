@@ -22,7 +22,20 @@ function toPct(v, yMin, yMax) {
   return Math.max(0, Math.min(100, ((v - yMin) / (yMax - yMin)) * 100));
 }
 
-export default function LiveChart({ label, color, unit, points, warnHigh, alarmHigh, forecast }) {
+export default function LiveChart({ label, color, unit, points, warnHigh, alarmHigh, forecast: rawForecast }) {
+  // The forecast API always returns an object per metric (never bare null),
+  // but its numeric fields can individually be null — either "not enough
+  // data yet" or a NaN on the server silently turned into null by
+  // JSON.stringify. Either way, treat it the same as "no forecast" rather
+  // than trusting the object's mere presence (see forecastService.js's
+  // computeForecastEntry for the server-side half of this guard).
+  const forecast = rawForecast
+    && Number.isFinite(rawForecast.forecast)
+    && Number.isFinite(rawForecast.lowerBound)
+    && Number.isFinite(rawForecast.upperBound)
+    ? rawForecast
+    : null;
+
   if (!points || points.length === 0) {
     return (
       <div className="live-chart">

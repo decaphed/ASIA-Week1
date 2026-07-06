@@ -165,6 +165,13 @@ function computeForecastEntry(metricState) {
   const rmse = residuals.length ? Math.sqrt(meanSquare(residuals)) : 0;
   const nextValue = level + phi * trend;
 
+  // A NaN here (e.g. a bad reading poisoning the recursive ETS update)
+  // would otherwise produce an object whose fields are all NaN — which
+  // JSON.stringify silently turns into null on the wire, so the client
+  // sees a *truthy* forecast object it can't distinguish from "no data
+  // yet". Returning null outright keeps that distinction honest.
+  if (!Number.isFinite(nextValue)) return null;
+
   return {
     level: round2(level),
     trend: round2(trend),
