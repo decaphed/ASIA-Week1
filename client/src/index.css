@@ -490,12 +490,13 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .system-health-stat__value--warn  { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--warn-bright); }
 .system-health-stat__value--muted { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--text-faint); }
 
-/* Fixed height regardless of how many metrics are drifting (0-6) — always
-   rendered, so the panel's total height never changes as drift data
-   refreshes. Without this, the panel grew/shrank with the row count, which
-   pushed on the panel below it in the rail. Scrolls internally on the rare
-   case where more rows are drifting than fit. */
-.drift-row-list { height: 64px; overflow-y: auto; }
+/* Always rendered (even with 0 rows) so its presence in the DOM doesn't
+   change. SystemHealthPanel itself is `rail-panel--grow` (flex:1, sized to
+   match the schematic's height), so it already reserves more vertical
+   space than its content needs at rest -- letting this list grow into that
+   existing slack (instead of capping it with a fixed height + scrollbar)
+   is what actually keeps the panel's outer box stable. */
+.drift-row-list { flex: 1; }
 
 /* One row per drifting metric, under the "Condition Trend" stat line. */
 .drift-row {
