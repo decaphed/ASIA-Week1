@@ -17,32 +17,34 @@ import db from '../database/db.js';
 // INSERT a new reading. Named parameters (@temperature …) are filled from an
 // object passed to .run({...}). Returns info incl. lastInsertRowid.
 const insertStmt = db.prepare(`
-  INSERT INTO SensorData
-    (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, timestamp)
+  INSERT INTO raw_telemetry
+    (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, timestamp,
+     isSynthetic, physicsValid, physicsViolations)
   VALUES
-    (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @timestamp)
+    (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @timestamp,
+     @isSynthetic, @physicsValid, @physicsViolations)
 `);
 
 // The single newest row. ORDER BY id DESC LIMIT 1 = "highest id" = latest
 // inserted. Using id (not timestamp) is robust even if two readings share a
 // timestamp.
 const latestStmt = db.prepare(`
-  SELECT * FROM SensorData ORDER BY id DESC LIMIT 1
+  SELECT * FROM raw_telemetry ORDER BY id DESC LIMIT 1
 `);
 
 // History pages. We keep two prepared statements — one per sort direction —
 // because the ORDER BY direction cannot be a bound parameter in SQL, and we
 // must never string-concatenate untrusted input into the query.
 const historyDescStmt = db.prepare(`
-  SELECT * FROM SensorData ORDER BY id DESC LIMIT ? OFFSET ?
+  SELECT * FROM raw_telemetry ORDER BY id DESC LIMIT ? OFFSET ?
 `);
 const historyAscStmt = db.prepare(`
-  SELECT * FROM SensorData ORDER BY id ASC LIMIT ? OFFSET ?
+  SELECT * FROM raw_telemetry ORDER BY id ASC LIMIT ? OFFSET ?
 `);
 
 // COUNT(*) — total number of stored readings (for pagination + stats).
 const countStmt = db.prepare(`
-  SELECT COUNT(*) AS count FROM SensorData
+  SELECT COUNT(*) AS count FROM raw_telemetry
 `);
 
 // AVG() aggregates across the whole table. SQLite returns NULL for AVG of an
@@ -54,12 +56,12 @@ const averagesStmt = db.prepare(`
          AVG(suctionPressure)    AS avgSuctionPressure,
          AVG(dischargePressure)  AS avgDischargePressure,
          AVG(motorTemp)          AS avgMotorTemp
-  FROM SensorData
+  FROM raw_telemetry
 `);
 
 // Just the newest timestamp (used by stats + health).
 const latestTimestampStmt = db.prepare(`
-  SELECT timestamp FROM SensorData ORDER BY id DESC LIMIT 1
+  SELECT timestamp FROM raw_telemetry ORDER BY id DESC LIMIT 1
 `);
 
 /** Insert one reading row. `record.light` must already be 0 or 1. */

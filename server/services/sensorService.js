@@ -30,12 +30,21 @@ function rowToReading(row) {
     motorTemp: row.motorTemp,
     status: row.status,
     timestamp: row.timestamp,
+    isSynthetic: !!row.isSynthetic,
+    physicsValid: !!row.physicsValid,
+    physicsViolations: row.physicsViolations ? JSON.parse(row.physicsViolations) : null,
   };
 }
 
 /**
  * Persist one incoming reading. `data` has already been validated by
  * middleware, so here we only normalise it for storage.
+ *
+ * physicsValid/physicsViolations are normally set by Node-RED's
+ * preprocess_minute function node (stage 1 of the preprocessing pipeline,
+ * applied right after generation — see node-red/flow.json). They default to
+ * "valid" here so readings posted from elsewhere (e.g. ManualReadingForm.jsx,
+ * which bypasses Node-RED entirely) still get a well-formed row.
  */
 export function saveReading(data) {
   const record = {
@@ -48,6 +57,11 @@ export function saveReading(data) {
     status: data.status || 'RUNNING',
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
     timestamp: data.timestamp || new Date().toISOString(),
+    isSynthetic: data.isSynthetic ? 1 : 0,
+    physicsValid: data.physicsValid === false ? 0 : 1,
+    physicsViolations: Array.isArray(data.physicsViolations) && data.physicsViolations.length
+      ? JSON.stringify(data.physicsViolations)
+      : null,
   };
 
   const info = model.insertReading(record);

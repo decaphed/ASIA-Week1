@@ -23,7 +23,7 @@ const app = createApp();
 
 app.listen(PORT, () => {
   logger.info(`Backend listening on http://localhost:${PORT}`);
-  logger.info('Endpoints: POST /api/data | GET /api/live /api/history /api/stats /api/health /api/forecast /api/drift');
+  logger.info('Endpoints: POST /api/data /api/processed | GET /api/live /api/history /api/stats /api/health /api/forecast /api/drift /api/processed /api/processed/live');
   startForecastLoop();
   startDriftLoop();
 });

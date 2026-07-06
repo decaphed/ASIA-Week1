@@ -14,26 +14,39 @@
 // free to fall back to it for any metric where an undamped trend really
 // does fit best.
 //
-// Two more safeguards run inside slideForward() on every reading, each
-// aimed at a different reason a value can look "wrong":
-//   • regime-aware reset  — `status` changing (RUNNING/FAULT/STOPPED) is a
-//     trusted signal that the operating point genuinely shifted, so the
+// Two more safeguards run inside onNewProcessedRecord() on every new
+// processed_telemetry row, each aimed at a different reason a value can look
+// "wrong":
+//   • regime-aware reset  — `dominantStatus` changing (RUNNING/FAULT/STOPPED)
+//     is a trusted signal that the operating point genuinely shifted, so the
 //     model resets its level/trend instead of fighting the jump.
-//   • outlier guard        — a single reading far outside a metric's normal
+//   • outlier guard        — a single minute far outside a metric's normal
 //     noise, with NO status change to justify it, isn't fully trusted —
 //     its pull on level/trend is capped, though the true error still
 //     widens the confidence bounds.
-// See the comment on slideForward() for the full reasoning.
+// See the comment on onNewProcessedRecord() for the full reasoning.
 //
-// Two timers drive the model:
-//   • every 15 minutes: a full re-fit against the last 200 readings — a grid
-//     search over alpha/beta/phi picks the triple that minimises one-step-
-//     ahead MSE over that window, and level/trend are re-initialised from
-//     the window's first two values then advanced through the rest of the
-//     window with the winning alpha/beta/phi.
-//   • every 60 seconds: a lightweight "forward slide" that advances level
-//     and trend by one ETS update using only the single latest reading
-//     (alpha/beta/phi are NOT re-estimated here).
+// Input: as of the preprocessing pipeline, the series fed to this model is
+// processed_telemetry's per-metric MEAN over each one-minute window (already
+// outlier-capped and quality-scored by Node-RED — see node-red/flow.json's
+// preprocess_minute function node) rather than raw 1 Hz readings. That is a
+// deliberate improvement: forecasting a management KPI should run on the
+// cleaned, aggregated signal, not on raw sensor noise.
+//
+// Two things drive the model:
+//   • every 15 minutes: a full re-fit against the last 200 processed rows
+//     (~3.3 hours) — a grid search over alpha/beta/phi picks the triple that
+//     minimises one-step-ahead MSE over that window, and level/trend are
+//     re-initialised from the window's first two values then advanced
+//     through the rest of the window with the winning alpha/beta/phi.
+//   • on every new processed record (once per minute, event-driven — see
+//     onNewProcessedRecord): a lightweight "forward slide" that advances
+//     level and trend by one ETS update using only that record (alpha/beta/
+//     phi are NOT re-estimated here). This replaces a fixed 60-second poll:
+//     since processed records themselves only arrive once a minute, timing
+//     the slide to ingestion instead of a wall-clock timer means it can
+//     never process the same minute twice or skip one because the two
+//     clocks drifted apart.
 //
 // getForecast() just returns whatever is currently cached — it never
 // touches the database itself, so it's cheap to call from the controller.
@@ -51,9 +64,8 @@ export const METRICS = [
   'motorTemp',
 ];
 
-const REFIT_WINDOW = 200;
+const REFIT_WINDOW = 200; // ~3.3 hours of one-minute processed records
 const REFIT_INTERVAL_MS = 15 * 60 * 1000;
-const SLIDE_INTERVAL_MS = 60 * 1000;
 const MIN_READINGS = 4;
 const RESIDUAL_WINDOW = 30;
 const ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
@@ -65,29 +77,34 @@ const PHIS = [0.8, 0.85, 0.9, 0.95, 0.98, 1.0];
 // How many "recent RMSEs" away from the forecast a single reading has to be
 // before the outlier guard kicks in and caps how far it's allowed to move
 // level/trend. Normal noise rarely exceeds ~2-3x its own RMSE, so 4x is
-// reserved for genuinely suspicious points — a bad sensor read, a
-// manual-entry test value (ManualReadingForm.jsx POSTs straight to
-// /api/data, bypassing Node-RED entirely), or state lost on a Node-RED
-// restart.
+// reserved for genuinely suspicious points — Node-RED's own Hampel-filter
+// outlier capping already handles single-sample glitches inside a minute;
+// this guard is the analogous safety net one level up, for a whole minute's
+// mean landing far outside the model's expectation (e.g. state lost on a
+// Node-RED restart, or a manual-entry test record).
 const OUTLIER_Z = 4;
 
 // One ETS state per metric: { alpha, beta, phi, level, trend, residuals }.
 // Absent until the first successful re-fit.
 const state = {};
 
-// The pump's operating regime (RUNNING/FAULT/STOPPED) as of the last
-// slideForward() tick. Tracked so a *change* in status — a trusted signal
-// straight from Node-RED that the operating point has genuinely shifted —
-// can be treated as a structural break (reset) rather than something ETS
-// tries to smooth through as a trend. refitAll() also sets this, so the
-// first slideForward() tick after a refit compares against the regime that
-// refit already captured, instead of null forcing a spurious reset.
+// The pump's dominant operating regime (RUNNING/FAULT/STOPPED) as of the
+// last processed record. Tracked so a *change* — a trusted signal straight
+// from the preprocessing pipeline that the operating point has genuinely
+// shifted — can be treated as a structural break (reset) rather than
+// something ETS tries to smooth through as a trend. refitAll() also sets
+// this, so the first onNewProcessedRecord() call after a refit compares
+// against the regime that refit already captured, instead of null forcing a
+// spurious reset.
 let lastStatus = null;
 
 // The latest forecast per metric, exactly what getForecast() hands back.
 const forecastCache = Object.fromEntries(METRICS.map((m) => [m, null]));
 
 const round2 = (value) => (value == null ? null : Math.round(value * 100) / 100);
+
+/** The mean value for one metric out of a processed_telemetry row. */
+const metricMean = (row, metric) => row[`${metric}Mean`];
 
 /** Mean of squared values. */
 function meanSquare(values) {
@@ -167,7 +184,7 @@ function refitAll() {
       forecastCache[metric] = null;
     }
     lastStatus = null;
-    logger.info(`Forecast refit skipped: only ${rows.length} reading(s) in database (need ${MIN_READINGS})`);
+    logger.info(`Forecast refit skipped: only ${rows.length} processed record(s) in database (need ${MIN_READINGS})`);
     return;
   }
 
@@ -175,7 +192,7 @@ function refitAll() {
   const chronological = rows.slice().reverse();
 
   for (const metric of METRICS) {
-    const series = chronological.map((row) => row[metric]);
+    const series = chronological.map((row) => metricMean(row, metric));
     const fit = fitMetric(series);
 
     state[metric] = {
@@ -190,53 +207,53 @@ function refitAll() {
   }
 
   // Anchor regime-change detection to the regime this refit already saw, so
-  // slideForward()'s next tick only resets on a genuine change from here —
-  // not on the fact that lastStatus happened to be null.
-  lastStatus = chronological[chronological.length - 1].status;
+  // onNewProcessedRecord()'s next call only resets on a genuine change from
+  // here — not on the fact that lastStatus happened to be null.
+  lastStatus = chronological[chronological.length - 1].dominantStatus;
 
-  logger.info(`Forecast models re-fit from last ${chronological.length} readings`);
+  logger.info(`Forecast models re-fit from last ${chronological.length} processed record(s)`);
 }
 
 /**
- * Forward slide: one ETS update per metric using only the latest reading.
+ * Forward slide: one ETS update per metric using the just-arrived processed
+ * record. Called directly by processedController after a successful insert
+ * — see the module comment for why this replaced a fixed 60-second timer.
  *
- * Two safeguards run here, in order, before a raw reading is trusted to
- * move a metric's level/trend:
+ * Two safeguards run here, in order, before a new minute's mean is trusted
+ * to move a metric's level/trend:
  *
- *   1. Regime-aware RESET — `status` (RUNNING/FAULT/STOPPED) is a trusted
- *      signal from Node-RED that the pump's operating point has genuinely
- *      changed. That's a structural break, not a trend, so instead of
- *      letting the existing alpha/beta/phi fight through the jump, every
- *      metric's level/trend/residuals are reset to start fresh from the
- *      first reading of the new regime. alpha/beta/phi themselves are kept
- *      — they describe how reactive this metric generally is, which is
- *      still valid across regimes; only "where is it right now" resets.
- *      (Consequence, deliberately accepted: right after a reset,
- *      residuals is empty, so rmse = 0 and the confidence band collapses
- *      to a single point for a few ticks — that's an honest "no error
- *      history for this regime yet", not a bug.)
+ *   1. Regime-aware RESET — `dominantStatus` (RUNNING/FAULT/STOPPED) is a
+ *      trusted signal from the preprocessing pipeline that the pump's
+ *      operating point has genuinely changed. That's a structural break, not
+ *      a trend, so instead of letting the existing alpha/beta/phi fight
+ *      through the jump, every metric's level/trend/residuals are reset to
+ *      start fresh from the first record of the new regime. alpha/beta/phi
+ *      themselves are kept — they describe how reactive this metric
+ *      generally is, which is still valid across regimes; only "where is it
+ *      right now" resets. (Consequence, deliberately accepted: right after a
+ *      reset, residuals is empty, so rmse = 0 and the confidence band
+ *      collapses to a single point for a few ticks — that's an honest "no
+ *      error history for this regime yet", not a bug.)
  *
- *   2. Outlier GUARD — if `status` did NOT change but a single reading is
- *      still far outside this metric's own recent noise (its RMSE), there's
- *      no trusted signal confirming it's real — it could be a glitch, a
- *      manual-entry test value, or a restart artefact. Rather than fully
- *      believing it, the *update* to level/trend is capped at a plausible
- *      size. The true (uncapped) error is still recorded in `residuals`
- *      though, so the model's confidence bounds honestly widen — it just
- *      means "I'm less sure right now", without letting one suspicious
- *      point drag the central forecast around.
+ *   2. Outlier GUARD — if `dominantStatus` did NOT change but a single
+ *      minute's mean is still far outside this metric's own recent noise
+ *      (its RMSE), there's no trusted signal confirming it's real. Rather
+ *      than fully believing it, the *update* to level/trend is capped at a
+ *      plausible size. The true (uncapped) error is still recorded in
+ *      `residuals` though, so the model's confidence bounds honestly widen —
+ *      it just means "I'm less sure right now", without letting one
+ *      suspicious point drag the central forecast around.
  */
-function slideForward() {
-  const [latest] = model.getRecentReadings(1);
-  if (!latest) return;
+export function onNewProcessedRecord(row) {
+  if (!row) return;
 
-  const regimeChanged = lastStatus !== null && latest.status !== lastStatus;
+  const regimeChanged = lastStatus !== null && row.dominantStatus !== lastStatus;
 
   for (const metric of METRICS) {
     const metricState = state[metric];
     if (!metricState) continue; // no fit yet — nothing to slide
 
-    const actual = latest[metric];
+    const actual = metricMean(row, metric);
 
     if (regimeChanged) {
       metricState.level = actual;
@@ -274,7 +291,7 @@ function slideForward() {
     forecastCache[metric] = computeForecastEntry(metricState);
   }
 
-  lastStatus = latest.status;
+  lastStatus = row.dominantStatus;
 }
 
 /** @returns the latest cached forecast object for all 6 metrics. */
@@ -282,10 +299,9 @@ export function getForecast() {
   return { ...forecastCache };
 }
 
-/** Starts the 15-minute re-fit timer and the 60-second forward-slide timer. */
+/** Starts the 15-minute re-fit timer. Per-record updates are event-driven — see onNewProcessedRecord. */
 export function startForecastLoop() {
   refitAll();
   setInterval(refitAll, REFIT_INTERVAL_MS);
-  setInterval(slideForward, SLIDE_INTERVAL_MS);
-  logger.info('Forecast loop started: re-fit every 15m, forward slide every 60s');
+  logger.info('Forecast loop started: re-fit every 15m; forward slide runs on each new processed record');
 }

@@ -1,19 +1,20 @@
 // ─────────────────────────────────────────────────────────────────────────
-// forecastModel.js — the ONLY place forecastService talks to SQL.
+// forecastModel.js — thin adapter over processedModel.js for
+// forecastService/driftService.
 //
-// Same convention as sensorModel.js: one prepared statement, compiled once
-// at module load, reused (bound parameters — no string concatenation).
+// Forecasting and drift detection both need "the last n telemetry rows,
+// newest first" — but as of the preprocessing pipeline, their input is
+// processed_telemetry (one quality-scored aggregate per minute), not the
+// raw 1 Hz stream. processedModel.js already owns the prepared statement for
+// that query (getRecentProcessed), so this file delegates to it instead of
+// duplicating a second "SELECT * ... ORDER BY id DESC LIMIT ?" against the
+// same table. The getRecentReadings name is kept so forecastService.js and
+// driftService.js don't need to change their call sites.
 // ─────────────────────────────────────────────────────────────────────────
 
-import db from '../database/db.js';
+import { getRecentProcessed } from './processedModel.js';
 
-// The last n rows, newest first. Used both for the 15-minute re-fit (n=200)
-// and the 60-second forward slide (n=1).
-const recentStmt = db.prepare(`
-  SELECT * FROM SensorData ORDER BY id DESC LIMIT ?
-`);
-
-/** @returns an array of up to n raw rows, newest first (id DESC). */
+/** @returns an array of up to n processed (one-minute aggregate) rows, newest first (id DESC). */
 export function getRecentReadings(n) {
-  return recentStmt.all(n);
+  return getRecentProcessed(n);
 }

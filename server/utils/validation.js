@@ -65,3 +65,52 @@ export function validateReading(body) {
 
   return errors;
 }
+
+// One-minute aggregate record posted by Node-RED's preprocess_minute function
+// node to POST /api/processed (see node-red/flow.json). Six stats per metric,
+// unlike the single value validated above.
+const AGGREGATE_STATS = ['Mean', 'Median', 'Min', 'Max', 'StdDev', 'Last'];
+const VALID_QUALITY_LABELS = ['GOOD', 'FAIR', 'POOR'];
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Validate a processed_telemetry aggregate body.
+ * @returns {string[]} human-readable error messages (empty array = valid).
+ */
+export function validateProcessedRecord(body) {
+  const errors = [];
+
+  for (const field of NUMERIC_FIELDS) {
+    for (const stat of AGGREGATE_STATS) {
+      const key = `${field}${stat}`;
+      if (!isFiniteNumber(body[key])) {
+        errors.push(`${key} must be a number`);
+      }
+    }
+  }
+
+  if (!VALID_STATUSES.includes(body.dominantStatus)) {
+    errors.push(`dominantStatus must be one of: ${VALID_STATUSES.join(', ')}`);
+  }
+
+  for (const field of ['windowStart', 'windowEnd', 'timestamp']) {
+    if (typeof body[field] !== 'string' || Number.isNaN(Date.parse(body[field]))) {
+      errors.push(`${field} must be a valid ISO date string`);
+    }
+  }
+
+  if (!Number.isInteger(body.sampleCount) || body.sampleCount <= 0) {
+    errors.push('sampleCount must be a positive integer');
+  }
+  if (!isFiniteNumber(body.qualityScore) || body.qualityScore < 0 || body.qualityScore > 100) {
+    errors.push('qualityScore must be a number between 0 and 100');
+  }
+  if (!VALID_QUALITY_LABELS.includes(body.qualityLabel)) {
+    errors.push(`qualityLabel must be one of: ${VALID_QUALITY_LABELS.join(', ')}`);
+  }
+
+  return errors;
+}

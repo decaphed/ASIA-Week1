@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "IoT Sensor Simulator",
     "disabled": false,
-    "info": "Generates one simulated sensor reading every second and POSTs it to the Express backend.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST) -> debug (response)\n\nNOTE on the 'POST /api/data' node's URL:\n- Running Node-RED NATIVELY (npx node-red / node-red, no container) -> use http://localhost:3000/api/data\n- Running Node-RED INSIDE DOCKER (e.g. the official nodered/node-red image) -> 'localhost' means the container itself, not your host machine, so use http://host.docker.internal:3000/api/data instead (Docker Desktop's special DNS name for reaching the host)."
+    "info": "Generates one simulated sensor reading every second and preprocesses it before reaching the Express backend.\n\nFlow:  inject (1s) -> function (generate) -> function (preprocess_minute) -> [http request (POST /api/data), http request (POST /api/processed, every 60th tick)] -> debug\n\npreprocess_minute implements the preprocessing pipeline: physics-informed validation (every tick), then buffering + missing-data detection + Hampel-filter outlier capping + one-minute aggregation + data-quality scoring (every 60th tick). See the design document for the full rationale.\n\nNOTE on the http request nodes' URLs:\n- Running Node-RED NATIVELY (npx node-red / node-red, no container) -> use http://localhost:3000/...\n- Running Node-RED INSIDE DOCKER (e.g. the official nodered/node-red image) -> 'localhost' means the container itself, not your host machine, so use http://host.docker.internal:3000/... instead (Docker Desktop's special DNS name for reaching the host)."
   },
   {
     "id": "inject_1s",
@@ -12,8 +12,13 @@
     "z": "iot_sim_tab",
     "name": "every 1s",
     "props": [
-      { "p": "payload" },
-      { "p": "topic", "vt": "str" }
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
     ],
     "repeat": "1",
     "crontab": "",
@@ -24,7 +29,11 @@
     "payloadType": "date",
     "x": 150,
     "y": 140,
-    "wires": [["gen_reading"]]
+    "wires": [
+      [
+        "gen_reading"
+      ]
+    ]
   },
   {
     "id": "gen_reading",
@@ -40,7 +49,11 @@
     "libs": [],
     "x": 370,
     "y": 140,
-    "wires": [["post_api_data"]]
+    "wires": [
+      [
+        "preprocess_minute"
+      ]
+    ]
   },
   {
     "id": "post_api_data",
@@ -58,9 +71,13 @@
     "authType": "",
     "senderr": false,
     "headers": [],
-    "x": 600,
+    "x": 780,
     "y": 140,
-    "wires": [["debug_out"]]
+    "wires": [
+      [
+        "debug_out"
+      ]
+    ]
   },
   {
     "id": "debug_out",
@@ -75,8 +92,55 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 820,
-    "y": 140,
+    "x": 1000,
+    "y": 220,
     "wires": []
+  },
+  {
+    "id": "preprocess_minute",
+    "type": "function",
+    "z": "iot_sim_tab",
+    "name": "preprocess_minute",
+    "func": "// preprocess_minute — Stage 1 (physics-informed validation) runs on every\n// tick; Stages 2-8 (buffering, missing-data detection, outlier handling,\n// aggregation, quality scoring) run once every 60 ticks (~1 minute).\n//\n// Output 0: the raw reading (annotated with validation flags), sent EVERY\n//           tick -> POST /api/data -> raw_telemetry (the untouched audit trail\n//           still gets every second; only the annotation fields are added).\n// Output 1: the one-minute aggregate, sent only every 60th tick\n//           -> POST /api/processed -> processed_telemetry.\n\nconst METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];\n\n// Mirrors server/utils/validation.js RANGES (the Express boundary's hard\n// reject-if-impossible gate). Same bounds deliberately: a reading that would\n// fail there is exactly what should be FLAGGED here. This stage never\n// rejects a reading -- it only annotates it, so raw_telemetry keeps a\n// complete, unbroken audit trail even for values that later prove suspect.\nconst RANGES = {\n    flowRate: [0, 500], rpm: [0, 5000], vibration: [0, 25],\n    suctionPressure: [0, 10], dischargePressure: [0, 25], motorTemp: [-20, 150]\n};\n\nfunction validatePhysics(sample) {\n    const violations = [];\n    for (const metric of METRICS) {\n        const range = RANGES[metric];\n        if (sample[metric] < range[0] || sample[metric] > range[1]) {\n            violations.push(metric + ' out of range');\n        }\n    }\n    // Cross-variable rule: a centrifugal pump always adds head, so discharge\n    // pressure must exceed suction pressure while running.\n    if (sample.dischargePressure <= sample.suctionPressure) {\n        violations.push('dischargePressure must exceed suctionPressure');\n    }\n    // Status/measurement consistency: a STOPPED pump should show ~zero flow/rpm.\n    if (sample.status === 'STOPPED' && (sample.flowRate > 20 || sample.rpm > 200)) {\n        violations.push('STOPPED status but flow/rpm indicate the pump is running');\n    }\n    return violations;\n}\n\nfunction round2(v) { return Math.round(v * 100) / 100; }\n\n// ---- Stage 1: physics-informed validation (every tick) ----\nconst violations = validatePhysics(msg.payload);\nconst annotated = Object.assign({}, msg.payload, {\n    isSynthetic: true,\n    physicsValid: violations.length === 0,\n    physicsViolations: violations.length ? violations : null\n});\n\nconst rawMsg = { payload: annotated, headers: { 'Content-Type': 'application/json' } };\n\n// ---- Stage 2: buffer this tick (node-scoped context persists across ticks) ----\nlet buffer = context.get('buffer') || [];\nbuffer.push(annotated);\ncontext.set('buffer', buffer);\n\nif (buffer.length < 60) {\n    return [rawMsg, null]; // not yet a full window -> no processed output this tick\n}\n\ncontext.set('buffer', []); // reset for the next window\n\n// ---- Stage 3: missing-sample detection (gaps in the ~1 Hz timestamp series) ----\nlet missingCount = 0;\nfor (let i = 1; i < buffer.length; i++) {\n    const dtSec = (new Date(buffer[i].timestamp).getTime() - new Date(buffer[i - 1].timestamp).getTime()) / 1000;\n    if (dtSec > 1.5) missingCount += Math.round(dtSec) - 1;\n}\n\n// ---- Stage 4: outlier detection -- Hampel filter (median + MAD), CAP not delete ----\n// Capping (not deleting) preserves sample count; the true raw value is still\n// in raw_telemetry regardless, so nothing is ever lost, only the AGGREGATE\n// is protected from a single spurious spike.\nfunction hampelCap(values, k) {\n    const sorted = values.slice().sort(function (a, b) { return a - b; });\n    const median = sorted[Math.floor(sorted.length / 2)];\n    const absDev = values.map(function (v) { return Math.abs(v - median); });\n    const madSorted = absDev.slice().sort(function (a, b) { return a - b; });\n    const mad = 1.4826 * madSorted[Math.floor(madSorted.length / 2)];\n    let outliers = 0;\n    const capped = values.map(function (v) {\n        if (mad > 0 && Math.abs(v - median) > k * mad) {\n            outliers++;\n            return median;\n        }\n        return v;\n    });\n    return { capped: capped, outliers: outliers };\n}\n\nconst stats = {};\nlet outlierCount = 0;\n\nfor (const metric of METRICS) {\n    const raw = buffer.map(function (s) { return s[metric]; });\n    const result = hampelCap(raw, 3);\n    outlierCount += result.outliers;\n\n    const capped = result.capped;\n    const n = capped.length;\n    const meanVal = capped.reduce(function (a, b) { return a + b; }, 0) / n;\n    const sortedCapped = capped.slice().sort(function (a, b) { return a - b; });\n    const medianVal = sortedCapped[Math.floor(n / 2)];\n    const variance = capped.reduce(function (a, b) { return a + Math.pow(b - meanVal, 2); }, 0) / n;\n\n    stats[metric] = {\n        Mean: round2(meanVal),\n        Median: round2(medianVal),\n        Min: Math.min.apply(null, capped),\n        Max: Math.max.apply(null, capped),\n        StdDev: round2(Math.sqrt(variance)),\n        Last: raw[raw.length - 1] // true (uncapped) end-of-window value -- the real instantaneous state\n    };\n}\n\n// ---- Stage 5 (status/regime duration, feeds aggregation) ----\nconst statusCounts = { RUNNING: 0, FAULT: 0, STOPPED: 0 };\nfor (const s of buffer) statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;\nconst dominantStatus = Object.keys(statusCounts).sort(function (a, b) { return statusCounts[b] - statusCounts[a]; })[0];\n\n// ---- Stage 7/8: data quality assessment + metadata ----\nconst n = buffer.length;\nconst physicsViolationCount = buffer.filter(function (s) { return s.physicsValid === false; }).length;\nconst missingRate = missingCount / (n + missingCount);\nconst outlierRate = outlierCount / (n * METRICS.length);\nconst physicsPassRate = 1 - (physicsViolationCount / n);\n\n// Weighted quality score (0-100): missing data hurts most (a gap can't be\n// recovered), outliers are already contained by capping (lower weight),\n// physics violations matter but are advisory (a FAULT episode can look\n// \"physically odd\" without being a data-quality problem).\nconst qualityScore = round2(100 * (\n    0.4 * (1 - missingRate) +\n    0.3 * (1 - outlierRate) +\n    0.3 * physicsPassRate\n));\nconst qualityLabel = qualityScore >= 90 ? 'GOOD' : (qualityScore >= 70 ? 'FAIR' : 'POOR');\n\nconst windowStart = buffer[0].timestamp;\nconst windowEnd = buffer[buffer.length - 1].timestamp;\n\nconst processedPayload = {\n    windowStart: windowStart,\n    windowEnd: windowEnd,\n    timestamp: windowEnd, // canonical timestamp = end of window, see design doc\n    dominantStatus: dominantStatus,\n    runningSeconds: statusCounts.RUNNING,\n    faultSeconds: statusCounts.FAULT,\n    stoppedSeconds: statusCounts.STOPPED,\n    sampleCount: n,\n    expectedSampleCount: 60,\n    missingSampleCount: missingCount,\n    imputedSampleCount: missingCount,\n    outlierCount: outlierCount,\n    physicsViolationCount: physicsViolationCount,\n    missingRate: round2(missingRate),\n    imputationRate: round2(missingRate),\n    outlierRate: round2(outlierRate),\n    physicsPassRate: round2(physicsPassRate),\n    qualityScore: qualityScore,\n    qualityLabel: qualityLabel,\n    isImputed: missingCount > 0,\n    preprocessingVersion: 'v1',\n    preprocessingTimestamp: new Date().toISOString()\n};\n\nfor (const metric of METRICS) {\n    processedPayload[metric + 'Mean'] = stats[metric].Mean;\n    processedPayload[metric + 'Median'] = stats[metric].Median;\n    processedPayload[metric + 'Min'] = stats[metric].Min;\n    processedPayload[metric + 'Max'] = stats[metric].Max;\n    processedPayload[metric + 'StdDev'] = stats[metric].StdDev;\n    processedPayload[metric + 'Last'] = stats[metric].Last;\n}\n\nconst processedMsg = { payload: processedPayload, headers: { 'Content-Type': 'application/json' } };\n\nreturn [rawMsg, processedMsg];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 480,
+    "y": 220,
+    "wires": [
+      [
+        "post_api_data"
+      ],
+      [
+        "post_processed"
+      ]
+    ]
+  },
+  {
+    "id": "post_processed",
+    "type": "http request",
+    "z": "iot_sim_tab",
+    "name": "POST /api/processed",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "http://host.docker.internal:3000/api/processed",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 780,
+    "y": 300,
+    "wires": [
+      [
+        "debug_out"
+      ]
+    ]
   }
 ]

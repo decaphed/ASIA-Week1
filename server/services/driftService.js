@@ -8,55 +8,67 @@
 // horizon, which a damped short-horizon forecaster is not designed to see.
 //
 // Method: a two-sample z-test on the mean.
-//   • REFERENCE window — an older, longer stretch of readings — establishes
-//     what "normal" currently looks like: its mean and standard deviation.
+//   • REFERENCE window — an older, longer stretch of processed records —
+//     establishes what "normal" currently looks like: its mean and standard
+//     deviation.
 //   • RECENT window — the newest, shorter stretch — is today's behaviour.
 //   • We ask: is the recent window's average further from the reference
 //     average than random noise could plausibly explain? That "plausible
 //     noise" scale is the standard error of the mean (reference std dev /
 //     sqrt(recent sample count)) — using sample count means a handful of
-//     noisy readings can't trip the detector, but a *sustained* shift across
+//     noisy minutes can't trip the detector, but a *sustained* shift across
 //     the whole recent window can.
 //   • |z| past Z_THRESHOLD standard errors => flag 'rising' or 'falling'.
 //
-// Regime-aware filtering: both windows are built ONLY from readings whose
-// `status` is RUNNING. FAULT/STOPPED episodes are real but they're not
-// "drift" — they're already flagged directly by `status` — so letting one
-// sit inside either window would corrupt what this detector calls "normal"
-// (inflating the reference spread, or making a genuinely normal recent
-// window look artificially different from a fault-contaminated reference).
-// Filtering means each window's row count is a count of RUNNING samples,
-// not a strict wall-clock duration — see ROW_FETCH_MULTIPLIER below.
+// Input: as of the preprocessing pipeline, both windows are built from
+// processed_telemetry's per-metric MEAN (one value per minute, already
+// outlier-capped and quality-scored) rather than raw 1 Hz readings — the
+// same rationale as forecastService: "has this metric drifted" is a
+// management/condition-monitoring question, better answered from the
+// cleaned aggregate than from second-to-second sensor noise.
 //
-// Row counts below assume ~1 reading/second from the Node-RED simulator.
-// If the real ingest rate changes, retune *_WINDOW_ROWS (or switch to
-// timestamp-based windowing) — the statistics don't change, only how much
-// wall-clock time each window represents.
+// Regime-aware filtering: both windows are built ONLY from records whose
+// `dominantStatus` is RUNNING. FAULT/STOPPED episodes are real but they're
+// not "drift" — they're already flagged directly by `dominantStatus` — so
+// letting one sit inside either window would corrupt what this detector
+// calls "normal" (inflating the reference spread, or making a genuinely
+// normal recent window look artificially different from a fault-
+// contaminated reference). Filtering means each window's row count is a
+// count of RUNNING minutes, not a strict wall-clock duration — see
+// ROW_FETCH_MULTIPLIER below.
+//
+// Trigger: runDriftCheck() runs once, on startup (to pick up any history
+// already in the database), and again every time a new processed record
+// arrives (event-driven — see onNewProcessedRecord), instead of on a fixed
+// timer. A new processed record IS "one more minute of data available", so
+// there is nothing to gain from polling in between arrivals.
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as model from '../models/forecastModel.js';
 import { METRICS } from './forecastService.js';
 import { logger } from '../utils/logger.js';
 
-const RECENT_WINDOW_ROWS = 120;    // "right now" — last ~2 minutes of RUNNING data
-const REFERENCE_WINDOW_ROWS = 900; // "normal" — the ~15 minutes of RUNNING data before that
+const RECENT_WINDOW_ROWS = 15;     // "right now" — last ~15 minutes of RUNNING data
+const REFERENCE_WINDOW_ROWS = 120; // "normal" — the ~2 hours of RUNNING data before that
 const MIN_ROWS_FOR_DETECTION = RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS;
 const Z_THRESHOLD = 3; // standard errors from the reference mean
-const CHECK_INTERVAL_MS = 60 * 1000;
-// Node-RED's simulator spends ~86% of its time in RUNNING and the rest in
-// short FAULT/STOPPED episodes (see node-red/flow.json). Those episodes are
-// real, but they aren't "drift" — Node-RED already flags them directly via
-// `status` — so they must not be allowed to sneak into what this detector
-// treats as "normal". We fetch this many times the two window sizes in raw
-// rows so that, after filtering down to RUNNING-only readings, both windows
-// still end up with enough data even if a fault episode happened to fall in
-// the fetched range.
+// The simulator spends ~86% of its time in RUNNING and the rest in short
+// FAULT/STOPPED episodes (see node-red/flow.json). Those episodes are real,
+// but they aren't "drift" — the pipeline already flags them directly via
+// `dominantStatus` — so they must not be allowed to sneak into what this
+// detector treats as "normal". We fetch this many times the two window
+// sizes in raw rows so that, after filtering down to RUNNING-only records,
+// both windows still end up with enough data even if a fault episode
+// happened to fall in the fetched range.
 const ROW_FETCH_MULTIPLIER = 2;
 
 // One drift entry per metric. Absent (null) until the first successful check.
 const driftCache = Object.fromEntries(METRICS.map((m) => [m, null]));
 
 const round2 = (value) => (value == null ? null : Math.round(value * 100) / 100);
+
+/** The mean value for one metric out of a processed_telemetry row. */
+const metricMean = (row, metric) => row[`${metric}Mean`];
 
 function mean(values) {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
@@ -68,9 +80,9 @@ function stdDev(values, avg) {
 }
 
 /**
- * @param series chronological (oldest-first), RUNNING-only values for one
- *   metric — FAULT/STOPPED readings are filtered out before this is called,
- *   so consecutive entries may skip real wall-clock time.
+ * @param series chronological (oldest-first), RUNNING-only per-minute mean
+ *   values for one metric — FAULT/STOPPED records are filtered out before
+ *   this is called, so consecutive entries may skip real wall-clock time.
  * @returns the drift entry for that metric, or null if there isn't yet
  *   enough RUNNING history to compare against.
  */
@@ -107,21 +119,21 @@ function runDriftCheck() {
   const rows = model.getRecentReadings((RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS) * ROW_FETCH_MULTIPLIER);
 
   // rows are newest-first (id DESC); put them in chronological order, then
-  // drop anything that wasn't a normal RUNNING reading. A FAULT/STOPPED
+  // drop anything that wasn't a normal RUNNING minute. A FAULT/STOPPED
   // episode is a known, already-flagged event — not a candidate data point
   // for "what does normal look like" — so it's excluded here rather than
   // being allowed to quietly widen the reference spread or skew either
   // window's mean.
-  const runningOnly = rows.slice().reverse().filter((row) => row.status === 'RUNNING');
+  const runningOnly = rows.slice().reverse().filter((row) => row.dominantStatus === 'RUNNING');
 
   if (runningOnly.length < MIN_ROWS_FOR_DETECTION) {
     for (const metric of METRICS) driftCache[metric] = null;
-    logger.info(`Drift check skipped: only ${runningOnly.length} RUNNING reading(s) available (need ${MIN_ROWS_FOR_DETECTION})`);
+    logger.info(`Drift check skipped: only ${runningOnly.length} RUNNING processed record(s) available (need ${MIN_ROWS_FOR_DETECTION})`);
     return;
   }
 
   for (const metric of METRICS) {
-    const series = runningOnly.map((row) => row[metric]);
+    const series = runningOnly.map((row) => metricMean(row, metric));
     driftCache[metric] = classify(series);
   }
 }
@@ -131,9 +143,19 @@ export function getDrift() {
   return { ...driftCache };
 }
 
-/** Starts the recurring drift-check timer. */
+/**
+ * Called by processedController after each new processed record is stored.
+ * Re-runs the full windowed check (cheap: it re-queries only
+ * (RECENT+REFERENCE)*ROW_FETCH_MULTIPLIER rows) rather than trying to
+ * incrementally update the reference/recent means, keeping the statistics
+ * identical to a from-scratch computation.
+ */
+export function onNewProcessedRecord() {
+  runDriftCheck();
+}
+
+/** Runs an initial check on startup to pick up any history already stored. */
 export function startDriftLoop() {
   runDriftCheck();
-  setInterval(runDriftCheck, CHECK_INTERVAL_MS);
-  logger.info(`Drift detection loop started: checking every ${CHECK_INTERVAL_MS / 1000}s`);
+  logger.info('Drift detection loop started: initial check run; subsequent checks are event-driven (see onNewProcessedRecord)');
 }
