@@ -1,14 +1,19 @@
 // ─────────────────────────────────────────────────────────────────────────
 // DashboardPage.jsx — pump monitoring dashboard.
-// v3: hydraulic / mechanical chart groups, alarm-aware section labels,
-//     thresholds passed to each chart.
+// v4 (V2 Handoff Spec): health strip, process schematic hero + alarms/system
+//     health rail sit above the KPI cards; live reading now comes from App
+//     (single shared /api/live poll) instead of its own hook call.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
-import { useLiveData, useHistory, useStats, useForecast } from '../hooks/useSensorData.js';
+import { useHistory, useStats, useForecast } from '../hooks/useSensorData.js';
 import Card from '../components/ui/Card.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import ErrorBanner from '../components/ui/ErrorBanner.jsx';
+import HealthStrip from '../components/dashboard/HealthStrip.jsx';
+import ProcessSchematic from '../components/dashboard/ProcessSchematic.jsx';
+import AlarmsPanel from '../components/dashboard/AlarmsPanel.jsx';
+import SystemHealthPanel from '../components/dashboard/SystemHealthPanel.jsx';
 import SensorCardGrid from '../components/dashboard/SensorCardGrid.jsx';
 import StatsPanel from '../components/dashboard/StatsPanel.jsx';
 import LiveChart from '../components/charts/LiveChart.jsx';
@@ -61,8 +66,7 @@ function ChartGroup({ title, subtitle, defs, series, forecast, id }) {
   );
 }
 
-export default function DashboardPage() {
-  const { data: reading, error: liveError, loading: liveLoading, refresh } = useLiveData(1000);
+export default function DashboardPage({ reading, liveError, liveLoading, refresh, health, healthError }) {
   const { data: history, error: historyError } = useHistory(5000);
   const { data: stats } = useStats(5000);
   const { data: forecast } = useForecast();
@@ -101,12 +105,30 @@ export default function DashboardPage() {
         />
       )}
 
-      {/* ── 1. Machine Status + KPI Cards ─────────────────────────────── */}
-      <section className="dashboard__section" id="sensors">
-        <SensorCardGrid reading={reading} />
+      {/* ── 1. Health Strip ────────────────────────────────────────────── */}
+      <section className="dashboard__section" id="health">
+        <HealthStrip reading={reading} uptimeSeconds={health?.uptimeSeconds} />
       </section>
 
-      {/* ── 2. Trend Charts — Hydraulic Performance ───────────────────── */}
+      {/* ── 2. Process Schematic + Alarms/System Health rail ──────────── */}
+      <section className="dashboard__section hero-row" id="schematic">
+        <ProcessSchematic reading={reading} />
+        <div className="hero-row__rail">
+          <AlarmsPanel reading={reading} />
+          <SystemHealthPanel health={health} healthError={healthError} stats={stats} />
+        </div>
+      </section>
+
+      {/* ── 3. KPI Cards ───────────────────────────────────────────────── */}
+      <section className="dashboard__section" id="sensors">
+        <div className="dashboard__section-header">
+          <span className="dashboard__section-title">Live Machine Telemetry</span>
+          <span className="dashboard__section-hint">6 channels · updated {reading?.timestamp ? formatTime(reading.timestamp) : '--'}</span>
+        </div>
+        <SensorCardGrid reading={reading} series={series} />
+      </section>
+
+      {/* ── 4. Trend Charts — Hydraulic Performance ───────────────────── */}
       <section className="dashboard__section" id="analytics">
         <ChartGroup
           id="analytics-hydraulic"
@@ -117,7 +139,7 @@ export default function DashboardPage() {
           forecast={forecast}
         />
 
-        {/* ── 3. Trend Charts — Mechanical Condition ───────────────────── */}
+        {/* ── 5. Trend Charts — Mechanical Condition ───────────────────── */}
         <ChartGroup
           id="analytics-mechanical"
           title="Mechanical Condition"
@@ -128,7 +150,7 @@ export default function DashboardPage() {
         />
       </section>
 
-      {/* ── 4. Manual Test Reading ───────────────────────────────────── */}
+      {/* ── 6. Manual Test Reading ───────────────────────────────────── */}
       <Card
         id="manual-entry"
         title="Manual Test Reading"
@@ -137,12 +159,12 @@ export default function DashboardPage() {
         <ManualReadingForm onSubmitted={refresh} />
       </Card>
 
-      {/* ── 5. Aggregate Statistics ───────────────────────────────────── */}
+      {/* ── 7. Aggregate Statistics ───────────────────────────────────── */}
       <Card id="settings" title="Operating Statistics" subtitle="Session averages across all stored readings">
         <StatsPanel stats={stats} />
       </Card>
 
-      {/* ── 5. Event / Data Log ───────────────────────────────────────── */}
+      {/* ── 8. Event / Data Log ───────────────────────────────────────── */}
       <Card
         id="history"
         title="Data Log"

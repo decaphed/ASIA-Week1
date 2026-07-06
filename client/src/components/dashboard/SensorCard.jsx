@@ -21,10 +21,25 @@ const ICONS = {
   motorTemp:         ThermometerIcon,
 };
 
-const PRECISION = {
-  flowRate: 1, rpm: 0, vibration: 2,
-  suctionPressure: 2, dischargePressure: 2, motorTemp: 1,
-};
+const SPARK_WINDOW = 18;
+
+/** Build a locally-scaled polyline (last SPARK_WINDOW points) for the mini sparkline. */
+function sparkPoints(history) {
+  const buf = (history || []).slice(-SPARK_WINDOW);
+  if (buf.length < 2) return '';
+  const mn = Math.min(...buf);
+  const mx = Math.max(...buf);
+  const pad = (mx - mn) * 0.2 || 1;
+  const yMin = mn - pad, yMax = mx + pad;
+  const w = 120, h = 26;
+  return buf
+    .map((v, i) => {
+      const x = (i / (buf.length - 1)) * w;
+      const y = h - ((v - yMin) / (yMax - yMin)) * h;
+      return `${x.toFixed(1)},${Math.max(-4, Math.min(h + 4, y)).toFixed(1)}`;
+    })
+    .join(' ');
+}
 
 function TrendArrow({ trend }) {
   if (trend === 'up') return (
@@ -42,10 +57,11 @@ function TrendArrow({ trend }) {
   return null;
 }
 
-export default function SensorCard({ sensor, value }) {
+export default function SensorCard({ sensor, value, history }) {
   const Icon      = ICONS[sensor.key] ?? FlowIcon;
-  const precision = PRECISION[sensor.key] ?? 1;
+  const precision = sensor.prec ?? 1;
   const alarm     = getAlarmState(sensor, value);
+  const spark     = sparkPoints(history);
 
   const prevRef = useRef(null);
   const [pulse, setPulse]   = useState(false);
@@ -109,6 +125,14 @@ export default function SensorCard({ sensor, value }) {
           <TrendArrow trend={trend} />
         </span>
       </div>
+
+      {/* Sparkline — last 18 points, locally scaled */}
+      {spark && (
+        <svg className="sensor-card__spark" viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points={spark} fill="none" stroke={`var(--${sensor.accent})`}
+            strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      )}
 
       {/* Fill bar with threshold markers */}
       <div className="sensor-card__bar-wrap">

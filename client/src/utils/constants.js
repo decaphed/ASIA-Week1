@@ -36,6 +36,7 @@ export const SENSORS = [
     warnLow:   80,   alarmLow:  60,
     warnHigh:  270,  alarmHigh: 295,
     accent:    'flow',
+    prec:      1,
     desc:      'Volumetric flow through pump',
   },
   {
@@ -47,6 +48,7 @@ export const SENSORS = [
     warnLow:   1200, alarmLow:  1050,
     warnHigh:  3400, alarmHigh: 3550,
     accent:    'rpm',
+    prec:      0,
     desc:      'Impeller rotational speed',
   },
   {
@@ -58,6 +60,7 @@ export const SENSORS = [
     warnLow:   null, alarmLow:  null,
     warnHigh:  7.1,  alarmHigh: 11.2,
     accent:    'vibration',
+    prec:      2,
     desc:      'RMS vibration velocity (ISO 10816)',
   },
   {
@@ -68,7 +71,8 @@ export const SENSORS = [
     min:       0.5,  max:       3,
     warnLow:   0.8,  alarmLow:  0.6,
     warnHigh:  2.8,  alarmHigh: 2.95,
-    accent:    'pressure',
+    accent:    'pressure-s',
+    prec:      2,
     desc:      'Pump inlet pressure',
   },
   {
@@ -79,7 +83,8 @@ export const SENSORS = [
     min:       2,    max:       12,
     warnLow:   3,    alarmLow:  2.2,
     warnHigh:  10.5, alarmHigh: 11.5,
-    accent:    'pressure',
+    accent:    'pressure-d',
+    prec:      2,
     desc:      'Pump outlet pressure',
   },
   {
@@ -91,6 +96,7 @@ export const SENSORS = [
     warnLow:   null, alarmLow:  null,
     warnHigh:  75,   alarmHigh: 85,
     accent:    'temp',
+    prec:      1,
     desc:      'Motor winding temperature',
   },
 ];

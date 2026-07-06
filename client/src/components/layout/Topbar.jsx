@@ -1,30 +1,19 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Topbar.jsx — system header with pump ID, connection status, clock.
-// v3: shows pump unit ID, asset tag, and active-alarm count in header.
+// v4: adds the V2 spec's notification bell (active alarm/warn count) and
+//     operator avatar; status pills renamed to match the spec (Server /
+//     Node-RED / SQLite) and now share computeServiceStatus with the
+//     System Health panel instead of duplicating the derivation.
 // ─────────────────────────────────────────────────────────────────────────
 
 import Clock from './Clock.jsx';
 import StatusIndicator from './StatusIndicator.jsx';
-import { secondsSince } from '../../utils/formatters.js';
-import { NODE_RED_FRESH_SECONDS, PUMP_ID, PUMP_AREA } from '../../utils/constants.js';
+import { computeServiceStatus } from '../../utils/health.js';
+import { PUMP_ID, PUMP_AREA } from '../../utils/constants.js';
+import { AlarmIcon } from '../ui/Icons.jsx';
 
-export default function Topbar({ health, healthError }) {
-  const backendStatus = healthError ? 'offline' : health ? 'online' : 'unknown';
-
-  const dbStatus = healthError
-    ? 'offline'
-    : health?.database === 'connected'
-      ? 'online'
-      : health ? 'offline' : 'unknown';
-
-  let nodeRedStatus = 'unknown';
-  if (health) {
-    nodeRedStatus = !health.lastReadingAt
-      ? 'offline'
-      : secondsSince(health.lastReadingAt) <= NODE_RED_FRESH_SECONDS
-        ? 'online'
-        : 'offline';
-  }
+export default function Topbar({ health, healthError, alarmCount = 0 }) {
+  const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
 
   return (
     <header className="topbar">
@@ -37,12 +26,19 @@ export default function Topbar({ health, healthError }) {
       </div>
 
       <div className="topbar__status">
-        <StatusIndicator label="Data Feed" status={nodeRedStatus} />
-        <StatusIndicator label="Server"    status={backendStatus} />
-        <StatusIndicator label="Database"  status={dbStatus} />
+        <StatusIndicator label="Server"    status={backend} />
+        <StatusIndicator label="Node-RED"  status={nodeRed} />
+        <StatusIndicator label="SQLite"    status={database} />
       </div>
 
+      <button type="button" className="topbar__bell" aria-label={`Notifications: ${alarmCount} active`}>
+        <AlarmIcon width={17} height={17} />
+        <span className="topbar__bell-badge">{alarmCount}</span>
+      </button>
+
       <Clock />
+
+      <div className="topbar__avatar" aria-hidden="true">OP</div>
     </header>
   );
 }

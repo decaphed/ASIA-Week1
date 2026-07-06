@@ -115,6 +115,27 @@ export function FaultIcon(props) {
   );
 }
 
+// Check / OK — circle with checkmark
+export function CheckIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+      <path d="M22 4 12 14.01l-3-3" />
+    </svg>
+  );
+}
+
+// Info — circle with "i"
+export function InfoIcon(props) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 // Sidebar nav icons ──────────────────────────────────────────────────────────
 
 export function DashboardNavIcon(props) {
