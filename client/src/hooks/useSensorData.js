@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { usePolling } from './usePolling.js';
-import { getLive, getHistory, getStats, getHealth, getForecast, getDrift } from '../services/api.js';
+import { getLive, getHistory, getStats, getHealth, getForecast, getDrift, getProcessedLive } from '../services/api.js';
 import { POLL_INTERVALS } from '../utils/constants.js';
 
 /** Latest reading — polled every second to drive cards + charts. */
@@ -39,4 +39,9 @@ export function useForecast(intervalMs = POLL_INTERVALS.forecast) {
 /** Sustained-degradation drift status per metric — polled every 15s (the model itself only re-checks every 60s). */
 export function useDrift(intervalMs = POLL_INTERVALS.drift) {
   return usePolling(getDrift, intervalMs);
+}
+
+/** Latest one-minute processed aggregate (quality/imputation) — polled every 15s (the model itself only updates every 60s). */
+export function useProcessedLive(intervalMs = POLL_INTERVALS.processed) {
+  return usePolling(getProcessedLive, intervalMs);
 }

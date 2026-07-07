@@ -42,6 +42,22 @@ db.pragma('journal_mode = WAL');
 const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
 db.exec(schema);
 
+// CREATE TABLE IF NOT EXISTS is a no-op on an already-existing table, so a
+// column rename (isSynthetic -> provenance) needs an explicit, idempotent
+// migration for any data.db created before this change.
+const rawTelemetryColumns = db.prepare('PRAGMA table_info(raw_telemetry)').all().map((col) => col.name);
+if (!rawTelemetryColumns.includes('provenance')) {
+  db.exec("ALTER TABLE raw_telemetry ADD COLUMN provenance TEXT NOT NULL DEFAULT 'MEASURED'");
+}
+if (rawTelemetryColumns.includes('isSynthetic')) {
+  try {
+    db.exec('ALTER TABLE raw_telemetry DROP COLUMN isSynthetic');
+  } catch {
+    // Older SQLite builds don't support DROP COLUMN — harmless to leave the
+    // unused legacy column in place if so.
+  }
+}
+
 logger.info(`SQLite ready at ${DB_PATH}`);
 
 /**

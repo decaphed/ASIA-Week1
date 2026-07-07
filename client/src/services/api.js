@@ -60,6 +60,12 @@ export async function getDrift() {
   return res.data.data;
 }
 
+/** GET /api/processed/live → the latest one-minute aggregate (quality/imputation info), or null. */
+export async function getProcessedLive() {
+  const res = await client.get('/processed/live');
+  return res.data.data;
+}
+
 /** POST /api/data → store a reading. (Handy for manual testing from the UI.) */
 export async function postReading(reading) {
   const res = await client.post('/data', reading);

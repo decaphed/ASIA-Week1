@@ -11,22 +11,27 @@ import { round2 } from './aggregation.js';
 
 /**
  * @param {object} args
- * @param {object[]} args.window completed 60-sample AUDIT window (all samples).
- * @param {number} args.missingCount from missing.js.
+ * @param {object[]} args.window completed 60-sample AUDIT window (all samples, MEASURED + IMPUTED).
+ * @param {number} args.missingCount from missing.js::detectMissing — RESIDUAL
+ *   gaps only (ones too large to fill, see missing.js::MAX_FILLABLE_GAP_SECONDS).
  * @param {number} args.outlierCount total across all metrics, from outlier.js
  *   (evaluated only over the physics-valid subset — see pipeline.js).
  * @param {number} args.metricCount number of metrics.
  * @param {number} args.evaluatedSampleCount size of the physics-valid subset
  *   Hampel filtering actually ran over (outlierRate's denominator) — may be
  *   smaller than window.length when some samples failed validation.
+ * @param {number} args.imputedSampleCount actual count of provenance==='IMPUTED'
+ *   rows in `window` — an exact count now that gap-filling really happens,
+ *   not an estimate.
  */
-export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount }) {
+export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount }) {
   const n = window.length;
   const physicsViolationCount = window.filter((sample) => sample.physicsValid === false).length;
 
   const missingRate = missingCount / (n + missingCount);
   const outlierRate = outlierCount / (evaluatedSampleCount * metricCount);
   const physicsPassRate = 1 - physicsViolationCount / n;
+  const imputationRate = imputedSampleCount / n;
 
   const qualityScore = round2(100 * (
     0.4 * (1 - missingRate) +
@@ -42,11 +47,8 @@ export function computeQuality({ window, missingCount, outlierCount, metricCount
     physicsPassRate: round2(physicsPassRate),
     qualityScore,
     qualityLabel,
-    // No actual imputation happens — gaps are only counted, nothing is
-    // interpolated — so these mirror missingCount/missingRate exactly, same
-    // as the Node-RED implementation being replaced.
-    imputedSampleCount: missingCount,
-    imputationRate: round2(missingRate),
-    isImputed: missingCount > 0,
+    imputedSampleCount,
+    imputationRate: round2(imputationRate),
+    isImputed: imputedSampleCount > 0,
   };
 }

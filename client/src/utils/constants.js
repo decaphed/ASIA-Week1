@@ -3,13 +3,20 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 export const POLL_INTERVALS = {
-  live:     1000,
-  stats:    5000,
-  health:   5000,
-  history:  5000,
-  forecast: 15000,
-  drift:    15000,
+  live:      1000,
+  stats:     5000,
+  health:    5000,
+  history:   5000,
+  forecast:  15000,
+  drift:     15000,
+  processed: 15000,
 };
+
+// Above this fraction of a window's samples being reconstructed (not
+// measured), SystemHealthPanel's "Data Reliability" row switches from a
+// quiet "Live" state to flagging the estimate — occasional single-tick
+// gap-fills shouldn't trigger a constant warning.
+export const IMPUTATION_WARN_THRESHOLD = 0.1;
 
 export const CHART_WINDOW = 40;
 

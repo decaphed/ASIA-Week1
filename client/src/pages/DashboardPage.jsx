@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
-import { useHistory, useStats, useForecast, useDrift } from '../hooks/useSensorData.js';
+import { useHistory, useStats, useForecast, useDrift, useProcessedLive } from '../hooks/useSensorData.js';
 import Card from '../components/ui/Card.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import ErrorBanner from '../components/ui/ErrorBanner.jsx';
@@ -71,6 +71,7 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
   const { data: stats } = useStats(5000);
   const { data: forecast } = useForecast();
   const { data: drift } = useDrift();
+  const { data: processed } = useProcessedLive();
 
   const [series, setSeries] = useState(
     Object.fromEntries(SENSORS.map((s) => [s.key, []]))
@@ -116,7 +117,7 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
         <ProcessSchematic reading={reading} />
         <div className="hero-row__rail">
           <AlarmsPanel reading={reading} />
-          <SystemHealthPanel health={health} healthError={healthError} stats={stats} drift={drift} />
+          <SystemHealthPanel health={health} healthError={healthError} stats={stats} drift={drift} processed={processed} />
         </div>
       </section>
 

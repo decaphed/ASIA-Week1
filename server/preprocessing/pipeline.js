@@ -20,8 +20,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { validatePhysics } from './validator.js';
-import { pushSample, isWindowComplete, getWindow, resetBuffer, WINDOW_SIZE } from './buffer.js';
-import { detectMissing } from './missing.js';
+import { pushSample, isWindowComplete, getWindow, resetBuffer, getLastSample, WINDOW_SIZE } from './buffer.js';
+import { detectMissing, generateFillSamples } from './missing.js';
 import { hampelCap } from './outlier.js';
 import { aggregateWindow } from './aggregation.js';
 import { computeQuality } from './quality.js';
@@ -31,48 +31,42 @@ import * as processedService from '../services/processedService.js';
 import { logger } from '../utils/logger.js';
 
 /**
- * Process one incoming raw telemetry sample: validate, store, buffer, and —
- * once every WINDOW_SIZE samples — aggregate + store a processed record and
- * trigger forecasting/drift detection.
+ * Validate, annotate, store, and buffer ONE sample (real or gap-filled),
+ * closing out and processing a window if this push completes it.
  *
- * @param {object} sample raw sample as POSTed to /api/data.
- * @returns the saved raw reading (same shape dataController has always returned).
+ * @param {object} rawSample metrics + status + timestamp.
+ * @param {'MEASURED'|'IMPUTED'} provenance
+ * @returns the saved reading (API shape).
  */
-export function processSample(sample) {
-  // 1-2. Validate physics, annotate the raw sample.
-  const { physicsValid, physicsViolations } = validatePhysics(sample);
-  const annotated = {
-    ...sample,
-    isSynthetic: true,
-    physicsValid,
-    physicsViolations,
-  };
+function ingestSample(rawSample, provenance) {
+  // 1-2. Validate physics, annotate the sample — applies identically to
+  // MEASURED and IMPUTED samples, so a reconstructed reading that turns out
+  // physically implausible is just as visible as a real one would be.
+  const { physicsValid, physicsViolations } = validatePhysics(rawSample);
+  const annotated = { ...rawSample, provenance, physicsValid, physicsViolations };
 
-  // 3. Store the raw sample — every tick, unconditionally.
+  // 3. Store — every sample, unconditionally, real or reconstructed.
   const savedReading = sensorService.saveReading(annotated);
 
-  // 4-5. Buffer; stop here until a full window has accumulated. Buffer
-  // savedReading, not annotated — timestamp is optional on POST /api/data
-  // (see validateReading), and saveReading() is what resolves a missing
-  // timestamp to "now". Buffering the pre-resolution object would let an
-  // undefined timestamp reach windowStart/windowEnd and fail the
-  // processed_telemetry insert (NOT NULL columns) for the whole window.
+  // 4-5. Buffer; stop here until a full window has accumulated.
   pushSample(savedReading);
   if (!isWindowComplete()) {
     return savedReading;
   }
 
-  const window = getWindow(); // full audit window — every sample, physics-valid or not
+  const window = getWindow(); // full audit window — every sample, MEASURED or IMPUTED, physics-valid or not
   resetBuffer();
 
-  // 6-12 run in their own try/catch: the raw sample above is already safely
+  // 6-12 run in their own try/catch: the sample above is already safely
   // stored, so a failure here (e.g. a downstream DB error) must not turn a
   // successful ingestion into a 500 for the caller, nor leave the window
   // half-processed — log and degrade the same way the all-invalid-window
   // case below already does.
   try {
-    // 6. Missing-sample detection — always over the full audit window.
+    // 6. Missing-sample detection — now only ever finds RESIDUAL gaps (ones
+    // too large to have been filled by generateFillSamples, see missing.js).
     const missingCount = detectMissing(window);
+    const imputedSampleCount = window.filter((s) => s.provenance === 'IMPUTED').length;
 
     // Physics-invalid samples are still stored/counted (see quality.js) but
     // must not influence the Hampel baseline, aggregate stats, forecasting,
@@ -115,6 +109,7 @@ export function processSample(sample) {
       outlierCount,
       metricCount: METRICS.length,
       evaluatedSampleCount: statsWindow.length,
+      imputedSampleCount,
     });
 
     const processedRecord = {
@@ -158,4 +153,23 @@ export function processSample(sample) {
   }
 
   return savedReading;
+}
+
+/**
+ * Process one incoming raw telemetry sample: backfill any gap since the
+ * last sample (up to missing.js::MAX_FILLABLE_GAP_SECONDS, via linear
+ * interpolation), then validate/store/buffer the real sample itself — and
+ * for each of those pushes, once every WINDOW_SIZE samples, aggregate +
+ * store a processed record and trigger forecasting/drift detection.
+ *
+ * @param {object} sample raw sample as POSTed to /api/data.
+ * @returns the saved raw reading for `sample` (same shape dataController has always returned) —
+ *   any gap-fill rows created along the way are a side effect, not part of the response.
+ */
+export function processSample(sample) {
+  const fillSamples = generateFillSamples(getLastSample(), sample, METRICS);
+  for (const fill of fillSamples) {
+    ingestSample(fill, 'IMPUTED');
+  }
+  return ingestSample(sample, 'MEASURED');
 }

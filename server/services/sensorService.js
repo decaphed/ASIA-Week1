@@ -30,7 +30,7 @@ function rowToReading(row) {
     motorTemp: row.motorTemp,
     status: row.status,
     timestamp: row.timestamp,
-    isSynthetic: !!row.isSynthetic,
+    provenance: row.provenance,
     physicsValid: !!row.physicsValid,
     physicsViolations: row.physicsViolations ? JSON.parse(row.physicsViolations) : null,
   };
@@ -40,11 +40,13 @@ function rowToReading(row) {
  * Persist one incoming reading. `data` has already been validated by
  * middleware, so here we only normalise it for storage.
  *
- * physicsValid/physicsViolations are normally set by the preprocessing
- * pipeline (stage 1 — see preprocessing/validator.js and
+ * physicsValid/physicsViolations/provenance are normally set by the
+ * preprocessing pipeline (see preprocessing/validator.js and
  * preprocessing/pipeline.js), which runs on every POST /api/data request
- * regardless of source. They default to "valid" here only as a safety net
- * for any caller that reaches saveReading() directly, bypassing the pipeline.
+ * regardless of source — including gap-filled ("IMPUTED") reconstructions,
+ * see preprocessing/missing.js::generateFillSamples. They default to
+ * "valid"/"MEASURED" here only as a safety net for any caller that reaches
+ * saveReading() directly, bypassing the pipeline.
  */
 export function saveReading(data) {
   const record = {
@@ -57,7 +59,7 @@ export function saveReading(data) {
     status: data.status || 'RUNNING',
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
     timestamp: data.timestamp || new Date().toISOString(),
-    isSynthetic: data.isSynthetic ? 1 : 0,
+    provenance: data.provenance || 'MEASURED',
     physicsValid: data.physicsValid === false ? 0 : 1,
     physicsViolations: Array.isArray(data.physicsViolations) && data.physicsViolations.length
       ? JSON.stringify(data.physicsViolations)

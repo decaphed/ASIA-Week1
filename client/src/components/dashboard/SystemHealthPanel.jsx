@@ -7,7 +7,7 @@
 
 import { computeServiceStatus, connectionQuality } from '../../utils/health.js';
 import { formatTime } from '../../utils/formatters.js';
-import { SENSORS } from '../../utils/constants.js';
+import { SENSORS, IMPUTATION_WARN_THRESHOLD } from '../../utils/constants.js';
 
 const SENSOR_MAP = Object.fromEntries(SENSORS.map((s) => [s.key, s]));
 
@@ -53,7 +53,7 @@ function DriftRow({ metric, entry }) {
   );
 }
 
-export default function SystemHealthPanel({ health, healthError, stats, drift }) {
+export default function SystemHealthPanel({ health, healthError, stats, drift, processed }) {
   const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
   const quality = connectionQuality(stats?.apiLatencyMs);
   const lastUpdate = stats?.latestTimestamp ? formatTime(stats.latestTimestamp) : '--';
@@ -91,6 +91,17 @@ export default function SystemHealthPanel({ health, healthError, stats, drift })
         </StatRow>
         <StatRow label="Stored Records">{stats?.totalRecords ?? '--'}</StatRow>
         <StatRow label="Last Update">{lastUpdate}</StatRow>
+        <StatRow label="Data Reliability">
+          {!processed ? (
+            <span className="system-health-stat__value--muted">Collecting…</span>
+          ) : processed.imputationRate > IMPUTATION_WARN_THRESHOLD ? (
+            <span className="system-health-stat__value--warn">
+              {Math.round(processed.imputationRate * 100)}% Estimated
+            </span>
+          ) : (
+            <span className="system-health-stat__value--ok">Live</span>
+          )}
+        </StatRow>
 
         <div className="system-health-divider" />
 

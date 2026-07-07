@@ -11,9 +11,20 @@ export const WINDOW_SIZE = 60;
 
 let buffer = [];
 
+// The most recently pushed sample, kept across resetBuffer() calls — the
+// anchor gap-fill interpolation needs to bridge a missing stretch even when
+// it happens to straddle a window boundary (see pipeline.js/missing.js).
+let lastSample = null;
+
 /** Append one annotated sample to the rolling buffer. */
 export function pushSample(sample) {
   buffer.push(sample);
+  lastSample = sample;
+}
+
+/** @returns the most recently pushed sample, or null before the first one. */
+export function getLastSample() {
+  return lastSample;
 }
 
 /** @returns {number} current buffer length. */
