@@ -12,6 +12,7 @@
 import * as model from '../models/processedModel.js';
 import { onNewProcessedRecord as forecastOnNewRecord } from './forecastService.js';
 import { onNewProcessedRecord as driftOnNewRecord } from './driftService.js';
+import { onNewProcessedRecord as trendOnNewRecord } from './trendService.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 
@@ -90,16 +91,18 @@ export function saveProcessedReading(data) {
 }
 
 /**
- * Persist a processed record and immediately notify forecasting/drift
+ * Persist a processed record and immediately notify forecasting/drift/trend
  * detection — the single place that sequence happens, shared by the
  * preprocessing pipeline (preprocessing/pipeline.js) and the manual/back-
  * compat POST /api/processed endpoint (processedController.js), so the
- * three-step "save, forecast, drift" sequence exists in exactly one place.
+ * four-step "save, forecast, drift, trend" sequence exists in exactly one
+ * place.
  */
 export function saveAndTrigger(data) {
   const record = saveProcessedReading(data);
   forecastOnNewRecord(data);
   driftOnNewRecord(data);
+  trendOnNewRecord(data);
   return record;
 }
 

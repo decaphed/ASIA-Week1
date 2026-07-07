@@ -9,6 +9,7 @@ export const POLL_INTERVALS = {
   history:   5000,
   forecast:  15000,
   drift:     15000,
+  trend:     15000,
   processed: 15000,
 };
 

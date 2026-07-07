@@ -22,7 +22,7 @@ function toPct(v, yMin, yMax) {
   return Math.max(0, Math.min(100, ((v - yMin) / (yMax - yMin)) * 100));
 }
 
-export default function LiveChart({ label, color, unit, points, warnHigh, alarmHigh, forecast: rawForecast }) {
+export default function LiveChart({ label, color, unit, points, warnHigh, alarmHigh, forecast: rawForecast, trend }) {
   // The forecast API always returns an object per metric (never bare null),
   // but its numeric fields can individually be null — either "not enough
   // data yet" or a NaN on the server silently turned into null by
@@ -183,6 +183,16 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
           <span className="live-chart__unit">{unit}</span>
         </span>
       </div>
+
+      {/* Short-horizon graded trend classification (Mann-Kendall + Sen's slope) */}
+      {trend && (
+        <div className="live-chart__forecast-row">
+          <span className={`live-chart__forecast-trend live-chart__forecast-trend--${trend.direction === 'up' ? 'up' : trend.direction === 'down' ? 'down' : 'flat'}`}>
+            {trend.direction === 'up' ? '▲' : trend.direction === 'down' ? '▼' : '—'}
+          </span>
+          <span className="live-chart__forecast-text">{trend.label}</span>
+        </div>
+      )}
 
       {/* ETS forecast summary — next predicted value ± 95% interval */}
       {forecast && (

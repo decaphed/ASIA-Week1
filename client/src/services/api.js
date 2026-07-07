@@ -60,6 +60,12 @@ export async function getDrift() {
   return res.data.data;
 }
 
+/** GET /api/trend → per-metric { direction, magnitude, label, slopePerMin, rangePct, z, significant } (or null). */
+export async function getTrend() {
+  const res = await client.get('/trend');
+  return res.data.data;
+}
+
 /** GET /api/processed/live → the latest one-minute aggregate (quality/imputation info), or null. */
 export async function getProcessedLive() {
   const res = await client.get('/processed/live');

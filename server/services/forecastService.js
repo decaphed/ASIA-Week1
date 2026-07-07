@@ -84,6 +84,15 @@ const PHIS = [0.8, 0.85, 0.9, 0.95, 0.98, 1.0];
 // Node-RED restart, or a manual-entry test record).
 const OUTLIER_Z = 4;
 
+// A regime change only triggers the structural reset (safeguard 1 below)
+// once dominantStatus has differed from the last CONFIRMED regime for this
+// many consecutive records — the pump flips FAULT/STOPPED/RUNNING often
+// enough (see trendService.js's identical constant/rationale) that a single
+// blip must not collapse a metric's confidence band / zero its trend for
+// what turns out to be one noisy minute. Until confirmed, the record is
+// treated as a normal update, still subject to the outlier guard.
+const REGIME_PERSISTENCE_ROWS = 3;
+
 // One ETS state per metric: { alpha, beta, phi, level, trend, residuals }.
 // Absent until the first successful re-fit.
 const state = {};
@@ -97,6 +106,13 @@ const state = {};
 // against the regime that refit already captured, instead of null forcing a
 // spurious reset.
 let lastStatus = null;
+
+// Tracks an as-yet-unconfirmed regime change: the candidate status and how
+// many consecutive records have shown it. Cleared whenever a record matches
+// the last confirmed regime again (i.e. the blip reverted) or once the
+// change is confirmed and lastStatus advances.
+let pendingRegime = null;
+let pendingRegimeCount = 0;
 
 // The latest forecast per metric, exactly what getForecast() hands back.
 const forecastCache = Object.fromEntries(METRICS.map((m) => [m, null]));
@@ -268,7 +284,17 @@ export function onNewProcessedRecord(row) {
     return;
   }
 
-  const regimeChanged = lastStatus !== null && row.dominantStatus !== lastStatus;
+  let confirmedRegimeChange = false;
+  if (lastStatus !== null && row.dominantStatus !== lastStatus) {
+    pendingRegimeCount = pendingRegime === row.dominantStatus ? pendingRegimeCount + 1 : 1;
+    pendingRegime = row.dominantStatus;
+    confirmedRegimeChange = pendingRegimeCount >= REGIME_PERSISTENCE_ROWS;
+  } else {
+    // Back at the confirmed regime (or this is the very first record) —
+    // nothing pending.
+    pendingRegime = null;
+    pendingRegimeCount = 0;
+  }
 
   for (const metric of METRICS) {
     const metricState = state[metric];
@@ -276,7 +302,7 @@ export function onNewProcessedRecord(row) {
 
     const actual = metricMean(row, metric);
 
-    if (regimeChanged) {
+    if (confirmedRegimeChange) {
       metricState.level = actual;
       metricState.trend = 0;
       metricState.residuals = [];
@@ -312,7 +338,11 @@ export function onNewProcessedRecord(row) {
     forecastCache[metric] = computeForecastEntry(metricState);
   }
 
-  lastStatus = row.dominantStatus;
+  if (confirmedRegimeChange) {
+    lastStatus = row.dominantStatus;
+    pendingRegime = null;
+    pendingRegimeCount = 0;
+  }
 }
 
 /** @returns the latest cached forecast object for all 6 metrics. */

@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
-import { useHistory, useStats, useForecast, useDrift, useProcessedLive } from '../hooks/useSensorData.js';
+import { useHistory, useStats, useForecast, useDrift, useTrend, useProcessedLive } from '../hooks/useSensorData.js';
 import Card from '../components/ui/Card.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import ErrorBanner from '../components/ui/ErrorBanner.jsx';
@@ -38,7 +38,7 @@ const MECHANICAL_CHARTS = [
   { key: 'motorTemp',         color: '#f97316' },
 ];
 
-function ChartGroup({ title, subtitle, defs, series, forecast, id }) {
+function ChartGroup({ title, subtitle, defs, series, forecast, trend, id }) {
   return (
     <div className="chart-group" id={id}>
       <div className="chart-group__header">
@@ -58,6 +58,7 @@ function ChartGroup({ title, subtitle, defs, series, forecast, id }) {
                 warnHigh={sensor.warnHigh}
                 alarmHigh={sensor.alarmHigh}
                 forecast={forecast ? forecast[key] : null}
+                trend={trend ? trend[key] : null}
               />
             </div>
           );
@@ -72,6 +73,7 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
   const { data: stats } = useStats(5000);
   const { data: forecast } = useForecast();
   const { data: drift } = useDrift();
+  const { data: trend } = useTrend();
   const { data: processed } = useProcessedLive();
 
   const [series, setSeries] = useState(
@@ -140,6 +142,7 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
           defs={HYDRAULIC_CHARTS}
           series={series}
           forecast={forecast}
+          trend={trend}
         />
 
         {/* ── 5. Trend Charts — Mechanical Condition ───────────────────── */}
@@ -150,6 +153,7 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
           defs={MECHANICAL_CHARTS}
           series={series}
           forecast={forecast}
+          trend={trend}
         />
       </section>
 
