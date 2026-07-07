@@ -16,6 +16,7 @@ import AlarmsPanel from '../components/dashboard/AlarmsPanel.jsx';
 import SystemHealthPanel from '../components/dashboard/SystemHealthPanel.jsx';
 import SensorCardGrid from '../components/dashboard/SensorCardGrid.jsx';
 import StatsPanel from '../components/dashboard/StatsPanel.jsx';
+import ViolationsPanel from '../components/dashboard/ViolationsPanel.jsx';
 import LiveChart from '../components/charts/LiveChart.jsx';
 import HistoryTable from '../components/tables/HistoryTable.jsx';
 import ManualReadingForm from '../components/dashboard/ManualReadingForm.jsx';
@@ -164,6 +165,15 @@ export default function DashboardPage({ reading, liveError, liveLoading, refresh
       {/* ── 7. Aggregate Statistics ───────────────────────────────────── */}
       <Card id="settings" title="Operating Statistics" subtitle="Session averages across all stored readings">
         <StatsPanel stats={stats} />
+      </Card>
+
+      {/* ── 7b. Sensor Health / Data Quality ─────────────────────────── */}
+      <Card
+        id="violations"
+        title="Sensor Health — Data Quality"
+        subtitle="Physics-check violations by sensor, latest one-minute window"
+      >
+        <ViolationsPanel processed={processed} />
       </Card>
 
       {/* ── 8. Event / Data Log ───────────────────────────────────────── */}

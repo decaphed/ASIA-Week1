@@ -9,6 +9,55 @@
 
 import { round2 } from './aggregation.js';
 
+// Maps each exact violation string produced by validator.js::validatePhysics
+// to a tally category. Hardcoded (not parsed/split) on purpose: if
+// validator.js's wording ever changes, an unmatched string should fail
+// loudly (see the "unmatched" bucket below) rather than silently
+// miscounting. The two cross-variable rules get their own fixed categories
+// instead of being attributed to either metric they compare — a mismatch
+// between suction/discharge pressure, or between status and flow/rpm,
+// implicates a relationship, not one sensor.
+const VIOLATION_CATEGORY = {
+  'flowRate out of range': 'flowRate',
+  'rpm out of range': 'rpm',
+  'vibration out of range': 'vibration',
+  'suctionPressure out of range': 'suctionPressure',
+  'dischargePressure out of range': 'dischargePressure',
+  'motorTemp out of range': 'motorTemp',
+  'dischargePressure must exceed suctionPressure': 'dischargePressureVsSuction',
+  'STOPPED status but flow/rpm indicate the pump is running': 'statusMismatch',
+};
+
+const VIOLATION_CATEGORIES = [...new Set(Object.values(VIOLATION_CATEGORY))];
+
+/**
+ * Tally how many times each violation category occurred across a window.
+ * A single sample can contribute to more than one category (e.g. an
+ * out-of-range metric AND a cross-variable failure at once), so these
+ * counts generally sum to MORE than physicsViolationCount, which counts
+ * samples, not violations — that's expected, not a bug.
+ *
+ * @param {object[]} window completed AUDIT window.
+ * @returns {Record<string, number>} one count per category, always present
+ *   (0 if never violated), plus an `unmatched` bucket for any violation
+ *   string that doesn't match VIOLATION_CATEGORY (should stay 0 unless
+ *   validator.js's wording drifts out of sync with this map).
+ */
+function tallyViolationsByMetric(window) {
+  const tally = Object.fromEntries(VIOLATION_CATEGORIES.map((category) => [category, 0]));
+  tally.unmatched = 0;
+
+  for (const sample of window) {
+    if (!sample.physicsViolations) continue;
+    for (const violation of sample.physicsViolations) {
+      const category = VIOLATION_CATEGORY[violation];
+      tally[category ?? 'unmatched'] += 1;
+    }
+  }
+
+  return tally;
+}
+
 /**
  * @param {object} args
  * @param {object[]} args.window completed 60-sample AUDIT window (all samples, MEASURED + IMPUTED).
@@ -27,6 +76,7 @@ import { round2 } from './aggregation.js';
 export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount }) {
   const n = window.length;
   const physicsViolationCount = window.filter((sample) => sample.physicsValid === false).length;
+  const violationsByMetric = tallyViolationsByMetric(window);
 
   const missingRate = missingCount / (n + missingCount);
   const outlierRate = outlierCount / (evaluatedSampleCount * metricCount);
@@ -42,6 +92,7 @@ export function computeQuality({ window, missingCount, outlierCount, metricCount
 
   return {
     physicsViolationCount,
+    violationsByMetric,
     missingRate: round2(missingRate),
     outlierRate: round2(outlierRate),
     physicsPassRate: round2(physicsPassRate),

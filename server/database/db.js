@@ -58,6 +58,16 @@ if (rawTelemetryColumns.includes('isSynthetic')) {
   }
 }
 
+// Same idempotent-migration need as provenance above, for a data.db created
+// before per-metric violation tallying existed.
+const processedTelemetryColumns = db.prepare('PRAGMA table_info(processed_telemetry)').all().map((col) => col.name);
+if (!processedTelemetryColumns.includes('violationsByMetric')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN violationsByMetric TEXT');
+}
+if (!processedTelemetryColumns.includes('outliersByMetric')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN outliersByMetric TEXT');
+}
+
 logger.info(`SQLite ready at ${DB_PATH}`);
 
 /**

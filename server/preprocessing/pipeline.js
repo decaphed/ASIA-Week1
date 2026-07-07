@@ -91,11 +91,13 @@ function ingestSample(rawSample, provenance) {
 
     // 7. Hampel-filter outliers, per metric — evaluated over statsWindow only.
     const cappedByMetric = {};
+    const outliersByMetric = {};
     let outlierCount = 0;
     for (const metric of METRICS) {
       const raw = statsWindow.map((s) => s[metric]);
       const { capped, outlierCount: metricOutliers } = hampelCap(raw, 3);
       cappedByMetric[metric] = capped;
+      outliersByMetric[metric] = metricOutliers;
       outlierCount += metricOutliers;
     }
 
@@ -125,7 +127,9 @@ function ingestSample(rawSample, provenance) {
       missingSampleCount: missingCount,
       imputedSampleCount: quality.imputedSampleCount,
       outlierCount,
+      outliersByMetric,
       physicsViolationCount: quality.physicsViolationCount,
+      violationsByMetric: quality.violationsByMetric,
       missingRate: quality.missingRate,
       imputationRate: quality.imputationRate,
       outlierRate: quality.outlierRate,

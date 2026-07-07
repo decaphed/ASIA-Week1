@@ -55,7 +55,13 @@ function rowToProcessed(row) {
     missingSampleCount: row.missingSampleCount,
     imputedSampleCount: row.imputedSampleCount,
     outlierCount: row.outlierCount,
+    // Per-metric Hampel-capped outlier count (see preprocessing/pipeline.js).
+    // Can be null for rows written before this column existed.
+    outliersByMetric: row.outliersByMetric ? JSON.parse(row.outliersByMetric) : null,
     physicsViolationCount: row.physicsViolationCount,
+    // Per-metric + cross-variable tally (see preprocessing/quality.js). Can
+    // be null for rows written before this column existed.
+    violationsByMetric: row.violationsByMetric ? JSON.parse(row.violationsByMetric) : null,
     missingRate: row.missingRate,
     imputationRate: row.imputationRate,
     outlierRate: row.outlierRate,
@@ -70,7 +76,15 @@ function rowToProcessed(row) {
 
 /** Persist one incoming one-minute aggregate. `data` was already validated. */
 export function saveProcessedReading(data) {
-  const record = { ...data, isImputed: data.isImputed ? 1 : 0 };
+  const record = {
+    ...data,
+    isImputed: data.isImputed ? 1 : 0,
+    // ?? {} guards the manual POST /api/processed path, which doesn't
+    // require these fields — stringifying undefined would otherwise store
+    // the literal string "undefined" instead of a valid JSON object.
+    outliersByMetric: JSON.stringify(data.outliersByMetric ?? {}),
+    violationsByMetric: JSON.stringify(data.violationsByMetric ?? {}),
+  };
   const info = model.insertProcessed(record);
   return rowToProcessed({ id: Number(info.lastInsertRowid), ...record });
 }

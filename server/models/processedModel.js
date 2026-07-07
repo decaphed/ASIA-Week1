@@ -16,7 +16,7 @@ const insertStmt = db.prepare(`
     (windowStart, windowEnd, timestamp,
      ${METRIC_COLUMNS.join(', ')},
      dominantStatus, runningSeconds, faultSeconds, stoppedSeconds,
-     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, physicsViolationCount,
+     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric,
      missingRate, imputationRate, outlierRate, physicsPassRate,
      qualityScore, qualityLabel, isImputed,
      preprocessingVersion, preprocessingTimestamp)
@@ -24,7 +24,7 @@ const insertStmt = db.prepare(`
     (@windowStart, @windowEnd, @timestamp,
      ${METRIC_COLUMNS.map((c) => `@${c}`).join(', ')},
      @dominantStatus, @runningSeconds, @faultSeconds, @stoppedSeconds,
-     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @physicsViolationCount,
+     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric,
      @missingRate, @imputationRate, @outlierRate, @physicsPassRate,
      @qualityScore, @qualityLabel, @isImputed,
      @preprocessingVersion, @preprocessingTimestamp)

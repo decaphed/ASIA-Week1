@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS processed_telemetry (
   missingSampleCount      INTEGER NOT NULL DEFAULT 0,
   imputedSampleCount      INTEGER NOT NULL DEFAULT 0,
   outlierCount            INTEGER NOT NULL DEFAULT 0,
+  outliersByMetric        TEXT,                        -- JSON object: per-metric Hampel-capped outlier count (see preprocessing/pipeline.js)
   physicsViolationCount   INTEGER NOT NULL DEFAULT 0,
+  violationsByMetric      TEXT,                        -- JSON object: per-metric + cross-variable violation tally (see preprocessing/quality.js)
 
   -- Rates derived from the counters above (0..1), stored pre-computed so the
   -- dashboard/quality panel never has to recompute them client-side.

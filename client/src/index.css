@@ -819,6 +819,8 @@ button { font-family: inherit; cursor: pointer; border: none; }
   font-size: 10px; color: var(--text-dim); margin-left: 3px;
   font-family: var(--font); font-weight: 400;
 }
+.stat__value--ok   { color: var(--ok-bright); }
+.stat__value--warn { color: var(--warn-bright); }
 
 /* ══════════════════════════════════════════════════════════════════════════
    DATA LOG TABLE
