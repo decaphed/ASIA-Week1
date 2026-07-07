@@ -1,23 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Sidebar.jsx — fixed navigation rail.
-// v3: pump-specific brand, industrial nav icons from Icons.jsx.
+// v4: hash-route navigation between the four pages; active state comes
+//     from the current route instead of being hardcoded.
 // ─────────────────────────────────────────────────────────────────────────
 
 import {
-  DashboardNavIcon, SensorsNavIcon, HistoryNavIcon,
-  AnalyticsNavIcon, SettingsNavIcon,
+  DashboardNavIcon, SensorsNavIcon, AnalyticsNavIcon, ReportsNavIcon,
 } from '../ui/Icons.jsx';
 import { PUMP_ID } from '../../utils/constants.js';
 
 const NAV_ITEMS = [
-  { label: 'Overview',  Icon: DashboardNavIcon, href: '#dashboard', active: true },
-  { label: 'Live KPIs', Icon: SensorsNavIcon,   href: '#sensors' },
-  { label: 'Trends',    Icon: AnalyticsNavIcon, href: '#analytics' },
-  { label: 'Statistics',Icon: SettingsNavIcon,  href: '#settings' },
-  { label: 'Data Log',  Icon: HistoryNavIcon,   href: '#history' },
+  { label: 'Overview',  Icon: DashboardNavIcon, route: 'overview' },
+  { label: 'Telemetry', Icon: SensorsNavIcon,   route: 'telemetry' },
+  { label: 'Analytics', Icon: AnalyticsNavIcon, route: 'analytics' },
+  { label: 'Reports',   Icon: ReportsNavIcon,   route: 'reports' },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ route }) {
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
@@ -37,22 +36,25 @@ export default function Sidebar() {
       <div className="sidebar__section-label">Monitor</div>
 
       <nav className="sidebar__nav" aria-label="Main navigation">
-        {NAV_ITEMS.map(({ label, Icon, href, active }) => (
-          <a
-            key={label}
-            href={href}
-            className={`sidebar__link${active ? ' is-active' : ''}`}
-            aria-current={active ? 'page' : undefined}
-          >
-            <span className="sidebar__icon"><Icon /></span>
-            <span>{label}</span>
-          </a>
-        ))}
+        {NAV_ITEMS.map(({ label, Icon, route: r }) => {
+          const active = route === r;
+          return (
+            <a
+              key={r}
+              href={`#/${r}`}
+              className={`sidebar__link${active ? ' is-active' : ''}`}
+              aria-current={active ? 'page' : undefined}
+            >
+              <span className="sidebar__icon"><Icon /></span>
+              <span>{label}</span>
+            </a>
+          );
+        })}
       </nav>
 
       <div className="sidebar__footer">
         <div className="sidebar__footer-dot" aria-hidden="true" />
-        <span className="sidebar__footer-text">v3.0 · Pump Monitor</span>
+        <span className="sidebar__footer-text">v4.0 · Pump Monitor</span>
       </div>
     </aside>
   );

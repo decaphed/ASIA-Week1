@@ -76,6 +76,73 @@
   /* ── Motion */
   --t-fast: 0.10s ease;
   --t-base: 0.18s ease;
+
+  /* ── Schematic artwork (P&ID node fills/strokes, themable) */
+  --schem-node:     #0b1520;
+  --schem-stroke:   #213648;
+  --schem-stroke-2: #435a6a;
+  --schem-icon:     #7a94a8;
+  --schem-text:     #435a6a;
+
+  --topbar-bg: rgba(7,12,16,0.94);
+
+  color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — management-friendly daylight palette (soft warm neutrals,
+   white panels). Toggled from the topbar; persisted in localStorage.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root[data-theme="light"] {
+  --bg:           #eef1f5;
+  --bg-elevated:  #f7f9fb;
+  --panel:        #ffffff;
+  --panel-2:      #f1f5f9;
+  --panel-3:      #e8edf3;
+
+  --border:       #e2e8f0;
+  --border-light: #cbd5e1;
+
+  --text:         #1e293b;
+  --text-muted:   #52606f;
+  --text-dim:     #7c8898;
+  --text-faint:   #a8b3c0;
+
+  --accent:       #0e94b4;
+  --accent-dim:   rgba(14,148,180,0.10);
+  --accent-glow:  rgba(14,148,180,0.16);
+
+  --ok:              #15803d;
+  --ok-bright:       #16a34a;
+  --ok-bg:           rgba(22,163,74,0.10);
+  --ok-border:       rgba(22,163,74,0.28);
+
+  --warn:            #b45309;
+  --warn-bright:     #d97706;
+  --warn-bg:         rgba(217,119,6,0.10);
+  --warn-border:     rgba(217,119,6,0.30);
+
+  --danger:          #b91c1c;
+  --danger-bright:   #dc2626;
+  --danger-bg:       rgba(220,38,38,0.08);
+  --danger-border:   rgba(220,38,38,0.28);
+
+  --stopped-bg:      rgba(217,119,6,0.08);
+  --stopped-border:  rgba(217,119,6,0.24);
+
+  --shadow-sm: 0 1px 3px  rgba(15,23,42,0.08);
+  --shadow:    0 2px 10px rgba(15,23,42,0.08);
+  --shadow-lg: 0 6px 24px rgba(15,23,42,0.12);
+
+  --schem-node:     #f7f9fb;
+  --schem-stroke:   #c2cddc;
+  --schem-stroke-2: #94a3b8;
+  --schem-icon:     #64748b;
+  --schem-text:     #7c8898;
+
+  --topbar-bg: rgba(247,249,251,0.92);
+
+  color-scheme: light;
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
@@ -191,7 +258,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
   position: sticky; top: 0; height: var(--topbar-h);
   display: flex; align-items: center; gap: 16px;
   padding: 0 var(--content-pad);
-  background: rgba(7,12,16,0.94);
+  background: var(--topbar-bg);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border);
   z-index: 10;
@@ -212,6 +279,15 @@ button { font-family: inherit; cursor: pointer; border: none; }
   text-transform: uppercase; letter-spacing: 0.5px;
 }
 .topbar__status { display: flex; gap: 6px; margin-left: auto; }
+
+.topbar__theme {
+  width: 34px; height: 34px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--border-light);
+  display: grid; place-items: center; color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+.topbar__theme:hover { color: var(--text); border-color: var(--accent); }
 
 .topbar__bell {
   position: relative; width: 34px; height: 34px; border-radius: 8px;
@@ -434,6 +510,93 @@ button { font-family: inherit; cursor: pointer; border: none; }
   white-space: nowrap;
 }
 .schematic__tag-unit { font-size: clamp(6.5px, 1.05cqw, 9px); color: var(--text-dim); font-weight: 400; }
+
+/* ── Interactive equipment hotspots + data popover ──────────────────────
+   Invisible SVG zones sit over each drawn component; hovering (or keyboard-
+   focusing) one highlights the artwork and opens a floating data card with
+   that component's live metrics and a sparkline. */
+.schematic__hint {
+  margin-left: auto; margin-right: 14px;
+  font-size: 9px; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.7px; font-family: var(--mono);
+}
+.schematic__zone {
+  fill: transparent; stroke: transparent; stroke-width: 1.5;
+  cursor: pointer; outline: none;
+  transition: fill var(--t-base), stroke var(--t-base);
+}
+.schematic__zone:hover,
+.schematic__zone:focus-visible {
+  fill: var(--accent-dim);
+  stroke: var(--accent);
+  stroke-dasharray: 4 4;
+}
+.schematic__equip { transition: filter var(--t-base), opacity var(--t-base); }
+.schematic__equip.is-hot { filter: drop-shadow(0 0 6px var(--accent-glow)) brightness(1.15); }
+
+.schematic__pop {
+  position: absolute; z-index: 5;
+  min-width: clamp(180px, 34cqw, 250px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+  pointer-events: none;           /* never steal the hover from the zone */
+  animation: pop-in 0.14s ease;
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.schematic__pop--warn  { border-color: var(--warn-border); }
+.schematic__pop--alarm { border-color: var(--danger-border); }
+
+.schematic__pop-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding-bottom: 8px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.schematic__pop-name  { font-size: 12px; font-weight: 700; color: var(--text); }
+.schematic__pop-tagid {
+  font-family: var(--mono); font-size: 8.5px; color: var(--text-dim);
+  margin-top: 2px; letter-spacing: 0.3px;
+}
+.schematic__pop-state {
+  flex-shrink: 0;
+  font-family: var(--mono); font-weight: 700; font-size: 8px;
+  letter-spacing: 0.8px; padding: 2px 7px; border-radius: var(--radius-xs);
+  color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border);
+}
+.schematic__pop-state--normal { color: var(--ok-bright);     background: var(--ok-bg);     border-color: var(--ok-border); }
+.schematic__pop-state--warn   { color: var(--warn-bright);   background: var(--warn-bg);   border-color: var(--warn-border); }
+.schematic__pop-state--alarm  { color: var(--danger-bright); background: var(--danger-bg); border-color: var(--danger-border); }
+
+.schematic__pop-metrics { display: flex; flex-direction: column; gap: 5px; }
+.schematic__pop-metric {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.schematic__pop-metric-label { font-size: 10.5px; color: var(--text-muted); }
+.schematic__pop-metric-value {
+  font-family: var(--mono); font-weight: 700; font-size: 13px;
+  color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.schematic__pop-metric-value small {
+  font-size: 9px; color: var(--text-dim); font-weight: 400;
+}
+.schematic__pop-metric-value--warn   { color: var(--warn-bright); }
+.schematic__pop-metric-value--alarm  { color: var(--danger-bright); }
+.schematic__pop-metric-value--nodata { color: var(--text-faint); }
+
+.schematic__pop-spark-wrap {
+  margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.schematic__pop-spark { width: 100%; height: 34px; color: var(--accent); display: block; }
+.schematic__pop-spark-label {
+  display: block; margin-top: 4px;
+  font-family: var(--mono); font-size: 8px; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
 
 /* ── Rail panels (Alarms & Events / System Health) ──────────────────────── */
 .rail-panel {
@@ -958,12 +1121,12 @@ button { font-family: inherit; cursor: pointer; border: none; }
   border-radius: var(--radius-sm);
 }
 .error-banner__content { display: flex; flex-direction: column; gap: 2px; }
-.error-banner__title { color: #fca5a5; font-size: 12px; font-weight: 600; }
+.error-banner__title { color: var(--danger-bright); font-size: 12px; font-weight: 600; }
 .error-banner__message { color: var(--text-dim); font-size: 11px; }
 .error-banner__retry {
   margin-left: auto; padding: 5px 12px; border-radius: var(--radius-sm);
   background: rgba(220,38,38,0.18); border: 1px solid var(--danger-border);
-  color: #fca5a5; font-size: 11px; font-weight: 600; flex-shrink: 0;
+  color: var(--danger-bright); font-size: 11px; font-weight: 600; flex-shrink: 0;
   transition: background var(--t-fast);
 }
 .error-banner__retry:hover { background: rgba(220,38,38,0.28); }

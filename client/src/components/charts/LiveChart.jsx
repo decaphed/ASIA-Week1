@@ -17,6 +17,31 @@ import {
 
 ChartJS.register(LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler);
 
+// Theme-aware chart chrome colours. Chart.js needs concrete values (it can't
+// resolve CSS variables), so read the current theme off <html data-theme>;
+// the chart re-renders every second with the live poll, so a theme switch
+// takes effect within a tick.
+function chartChrome() {
+  const light = document.documentElement.dataset.theme === 'light';
+  return light
+    ? {
+        grid: 'rgba(148,163,184,0.35)',
+        tick: '#94a3b8',
+        tooltipBg: 'rgba(255,255,255,0.97)',
+        tooltipBorder: 'rgba(203,213,225,0.9)',
+        tooltipTitle: '#64748b',
+        tooltipBody: '#1e293b',
+      }
+    : {
+        grid: 'rgba(26,45,62,0.7)',
+        tick: '#2c3f4e',
+        tooltipBg: 'rgba(7,12,16,0.96)',
+        tooltipBorder: 'rgba(26,45,62,0.9)',
+        tooltipTitle: '#435a6a',
+        tooltipBody: '#d8e4ee',
+      };
+}
+
 // Clamp a value to [0,100] percent within [yMin, yMax]
 function toPct(v, yMin, yMax) {
   return Math.max(0, Math.min(100, ((v - yMin) / (yMax - yMin)) * 100));
@@ -113,6 +138,7 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
   }
 
   const data = { labels, datasets };
+  const chrome = chartChrome();
 
   const options = {
     responsive: true,
@@ -122,11 +148,11 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: 'rgba(7,12,16,0.96)',
-        borderColor: 'rgba(26,45,62,0.9)',
+        backgroundColor: chrome.tooltipBg,
+        borderColor: chrome.tooltipBorder,
         borderWidth: 1,
-        titleColor: '#435a6a',
-        bodyColor: '#d8e4ee',
+        titleColor: chrome.tooltipTitle,
+        bodyColor: chrome.tooltipBody,
         titleFont: { family: "'Consolas',monospace", size: 10 },
         bodyFont: { family: "'Consolas',monospace", size: 13, weight: '700' },
         padding: { x: 12, y: 8 },
@@ -152,10 +178,10 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
       y: {
         position: 'right',
         min: yMin, max: yMax,
-        grid: { color: 'rgba(26,45,62,0.7)', drawBorder: false },
+        grid: { color: chrome.grid, drawBorder: false },
         border: { display: false },
         ticks: {
-          color: '#2c3f4e',
+          color: chrome.tick,
           maxTicksLimit: 4,
           font: { family: "'Consolas',monospace", size: 10 },
           callback: (v) => v.toFixed(v < 10 ? 1 : 0),
