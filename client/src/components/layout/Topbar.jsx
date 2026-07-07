@@ -10,9 +10,9 @@ import Clock from './Clock.jsx';
 import StatusIndicator from './StatusIndicator.jsx';
 import { computeServiceStatus } from '../../utils/health.js';
 import { PUMP_ID, PUMP_AREA } from '../../utils/constants.js';
-import { AlarmIcon } from '../ui/Icons.jsx';
+import { AlarmIcon, SunIcon, MoonIcon } from '../ui/Icons.jsx';
 
-export default function Topbar({ health, healthError, alarmCount = 0 }) {
+export default function Topbar({ health, healthError, alarmCount = 0, theme = 'dark', onToggleTheme }) {
   const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
 
   return (
@@ -30,6 +30,16 @@ export default function Topbar({ health, healthError, alarmCount = 0 }) {
         <StatusIndicator label="Node-RED"  status={nodeRed} />
         <StatusIndicator label="SQLite"    status={database} />
       </div>
+
+      <button
+        type="button"
+        className="topbar__theme"
+        onClick={onToggleTheme}
+        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? <SunIcon width={17} height={17} /> : <MoonIcon width={17} height={17} />}
+      </button>
 
       <button type="button" className="topbar__bell" aria-label={`Notifications: ${alarmCount} active`}>
         <AlarmIcon width={17} height={17} />

@@ -103,7 +103,7 @@ export default function SensorCard({ sensor, value, history }) {
       {(alarm === 'warn' || alarm === 'alarm') && (
         <span className={`sensor-card__alarm-badge sensor-card__alarm-badge--${alarm}`}
           aria-label={alarm === 'alarm' ? 'Alarm' : 'Warning'}>
-          {alarm === 'alarm' ? '⚠ ALARM' : '⚠ WARN'}
+          {alarm === 'alarm' ? 'ALARM' : 'WARN'}
         </span>
       )}
 
