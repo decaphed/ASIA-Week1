@@ -40,11 +40,11 @@ function rowToReading(row) {
  * Persist one incoming reading. `data` has already been validated by
  * middleware, so here we only normalise it for storage.
  *
- * physicsValid/physicsViolations are normally set by Node-RED's
- * preprocess_minute function node (stage 1 of the preprocessing pipeline,
- * applied right after generation — see node-red/flow.json). They default to
- * "valid" here so readings posted from elsewhere (e.g. ManualReadingForm.jsx,
- * which bypasses Node-RED entirely) still get a well-formed row.
+ * physicsValid/physicsViolations are normally set by the preprocessing
+ * pipeline (stage 1 — see preprocessing/validator.js and
+ * preprocessing/pipeline.js), which runs on every POST /api/data request
+ * regardless of source. They default to "valid" here only as a safety net
+ * for any caller that reaches saveReading() directly, bypassing the pipeline.
  */
 export function saveReading(data) {
   const record = {

@@ -21,12 +21,14 @@ import { validateProcessedMiddleware } from '../middleware/validateProcessed.js'
 
 const router = Router();
 
-// Ingestion. validateReadingMiddleware runs first; only valid bodies reach
-// createReading.
+// Ingestion + preprocessing entry point. validateReadingMiddleware runs
+// first (hard reject on malformed shape); createReading then runs the full
+// preprocessing pipeline (preprocessing/pipeline.js) on every valid body.
 router.post('/data', validateReadingMiddleware, createReading);
 
-// One-minute aggregate ingestion (see node-red/flow.json's preprocess_minute
-// function node). validateProcessedMiddleware guards the same way /data does.
+// One-minute aggregate ingestion. Manual/back-compat path now that the
+// preprocessing pipeline produces and stores processed records itself —
+// validateProcessedMiddleware guards the same way /data does.
 router.post('/processed', validateProcessedMiddleware, createProcessedReading);
 
 // Retrieval.

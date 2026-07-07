@@ -66,9 +66,9 @@ export function validateReading(body) {
   return errors;
 }
 
-// One-minute aggregate record posted by Node-RED's preprocess_minute function
-// node to POST /api/processed (see node-red/flow.json). Six stats per metric,
-// unlike the single value validated above.
+// One-minute aggregate record produced by the preprocessing pipeline (see
+// server/preprocessing/pipeline.js) and posted to POST /api/processed. Six
+// stats per metric, unlike the single value validated above.
 const AGGREGATE_STATS = ['Mean', 'Median', 'Min', 'Max', 'StdDev', 'Last'];
 const VALID_QUALITY_LABELS = ['GOOD', 'FAIR', 'POOR'];
 

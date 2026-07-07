@@ -28,8 +28,8 @@
 //
 // Input: as of the preprocessing pipeline, the series fed to this model is
 // processed_telemetry's per-metric MEAN over each one-minute window (already
-// outlier-capped and quality-scored by Node-RED — see node-red/flow.json's
-// preprocess_minute function node) rather than raw 1 Hz readings. That is a
+// outlier-capped and quality-scored by the preprocessing pipeline — see
+// server/preprocessing/pipeline.js) rather than raw 1 Hz readings. That is a
 // deliberate improvement: forecasting a management KPI should run on the
 // cleaned, aggregated signal, not on raw sensor noise.
 //

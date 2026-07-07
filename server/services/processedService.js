@@ -3,13 +3,15 @@
 //
 // Mirrors sensorService.js's role for raw_telemetry: sits between the HTTP
 // layer and the model, converts DB rows <-> the API shape. Unlike
-// sensorService, there is no "fill in defaults" step — Node-RED's
-// preprocess_minute function node already computed every field (stats,
-// counters, quality score/label), and validateProcessed.js already rejected
-// anything malformed before this runs. Express only stores and re-shapes.
+// sensorService, there is no "fill in defaults" step — the preprocessing
+// pipeline (preprocessing/pipeline.js) or validateProcessed.js already
+// guarantees every field (stats, counters, quality score/label) is present
+// and well-formed before this runs. Express only stores and re-shapes.
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as model from '../models/processedModel.js';
+import { onNewProcessedRecord as forecastOnNewRecord } from './forecastService.js';
+import { onNewProcessedRecord as driftOnNewRecord } from './driftService.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 
@@ -40,6 +42,15 @@ function rowToProcessed(row) {
     faultSeconds: row.faultSeconds,
     stoppedSeconds: row.stoppedSeconds,
     sampleCount: row.sampleCount,
+    // How many of sampleCount actually backed the mean/median/etc — derived,
+    // not a stored column. Physics-invalid samples are excluded from the
+    // aggregate stats (see preprocessing/pipeline.js), so a window with many
+    // violations can produce a mean from far fewer samples than sampleCount
+    // suggests; this makes that visible instead of leaving it implicit in
+    // physicsViolationCount. A window where every sample fails validation is
+    // skipped entirely (no row is ever stored for it), so this is always
+    // accurate — never the "all samples invalid" edge case.
+    validSampleCount: row.sampleCount - row.physicsViolationCount,
     expectedSampleCount: row.expectedSampleCount,
     missingSampleCount: row.missingSampleCount,
     imputedSampleCount: row.imputedSampleCount,
@@ -62,6 +73,20 @@ export function saveProcessedReading(data) {
   const record = { ...data, isImputed: data.isImputed ? 1 : 0 };
   const info = model.insertProcessed(record);
   return rowToProcessed({ id: Number(info.lastInsertRowid), ...record });
+}
+
+/**
+ * Persist a processed record and immediately notify forecasting/drift
+ * detection — the single place that sequence happens, shared by the
+ * preprocessing pipeline (preprocessing/pipeline.js) and the manual/back-
+ * compat POST /api/processed endpoint (processedController.js), so the
+ * three-step "save, forecast, drift" sequence exists in exactly one place.
+ */
+export function saveAndTrigger(data) {
+  const record = saveProcessedReading(data);
+  forecastOnNewRecord(data);
+  driftOnNewRecord(data);
+  return record;
 }
 
 /** The most recent processed record, or null if none stored yet. */

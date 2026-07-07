@@ -1,27 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────
-// processedController.js — handles POST/GET /api/processed (the one-minute
-// aggregate ingested from Node-RED's preprocess_minute function node).
+// processedController.js — handles POST/GET /api/processed.
 //
-// After a successful insert, forecasting and drift detection are notified
-// directly (event-driven) instead of polling on a timer — a new processed
-// record IS the trigger for both, since each only arrives once per minute.
-// See forecastService.onNewProcessedRecord / driftService.onNewProcessedRecord.
+// POST is now a manual/back-compat ingestion path: the preprocessing
+// pipeline (preprocessing/pipeline.js) is what normally produces processed
+// records once every 60 samples of POST /api/data, storing them and
+// triggering forecast/drift itself. This endpoint shares that exact same
+// save+trigger sequence via processedService.saveAndTrigger, so there is
+// still only one place forecasting/drift detection get notified from.
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as service from '../services/processedService.js';
-import { onNewProcessedRecord as forecastOnNewRecord } from '../services/forecastService.js';
-import { onNewProcessedRecord as driftOnNewRecord } from '../services/driftService.js';
 
 export function createProcessedReading(req, res, next) {
   try {
-    const record = service.saveProcessedReading(req.body);
-    // forecastService/driftService read the FLAT database-row shape
-    // (row.flowRateMean, row.dominantStatus — matching processedModel's
-    // SELECT * rows), not the nested API shape `record` becomes above
-    // (record.metrics.flowRate.mean). req.body is already flat and
-    // validated, so pass that through instead of the reshaped `record`.
-    forecastOnNewRecord(req.body);
-    driftOnNewRecord(req.body);
+    // req.body is already flat and validated — the same flat shape
+    // forecastService/driftService read (row.flowRateMean, row.dominantStatus).
+    const record = service.saveAndTrigger(req.body);
     res.status(201).json({ success: true, data: record });
   } catch (err) {
     next(err);
