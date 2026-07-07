@@ -228,8 +228,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.aidesigner/*
-!.aidesigner/.gitkeep
+.aidesigner/
 
 # AIDesigner local MCP config + generated skill/agent/command files
 .mcp.json
