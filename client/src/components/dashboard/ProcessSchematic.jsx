@@ -59,7 +59,7 @@ const HOTSPOTS = [
     id: 'valve', name: 'Check Valve', tag: 'CV-01',
     desc: 'Non-return valve on the discharge header',
     metrics: ['dischargePressure', 'flowRate'],
-    zone: { x: 568, y: 52, w: 60, h: 60, round: true },
+    zone: { x: 562, y: 26, w: 56, h: 66 },
     pop: { right: '3%', top: '38%' },
   },
 ];
@@ -172,67 +172,114 @@ export default function ProcessSchematic({ reading, series }) {
             <marker id="schematic-arrow-s" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto">
               <path d="M0 0l7 4.5-7 4.5z" fill="#38bdf8" />
             </marker>
+            {/* cylindrical shading for horizontal pipe runs / metal bodies */}
+            <linearGradient id="schem-pipe" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0"   style={{ stopColor: 'var(--pipe-hi)' }} />
+              <stop offset="0.45" style={{ stopColor: 'var(--pipe-mid)' }} />
+              <stop offset="1"   style={{ stopColor: 'var(--pipe-lo)' }} />
+            </linearGradient>
+            {/* tank cylinder — light band down the middle */}
+            <linearGradient id="schem-tank" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0"    style={{ stopColor: 'var(--pipe-lo)' }} />
+              <stop offset="0.35" style={{ stopColor: 'var(--pipe-hi)' }} />
+              <stop offset="0.7"  style={{ stopColor: 'var(--pipe-mid)' }} />
+              <stop offset="1"    style={{ stopColor: 'var(--pipe-lo)' }} />
+            </linearGradient>
+            {/* amber highlight body — the hero component, like the reference */}
+            <radialGradient id="schem-amber" cx="0.35" cy="0.32" r="0.95">
+              <stop offset="0"   style={{ stopColor: 'var(--amber-hi)' }} />
+              <stop offset="0.55" style={{ stopColor: 'var(--amber-mid)' }} />
+              <stop offset="1"   style={{ stopColor: 'var(--amber-lo)' }} />
+            </radialGradient>
           </defs>
 
-          {/* sump tank */}
+          {/* sump tank — 3D cylinder with wireframe hoops */}
           <g className={`schematic__equip${active === 'tank' ? ' is-hot' : ''}`}>
-            <rect x="16" y="108" width="76" height="104" rx="7" fill="var(--schem-node)" stroke="var(--schem-stroke)" strokeWidth="1.5" />
-            <rect x="16" y="162" width="76" height="50" fill="rgba(0,180,216,.10)" />
-            <path d="M16 162 Q35 156 54 162 T92 162" fill="none" stroke="rgba(0,180,216,.35)" strokeWidth="1.5" />
+            <ellipse cx="54" cy="210" rx="37" ry="10" fill="var(--schem-shadow)" />
+            <rect x="17" y="116" width="74" height="92" fill="url(#schem-tank)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="54" cy="146" rx="37" ry="10" fill="none" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="54" cy="176" rx="37" ry="10" fill="none" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="35" y1="118" x2="35" y2="206" stroke="var(--pipe-line)" strokeWidth="0.8" />
+            <line x1="73" y1="118" x2="73" y2="206" stroke="var(--pipe-line)" strokeWidth="0.8" />
+            <ellipse cx="54" cy="208" rx="37" ry="10" fill="var(--pipe-lo)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="54" cy="116" rx="37" ry="10" fill="var(--pipe-hi)" stroke="var(--pipe-line)" strokeWidth="1.2" />
+            <ellipse cx="54" cy="116" rx="26" ry="6.5" fill="none" stroke="var(--pipe-line)" strokeWidth="0.8" />
             <text x="54" y="232" textAnchor="middle" fontFamily="JetBrains Mono" fontSize="10" fill="var(--schem-text)">SUMP TANK</text>
           </g>
 
-          {/* suction pipe */}
+          {/* suction pipe — shaded tube with flange rings */}
           <g className={`schematic__equip${active === 'suction' ? ' is-hot' : ''}`}>
-            <line x1="92" y1="150" x2="256" y2="150" stroke="var(--schem-stroke)" strokeWidth="10" />
-            <line x1="92" y1="150" x2="256" y2="150" stroke="#38bdf8" strokeWidth="2.5" strokeDasharray="8 10"
-              className="schematic__flow" markerEnd="url(#schematic-arrow-s)" />
-            <circle cx="174" cy="128" r="10" fill="var(--schem-node)" stroke="var(--schem-stroke)" strokeWidth="1.3" />
-            <line x1="174" y1="128" x2="170" y2="122" stroke="#38bdf8" strokeWidth="1.4" />
-            <line x1="174" y1="140" x2="174" y2="150" stroke="var(--schem-stroke)" strokeWidth="2" />
+            <rect x="88" y="141" width="172" height="18" rx="9" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="94" y1="145.5" x2="254" y2="145.5" stroke="var(--pipe-sheen)" strokeWidth="1.6" strokeLinecap="round" />
+            <ellipse cx="104" cy="150" rx="4" ry="11.5" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="216" cy="150" rx="4" ry="11.5" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="96" y1="150" x2="254" y2="150" stroke="#38bdf8" strokeWidth="2.2" strokeDasharray="8 10"
+              className="schematic__flow" markerEnd="url(#schematic-arrow-s)" opacity="0.85" />
+            <line x1="174" y1="139" x2="174" y2="128" stroke="var(--pipe-lo)" strokeWidth="3" />
+            <circle cx="174" cy="122" r="9" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
+            <line x1="174" y1="122" x2="170" y2="116" stroke="#38bdf8" strokeWidth="1.4" />
           </g>
 
-          {/* pump body */}
+          {/* pump — amber volute (the hero piece) with wireframe rings */}
           <g className={`schematic__equip${active === 'pump' ? ' is-hot' : ''}`}>
-            <circle cx="312" cy="150" r="54" fill="var(--schem-node)" stroke="var(--accent)" strokeWidth="2.5" />
-            <circle cx="312" cy="150" r="34" fill="none" stroke="var(--schem-stroke)" strokeWidth="1.5" />
+            <ellipse cx="312" cy="212" rx="48" ry="8" fill="var(--schem-shadow)" />
+            <circle cx="312" cy="150" r="54" fill="url(#schem-amber)" stroke="var(--amber-lo)" strokeWidth="2" />
+            <circle cx="312" cy="150" r="44" fill="none" stroke="var(--amber-wire)" strokeWidth="1" />
+            <circle cx="312" cy="150" r="33" fill="none" stroke="var(--amber-wire)" strokeWidth="1" />
+            <circle cx="312" cy="150" r="21" fill="none" stroke="var(--amber-wire)" strokeWidth="1" />
             <g className="schematic__impeller">
-              <g stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round">
-                <path d="M312 150 L312 120" />
-                <path d="M312 150 L338 165" />
-                <path d="M312 150 L286 165" />
+              <g stroke="#7c4a03" strokeWidth="2.6" strokeLinecap="round">
+                <path d="M312 150 C312 138 316 130 312 120" fill="none" />
+                <path d="M312 150 C322 156 330 158 338 165" fill="none" />
+                <path d="M312 150 C302 156 294 158 286 165" fill="none" />
               </g>
             </g>
-            <circle cx="312" cy="150" r="4.5" fill="var(--accent)" />
-            <text x="312" y="222" textAnchor="middle" fontFamily="JetBrains Mono" fontSize="10" fill="var(--schem-text)">CENTRIFUGAL PUMP</text>
+            <circle cx="312" cy="150" r="5" fill="#7c4a03" />
+            <circle cx="310" cy="148" r="1.6" fill="var(--amber-hi)" />
+            <text x="312" y="232" textAnchor="middle" fontFamily="JetBrains Mono" fontSize="10" fill="var(--schem-text)">CENTRIFUGAL PUMP</text>
           </g>
 
-          {/* motor */}
+          {/* motor — isometric block with cooling fins */}
           <g className={`schematic__equip${active === 'motor' ? ' is-hot' : ''}`}>
-            <rect x="280" y="62" width="64" height="34" rx="5" fill="var(--schem-node)" stroke="#f97316" strokeWidth="1.7" />
-            <line x1="286" y1="70" x2="338" y2="70" stroke="var(--schem-stroke)" strokeWidth="1" />
-            <line x1="286" y1="76" x2="338" y2="76" stroke="var(--schem-stroke)" strokeWidth="1" />
-            <line x1="286" y1="82" x2="338" y2="82" stroke="var(--schem-stroke)" strokeWidth="1" />
-            <text x="312" y="112" textAnchor="middle" fontFamily="JetBrains Mono" fontSize="9" fill="#f97316">MOTOR</text>
-            <line x1="312" y1="96" x2="312" y2="98" stroke="var(--schem-stroke)" strokeWidth="7" />
+            <polygon points="280,62 288,54 352,54 344,62" fill="var(--pipe-hi)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <polygon points="344,62 352,54 352,88 344,96" fill="var(--pipe-lo)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <rect x="280" y="62" width="64" height="34" rx="2" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
+            <line x1="286" y1="70" x2="338" y2="70" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="286" y1="76" x2="338" y2="76" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="286" y1="82" x2="338" y2="82" stroke="var(--pipe-line)" strokeWidth="1" />
+            <line x1="286" y1="88" x2="338" y2="88" stroke="var(--pipe-line)" strokeWidth="1" />
+            <text x="266" y="80" textAnchor="end" fontFamily="JetBrains Mono" fontSize="9" fill="var(--schem-text)">MOTOR</text>
+            <rect x="308" y="96" width="8" height="4" fill="var(--pipe-lo)" />
           </g>
 
-          {/* discharge pipe */}
+          {/* discharge pipe — layered strokes for a cylindrical sheen */}
           <g className={`schematic__equip${active === 'discharge' ? ' is-hot' : ''}`}>
-            <path d="M366 150 L500 150 L500 74 L664 74" fill="none" stroke="var(--schem-stroke)" strokeWidth="10" />
-            <path d="M366 150 L500 150 L500 74 L664 74" fill="none" stroke="#818cf8" strokeWidth="2.5"
-              strokeDasharray="8 10" className="schematic__flow" markerEnd="url(#schematic-arrow-d)" />
-            <circle cx="440" cy="128" r="10" fill="var(--schem-node)" stroke="var(--schem-stroke)" strokeWidth="1.3" />
-            <line x1="440" y1="128" x2="444" y2="122" stroke="#818cf8" strokeWidth="1.4" />
-            <line x1="440" y1="140" x2="440" y2="150" stroke="var(--schem-stroke)" strokeWidth="2" />
+            <path d="M366 150 L497 150 Q506 150 506 141 L506 83 Q506 74 515 74 L664 74"
+              fill="none" stroke="var(--pipe-lo)" strokeWidth="19" strokeLinecap="round" />
+            <path d="M366 150 L497 150 Q506 150 506 141 L506 83 Q506 74 515 74 L664 74"
+              fill="none" stroke="url(#schem-pipe)" strokeWidth="15" strokeLinecap="round" />
+            <path d="M366 146 L494 146 M510 78 L660 78"
+              fill="none" stroke="var(--pipe-sheen)" strokeWidth="1.6" strokeLinecap="round" />
+            <ellipse cx="382" cy="150" rx="4" ry="12" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="660" cy="74" rx="4" ry="12" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <path d="M370 150 L496 150 Q506 150 506 140 L506 84 Q506 74 516 74 L662 74" fill="none" stroke="#818cf8" strokeWidth="2.2"
+              strokeDasharray="8 10" className="schematic__flow" markerEnd="url(#schematic-arrow-d)" opacity="0.85" />
+            <line x1="440" y1="139" x2="440" y2="128" stroke="var(--pipe-lo)" strokeWidth="3" />
+            <circle cx="440" cy="122" r="9" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
+            <line x1="440" y1="122" x2="444" y2="116" stroke="#818cf8" strokeWidth="1.4" />
           </g>
 
-          {/* check valve */}
+          {/* check valve — flanged body with a 3D handwheel, like the reference */}
           <g className={`schematic__equip${active === 'valve' ? ' is-hot' : ''}`}>
-            <g transform="translate(590,74)">
-              <circle r="14" fill="var(--schem-node)" stroke="var(--schem-stroke-2)" strokeWidth="1.5" />
-              <path d="M-8 -8 L8 8 M8 -8 L-8 8" stroke="var(--schem-icon)" strokeWidth="2" />
-            </g>
+            <ellipse cx="590" cy="38" rx="21" ry="7.5" fill="none" stroke="var(--pipe-lo)" strokeWidth="2.4" />
+            <line x1="569" y1="38" x2="611" y2="38" stroke="var(--pipe-lo)" strokeWidth="1.4" />
+            <line x1="590" y1="30.5" x2="590" y2="45.5" stroke="var(--pipe-lo)" strokeWidth="1.4" />
+            <circle cx="590" cy="38" r="3" fill="var(--pipe-lo)" />
+            <line x1="590" y1="45" x2="590" y2="62" stroke="var(--pipe-lo)" strokeWidth="4" />
+            <ellipse cx="574" cy="74" rx="3.5" ry="12" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <ellipse cx="606" cy="74" rx="3.5" ry="12" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
+            <path d="M578 65 L590 74 L578 83 Z" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
+            <path d="M602 65 L590 74 L602 83 Z" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
             <text x="590" y="104" textAnchor="middle" fontFamily="JetBrains Mono" fontSize="8" fill="var(--schem-text)">CV-01</text>
           </g>
 

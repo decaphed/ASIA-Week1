@@ -11,7 +11,8 @@ const STORAGE_KEY = 'pump-dashboard-theme';
 function initialTheme() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  // Light is the default "management" look; dark only if the OS asks for it.
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 export function useTheme() {

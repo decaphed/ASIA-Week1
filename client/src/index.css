@@ -83,6 +83,20 @@
   --schem-stroke-2: #435a6a;
   --schem-icon:     #7a94a8;
   --schem-text:     #435a6a;
+  --schem-shadow:   rgba(0,0,0,0.35);
+
+  /* Pseudo-3D pipework shading (gradients + wireframe lines) */
+  --pipe-hi:    #46596d;
+  --pipe-mid:   #26394a;
+  --pipe-lo:    #131f2a;
+  --pipe-line:  rgba(216,228,238,0.16);
+  --pipe-sheen: rgba(216,228,238,0.22);
+
+  /* Amber hero component (pump volute) */
+  --amber-hi:   #ffd27a;
+  --amber-mid:  #f5a623;
+  --amber-lo:   #b7770e;
+  --amber-wire: rgba(124,74,3,0.40);
 
   --topbar-bg: rgba(7,12,16,0.94);
 
@@ -94,23 +108,23 @@
    white panels). Toggled from the topbar; persisted in localStorage.
    ═══════════════════════════════════════════════════════════════════════════ */
 :root[data-theme="light"] {
-  --bg:           #eef1f5;
-  --bg-elevated:  #f7f9fb;
+  --bg:           #f0eee9;
+  --bg-elevated:  #faf9f6;
   --panel:        #ffffff;
-  --panel-2:      #f1f5f9;
-  --panel-3:      #e8edf3;
+  --panel-2:      #f4f1ea;
+  --panel-3:      #ece8df;
 
-  --border:       #e2e8f0;
-  --border-light: #cbd5e1;
+  --border:       #e8e3d8;
+  --border-light: #d6cfc0;
 
-  --text:         #1e293b;
-  --text-muted:   #52606f;
-  --text-dim:     #7c8898;
-  --text-faint:   #a8b3c0;
+  --text:         #26292e;
+  --text-muted:   #5b6069;
+  --text-dim:     #8a8f98;
+  --text-faint:   #b4b8bf;
 
-  --accent:       #0e94b4;
-  --accent-dim:   rgba(14,148,180,0.10);
-  --accent-glow:  rgba(14,148,180,0.16);
+  --accent:       #e8930c;
+  --accent-dim:   rgba(232,147,12,0.12);
+  --accent-glow:  rgba(232,147,12,0.20);
 
   --ok:              #15803d;
   --ok-bright:       #16a34a;
@@ -130,19 +144,48 @@
   --stopped-bg:      rgba(217,119,6,0.08);
   --stopped-border:  rgba(217,119,6,0.24);
 
-  --shadow-sm: 0 1px 3px  rgba(15,23,42,0.08);
-  --shadow:    0 2px 10px rgba(15,23,42,0.08);
-  --shadow-lg: 0 6px 24px rgba(15,23,42,0.12);
+  --shadow-sm: 0 1px 3px  rgba(70,60,40,0.07);
+  --shadow:    0 2px 12px rgba(70,60,40,0.07);
+  --shadow-lg: 0 8px 28px rgba(70,60,40,0.13);
 
-  --schem-node:     #f7f9fb;
-  --schem-stroke:   #c2cddc;
-  --schem-stroke-2: #94a3b8;
-  --schem-icon:     #64748b;
-  --schem-text:     #7c8898;
+  --schem-node:     #faf9f6;
+  --schem-stroke:   #cfc9bc;
+  --schem-stroke-2: #a39d8f;
+  --schem-icon:     #6f6a5e;
+  --schem-text:     #9a958a;
+  --schem-shadow:   rgba(110,90,55,0.14);
 
-  --topbar-bg: rgba(247,249,251,0.92);
+  --pipe-hi:    #fbfaf8;
+  --pipe-mid:   #dcd8cf;
+  --pipe-lo:    #a9a598;
+  --pipe-line:  rgba(75,70,58,0.28);
+  --pipe-sheen: rgba(255,255,255,0.85);
+
+  --amber-hi:   #ffe1a0;
+  --amber-mid:  #f6b83d;
+  --amber-lo:   #d98e0b;
+  --amber-wire: rgba(124,74,3,0.35);
+
+  --topbar-bg: rgba(250,249,246,0.90);
+
+  /* Softer, rounder shapes for the management look */
+  --radius:    12px;
+  --radius-sm: 8px;
+  --radius-xs: 5px;
 
   color-scheme: light;
+}
+
+/* Warm ambient gradient behind everything in light mode — echoes the
+   cream-to-peach glow of the reference design. */
+:root[data-theme="light"] body {
+  background: linear-gradient(180deg, #f1efe9 0%, #f4eee1 55%, #f7e8cd 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="light"] .app,
+:root[data-theme="light"] .app__main { background: transparent; }
+:root[data-theme="light"] .schematic {
+  background: linear-gradient(180deg, #fdfcfa 0%, #faf3e4 62%, #f6e6c5 100%);
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
@@ -232,7 +275,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .sidebar__link:hover { background: var(--panel-2); color: var(--text); }
 .sidebar__link.is-active {
   background: var(--accent-dim); color: var(--text);
-  border: 1px solid rgba(0,180,216,0.15);
+  border: 1px solid var(--accent-dim);
 }
 .sidebar__link.is-active::before {
   content: ''; position: absolute; left: 0; top: 25%; bottom: 25%;
@@ -267,7 +310,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .topbar__unit-id {
   font-family: var(--mono); font-size: 11px; font-weight: 700;
   color: var(--accent); letter-spacing: 1.2px;
-  padding: 3px 8px; border: 1px solid rgba(0,180,216,0.25);
+  padding: 3px 8px; border: 1px solid var(--accent-glow);
   border-radius: var(--radius-xs); background: var(--accent-dim);
   white-space: nowrap;
 }
