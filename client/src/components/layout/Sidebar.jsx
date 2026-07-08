@@ -5,15 +5,20 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import {
-  DashboardNavIcon, SensorsNavIcon, AnalyticsNavIcon, ReportsNavIcon,
+  DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReportsNavIcon,
 } from '../ui/Icons.jsx';
 import { PUMP_ID } from '../../utils/constants.js';
 
+// Telemetry was retired as a destination: its KPI cards moved to Overview
+// (the at-a-glance layer management wants on landing) and its manual test
+// form to Reports' engineering-tools disclosure. Predictions is the new
+// fourth mode — "what's coming" — and the future home of the AI/ML
+// failure-prediction model.
 const NAV_ITEMS = [
-  { label: 'Overview',  Icon: DashboardNavIcon, route: 'overview' },
-  { label: 'Telemetry', Icon: SensorsNavIcon,   route: 'telemetry' },
-  { label: 'Analytics', Icon: AnalyticsNavIcon, route: 'analytics' },
-  { label: 'Reports',   Icon: ReportsNavIcon,   route: 'reports' },
+  { label: 'Overview',    Icon: DashboardNavIcon, route: 'overview' },
+  { label: 'Analytics',   Icon: AnalyticsNavIcon, route: 'analytics' },
+  { label: 'Predictions', Icon: PredictNavIcon,   route: 'predict' },
+  { label: 'Reports',     Icon: ReportsNavIcon,   route: 'reports' },
 ];
 
 export default function Sidebar({ route }) {

@@ -219,3 +219,15 @@ export function ReportsNavIcon(props) {
 // Keep legacy exports used by older code paths
 export const DropletIcon = FlowIcon;
 export const BulbIcon    = StatusIcon;
+
+// Crystal-ball-style spark icon for the AI Predictions nav entry.
+export function PredictNavIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 3a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V19a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-3.3c-1.8-1.2-3-3.3-3-5.7a7 7 0 0 1 7-7z" />
+      <path d="M9.5 21h5" />
+      <path d="M12 7v3l2 2" />
+    </svg>
+  );
+}

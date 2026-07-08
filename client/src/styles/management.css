@@ -325,3 +325,41 @@
 @media (max-width: 720px) {
   .data-confidence { flex-direction: column; text-align: center; }
 }
+
+/* ── Whole-app ambient status wash ──────────────────────────────────────────
+   One fixed, pointer-transparent layer behind everything whose glow color
+   follows overall pump status — the chrome itself breathes with plant
+   health, giving passive peripheral-vision awareness on every page. */
+.app-ambient {
+  position: fixed;
+  inset: 0;
+  /* Behind all content via negative z-index — do NOT lift siblings with a
+     positioned wrapper rule instead; a `.app > *` position:relative rule
+     out-specifies `.sidebar{position:fixed}` and breaks the page layout. */
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background: radial-gradient(60% 45% at 78% -10%, var(--accent-glow), transparent 70%);
+  animation: exec-glow-drift 11s ease-in-out infinite alternate;
+  transition: background 800ms ease, opacity 800ms ease;
+}
+.app-ambient--warn {
+  opacity: 0.65;
+  background: radial-gradient(60% 45% at 78% -10%, var(--warn-glow, rgba(245,158,11,0.25)), transparent 70%);
+}
+.app-ambient--danger {
+  opacity: 0.8;
+  background: radial-gradient(65% 50% at 78% -10%, var(--danger-glow, rgba(239,68,68,0.25)), transparent 70%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-ambient { animation: none; }
+}
+
+/* ── Executive Summary: glass treatment (dark theme only) ───────────────── */
+:root:not([data-theme="light"]) .exec-summary {
+  background:
+    radial-gradient(120% 180% at 0% 0%, var(--accent-dim) 0%, transparent 55%),
+    linear-gradient(135deg, rgba(15,28,40,0.82) 0%, rgba(20,32,48,0.86) 100%);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(255,255,255,0.07);
+}

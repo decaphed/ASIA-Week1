@@ -14,8 +14,8 @@ import { useEffect, useRef, useState } from 'react';
 import Sidebar from './components/layout/Sidebar.jsx';
 import Topbar from './components/layout/Topbar.jsx';
 import OverviewPage from './pages/OverviewPage.jsx';
-import TelemetryPage from './pages/TelemetryPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
+import PredictPage from './pages/PredictPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import ErrorBanner from './components/ui/ErrorBanner.jsx';
 import { useHealth, useLiveData } from './hooks/useSensorData.js';
@@ -27,8 +27,8 @@ import { formatTime } from './utils/formatters.js';
 
 const PAGES = {
   overview:  OverviewPage,
-  telemetry: TelemetryPage,
   analytics: AnalyticsPage,
+  predict:   PredictPage,
   reports:   ReportsPage,
 };
 
@@ -61,10 +61,15 @@ export default function App() {
   }, [reading]);
 
   const { alarms, warns } = countAlarms(reading);
-  const Page = PAGES[route];
+  // Fallback covers stale bookmarks (e.g. the retired #/telemetry route).
+  const Page = PAGES[route] ?? OverviewPage;
+  // Whole-app ambient wash: the chrome itself breathes with plant status,
+  // so an alarm registers in peripheral vision even off the Overview page.
+  const ambientTone = alarms > 0 ? 'danger' : warns > 0 ? 'warn' : 'ok';
 
   return (
     <div className="app">
+      <div className={`app-ambient app-ambient--${ambientTone}`} aria-hidden="true" />
       <Sidebar route={route} />
       <div className="app__main">
         <Topbar

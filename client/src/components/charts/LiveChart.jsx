@@ -17,6 +17,30 @@ import {
 
 ChartJS.register(LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler);
 
+// Dashed vertical "now" divider where history ends and the forecast begins
+// (the Graph_Idea reference's crosshair line). Reads the anchor index from
+// options.nowLine; skipped when there is no forecast segment.
+const nowLinePlugin = {
+  id: 'nowLine',
+  afterDatasetsDraw(chart) {
+    const cfg = chart.config.options.nowLine;
+    if (!cfg || cfg.index == null) return;
+    const x = chart.scales.x.getPixelForValue(cfg.index);
+    const { top, bottom } = chart.chartArea;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.strokeStyle = cfg.color || 'rgba(148,163,184,0.55)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+ChartJS.register(nowLinePlugin);
+
 // Theme-aware chart chrome colours. Chart.js needs concrete values (it can't
 // resolve CSS variables), so read the current theme off <html data-theme>;
 // the chart re-renders every second with the live poll, so a theme switch
@@ -127,12 +151,27 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
     label,
     data: forecast ? [...values, null] : values,
     borderColor: color,
-    backgroundColor: `${color}12`,
+    // Graph_Idea treatment: a vertical gradient wash under the line instead
+    // of a flat tint — strong at the line, fading to transparent.
+    backgroundColor: (context) => {
+      const { ctx, chartArea } = context.chart;
+      if (!chartArea) return `${color}12`;
+      const g = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+      g.addColorStop(0, `${color}4d`);
+      g.addColorStop(0.65, `${color}14`);
+      g.addColorStop(1, `${color}00`);
+      return g;
+    },
     fill: true,
-    tension: 0.35,
-    pointRadius: 0,
+    tension: 0.4,
+    // Emphasize the latest real reading with a ringed dot (the reference's
+    // crosshair point); all other points stay hidden.
+    pointRadius: (ctx) => (ctx.dataIndex === anchorIdx ? 3.5 : 0),
+    pointBackgroundColor: color,
+    pointBorderColor: '#fff',
+    pointBorderWidth: 1.5,
     pointHitRadius: 16,
-    borderWidth: 1.5,
+    borderWidth: 2,
   }];
 
   if (forecast) {
@@ -171,6 +210,8 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
     maintainAspectRatio: false,
     animation: false,
     interaction: { mode: 'index', intersect: false },
+    // Dashed divider where history ends and the forecast begins.
+    nowLine: forecast ? { index: anchorIdx, color: chrome.tick } : null,
     plugins: {
       legend: { display: false },
       tooltip: {
@@ -200,7 +241,19 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
       },
     },
     scales: {
-      x: { display: false, grid: { display: false } },
+      // Sparse time labels along the bottom (Graph_Idea shows its axis —
+      // it's a big part of why that chart reads so clearly).
+      x: {
+        display: true,
+        grid: { display: false },
+        border: { display: false },
+        ticks: {
+          color: chrome.tick,
+          maxTicksLimit: 5,
+          maxRotation: 0,
+          font: { family: "'Consolas',monospace", size: 9 },
+        },
+      },
       y: {
         position: 'right',
         min: yMin, max: yMax,

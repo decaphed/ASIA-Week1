@@ -74,8 +74,16 @@
   --content-pad: 24px;
 
   /* ── Type */
-  --font: 'IBM Plex Sans','Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  --font: 'Plus Jakarta Sans','Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
   --mono: 'JetBrains Mono','Consolas','SF Mono',ui-monospace,monospace;
+  /* Display cut for hero numerals — same family, heavy weight + tight
+     tracking, applied only to headline KPI values (see end of file). */
+  --font-display: 'Plus Jakarta Sans','Segoe UI',system-ui,sans-serif;
+
+  /* Soft outer glows for status-tinted borders/shadows */
+  --ok-glow:     rgba(34,197,94,0.22);
+  --warn-glow:   rgba(245,158,11,0.25);
+  --danger-glow: rgba(239,68,68,0.25);
 
   /* ── Motion */
   --t-fast: 0.10s ease;
@@ -1245,4 +1253,375 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .live-chart__threshold--alarm .live-chart__threshold-label {
   color: rgba(239,68,68,0.9);
   background: rgba(239,68,68,0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MANAGEMENT LAYER v2 — digital-twin schematic, motion polish, display
+   numerals, engineering-tools disclosure. Appended last so these overrides
+   win the cascade over the base rules above.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Display numerals: the hero numbers get the display cut; tabular/log
+      data stays mono. ─────────────────────────────────────────────────── */
+.health-tile__value,
+.sensor-card__value,
+.exec-summary__headline {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Digital twin: motion only when the pump is RUNNING ─────────────────── */
+/* Static by default (STOPPED/FAULT shows a still diagram — itself a signal). */
+.schematic__flow { animation: none; }
+.schematic__impeller { animation: none; }
+.schematic--running .schematic__flow {
+  animation: flowdash var(--flow-speed, 1.1s) linear infinite;
+}
+.schematic--running .schematic__impeller {
+  animation: impeller-spin 3s linear infinite;
+}
+/* Near-imperceptible mechanical jitter on the volute while running —
+   steps() for a machine feel, amplitude well under 1px. */
+.schematic--running .schematic__pump-body {
+  animation: pump-jitter 240ms steps(2) infinite;
+}
+@keyframes pump-jitter {
+  0%   { transform: translate(0, 0); }
+  50%  { transform: translate(0.4px, -0.3px); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Persistent per-component status glow — an alarmed component is flagged on
+   the diagram itself, not only on hover. */
+.schematic__equip--warn {
+  filter: drop-shadow(0 0 7px var(--warn-glow)) brightness(1.08);
+}
+.schematic__equip--alarm {
+  filter: drop-shadow(0 0 9px var(--danger-glow)) brightness(1.12);
+  animation: equip-alarm-pulse 1.8s ease-in-out infinite;
+}
+@keyframes equip-alarm-pulse {
+  0%, 100% { filter: drop-shadow(0 0 5px var(--danger-glow)) brightness(1.05); }
+  50%      { filter: drop-shadow(0 0 13px var(--danger-glow)) brightness(1.18); }
+}
+/* Hover highlight still wins while inspecting. */
+.schematic__equip.is-hot { filter: drop-shadow(0 0 6px var(--accent-glow)) brightness(1.15); }
+
+/* Running glow on the schematic frame itself. */
+.schematic--running { box-shadow: 0 0 0 1px var(--border), 0 0 26px -14px var(--accent-glow); }
+
+/* ── Alarm/warn tiles get a soft outer glow, not just a border tint ─────── */
+.health-tile--alarm { box-shadow: 0 0 0 1px var(--danger-border), 0 0 24px -8px var(--danger-glow); }
+.health-tile--warn  { box-shadow: 0 0 0 1px var(--warn-border),   0 0 24px -8px var(--warn-glow); }
+
+/* ── Radial health gauge animates between states ────────────────────────── */
+.health-gauge circle {
+  transition: stroke-dashoffset 400ms cubic-bezier(0.16, 1, 0.3, 1),
+              stroke 400ms ease;
+}
+
+/* ── Page-switch entrance: one-shot staggered rise (mount only — the 1s
+      data ticks re-render, they do not re-mount, so this never replays). ── */
+.dashboard > * {
+  animation: card-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.dashboard > *:nth-child(2) { animation-delay: 45ms; }
+.dashboard > *:nth-child(3) { animation-delay: 90ms; }
+.dashboard > *:nth-child(4) { animation-delay: 135ms; }
+.dashboard > *:nth-child(n+5) { animation-delay: 180ms; }
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Engineering-tools disclosure (Reports) ─────────────────────────────── */
+.eng-tools {
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  background: transparent;
+}
+.eng-tools > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+.eng-tools > summary:hover { color: var(--text-muted); }
+.eng-tools[open] { border-style: solid; background: var(--panel); }
+.eng-tools[open] > summary { margin-bottom: 12px; color: var(--text-muted); }
+
+/* ── Predictions page ───────────────────────────────────────────────────── */
+.predict-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(130% 200% at 100% 0%, var(--accent-dim) 0%, transparent 50%),
+    linear-gradient(120deg, var(--panel) 0%, var(--panel-2) 100%);
+}
+.predict-hero__badge {
+  flex: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 22px -6px var(--accent-glow);
+}
+.predict-hero__body { flex: 1; min-width: 0; }
+.predict-hero__blurb { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+.predict-hero__detail { margin: 6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-muted); }
+.predict-hero__status {
+  flex: none;
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+}
+.predict-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.predict-tile {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border-light);
+  background: var(--bg-elevated);
+}
+.predict-tile__label {
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.predict-tile__value {
+  font-family: var(--font-display);
+  font-size: 26px; font-weight: 800;
+  color: var(--text-faint);
+}
+.predict-tile__hint { font-size: 11px; line-height: 1.4; color: var(--text-dim); }
+.predict-outlook { display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 720px) {
+  .predict-hero { flex-direction: column; text-align: center; }
+  .predict-hero__status { align-self: center; }
+}
+
+/* ── Consolidated reduced-motion: covers the pre-existing gaps (flow dashes,
+      impeller, pulse states) plus everything added above. ───────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .schematic--running .schematic__flow,
+  .schematic--running .schematic__impeller,
+  .schematic--running .schematic__pump-body,
+  .schematic__equip--alarm,
+  .sensor-card.is-pulsing,
+  .schematic__live-dot,
+  .status--online .status__dot,
+  .dashboard > * { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OVERVIEW v3 — 3D asset view, hero view toggle, page-summary row.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Hero view wrapper + Model/P&ID toggle tabs ─────────────────────────── */
+.hero-view { position: relative; min-width: 0; }
+.hero-view__tabs {
+  position: absolute;
+  top: 10px; right: 12px;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+.hero-view__tab {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, transform 140ms cubic-bezier(0.23,1,0.32,1);
+}
+.hero-view__tab:hover { color: var(--text-muted); }
+.hero-view__tab:active { transform: scale(0.96); }
+.hero-view__tab.is-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ── PumpModel3D: Van_Model-style asset card ────────────────────────────── */
+.pump3d {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.55fr) 1.45fr;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(110% 160% at 85% 10%, var(--accent-dim) 0%, transparent 55%),
+    linear-gradient(135deg, var(--panel) 0%, var(--panel-2) 100%);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  min-height: 100%;
+}
+.pump3d__specs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pump3d__status {
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 9px; font-weight: 700;
+  letter-spacing: 0.1em;
+  border: 1px solid var(--border-light);
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+}
+.pump3d__status--running { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-bright); }
+.pump3d__status--fault   { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-bright); }
+.pump3d__status--stopped { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-bright); }
+.pump3d__name {
+  margin: 2px 0 0;
+  font-family: var(--font-display);
+  font-size: 17px; font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.pump3d__area { margin: 0; font-size: 11px; color: var(--text-dim); }
+.pump3d__facts {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 4px 18px;
+  margin: 10px 0 0;
+}
+.pump3d__facts dt {
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.pump3d__facts dd {
+  margin: 2px 0 0;
+  font-family: var(--font-display);
+  font-size: 17px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.pump3d__facts dd small { font-size: 9.5px; font-weight: 500; color: var(--text-dim); }
+.pump3d__hint { margin: 12px 0 0; font-size: 10px; color: var(--text-faint); }
+
+.pump3d__stage { position: relative; width: 100%; aspect-ratio: 560 / 300; }
+.pump3d__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.pump3d__impeller { transform-origin: 210px 170px; }
+.pump3d--running .pump3d__impeller { animation: impeller-spin 2.4s linear infinite; }
+.pump3d--running .pump3d__body { animation: pump-jitter 240ms steps(2) infinite; }
+
+/* Sensor nodes: pulsing ring + solid core, tinted by alarm state. */
+.pump3d__node { cursor: pointer; outline: none; }
+.pump3d__node-core { fill: var(--accent); stroke: #fff; stroke-width: 1.4; }
+.pump3d__node-ring {
+  fill: transparent;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  opacity: 0.75;
+  animation: node-ping 2.2s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+.pump3d__node--warn  .pump3d__node-core { fill: var(--warn-bright); }
+.pump3d__node--warn  .pump3d__node-ring { stroke: var(--warn-bright); animation-duration: 1.5s; }
+.pump3d__node--alarm .pump3d__node-core { fill: var(--danger-bright); }
+.pump3d__node--alarm .pump3d__node-ring { stroke: var(--danger-bright); animation-duration: 0.9s; }
+.pump3d__node--nodata .pump3d__node-core { fill: var(--text-faint); }
+.pump3d__node--nodata .pump3d__node-ring { stroke: var(--text-faint); animation: none; }
+.pump3d__node.is-active .pump3d__node-ring,
+.pump3d__node:focus-visible .pump3d__node-ring { opacity: 1; stroke-width: 2.4; }
+@keyframes node-ping {
+  0%   { transform: scale(0.55); opacity: 0.9; }
+  75%  { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+@media (max-width: 860px) {
+  .pump3d { grid-template-columns: 1fr; }
+}
+
+/* ── Page-summary row: one clickable card per dashboard section ─────────── */
+.page-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+.page-summary__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--panel) 0%, var(--panel-2) 100%);
+  text-decoration: none;
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1),
+              border-color 160ms ease, box-shadow 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .page-summary__card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-light);
+    box-shadow: var(--shadow);
+  }
+  .page-summary__card:hover .page-summary__arrow { transform: translateX(3px); opacity: 1; }
+}
+.page-summary__card:active { transform: scale(0.98); }
+.page-summary__label {
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.page-summary__value {
+  font-family: var(--font-display);
+  font-size: 21px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.page-summary__card--ok   .page-summary__value { color: var(--ok-bright); }
+.page-summary__card--warn .page-summary__value { color: var(--warn-bright); }
+.page-summary__card--muted .page-summary__value { color: var(--text-muted); }
+.page-summary__sub { font-size: 11px; color: var(--text-muted); }
+.page-summary__arrow {
+  position: absolute;
+  top: 12px; right: 14px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), opacity 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pump3d__node-ring,
+  .pump3d--running .pump3d__impeller,
+  .pump3d--running .pump3d__body { animation: none; }
 }

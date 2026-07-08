@@ -11,8 +11,9 @@ import ErrorBanner from '../components/ui/ErrorBanner.jsx';
 import StatsPanel from '../components/dashboard/StatsPanel.jsx';
 import ViolationsPanel from '../components/dashboard/ViolationsPanel.jsx';
 import HistoryTable from '../components/tables/HistoryTable.jsx';
+import ManualReadingForm from '../components/dashboard/ManualReadingForm.jsx';
 
-export default function ReportsPage({ liveLoading }) {
+export default function ReportsPage({ liveLoading, refresh }) {
   const { data: history, error: historyError } = useHistory(5000);
   const { data: stats } = useStats(5000);
   const { data: processed } = useProcessedLive();
@@ -50,6 +51,14 @@ export default function ReportsPage({ liveLoading }) {
           <HistoryTable rows={rows} />
         )}
       </Card>
+
+      {/* Engineering tool, deliberately demoted behind a disclosure so it
+          never competes with the management content above (formerly its own
+          card on the retired Telemetry page). */}
+      <details className="eng-tools" id="manual-entry">
+        <summary>Engineering tools — record a manual test reading</summary>
+        <ManualReadingForm onSubmitted={refresh} />
+      </details>
     </div>
   );
 }

@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['overview', 'telemetry', 'analytics', 'reports'];
+export const ROUTES = ['overview', 'analytics', 'predict', 'reports'];
 
 function parseHash() {
   const raw = window.location.hash.replace(/^#\/?/, '').split(/[?#]/)[0];

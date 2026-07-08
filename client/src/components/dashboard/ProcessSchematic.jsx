@@ -152,8 +152,29 @@ export default function ProcessSchematic({ reading, series }) {
   const vibAlarm = vibState === 'alarm' || vibState === 'warn';
   const activeSpot = HOTSPOTS.find((h) => h.id === active) || null;
 
+  // Digital-twin state: flow dashes and the impeller only move while the
+  // pump is actually RUNNING, and the dash speed scales with real flow rate
+  // (nominal ~175 L/min → 1.1s per cycle) so the pipe animation is a data
+  // encoding, not decoration.
+  const running = r.status === 'RUNNING';
+  const flowSpeed = running && r.flowRate > 0
+    ? `${Math.min(3, Math.max(0.55, 1.1 * (175 / r.flowRate))).toFixed(2)}s`
+    : '1.1s';
+
+  // Persistent per-component alarm glow — a fault is flagged on the diagram
+  // itself, not only when someone happens to hover the right hotspot.
+  const equipState = {};
+  for (const spot of HOTSPOTS) equipState[spot.id] = worstState(r, spot.metrics);
+  const equipClass = (id) =>
+    `schematic__equip${active === id ? ' is-hot' : ''}` +
+    (equipState[id] === 'alarm' ? ' schematic__equip--alarm'
+      : equipState[id] === 'warn' ? ' schematic__equip--warn' : '');
+
   return (
-    <div className="schematic">
+    <div
+      className={`schematic${running ? ' schematic--running' : ''}`}
+      style={{ '--flow-speed': flowSpeed }}
+    >
       <div className="schematic__header">
         <span className="schematic__title">Process Schematic — P&amp;ID</span>
         <span className="schematic__hint">Hover equipment for details</span>
@@ -194,7 +215,7 @@ export default function ProcessSchematic({ reading, series }) {
           </defs>
 
           {/* sump tank — 3D cylinder with wireframe hoops */}
-          <g className={`schematic__equip${active === 'tank' ? ' is-hot' : ''}`}>
+          <g className={equipClass('tank')}>
             <ellipse cx="54" cy="210" rx="37" ry="10" fill="var(--schem-shadow)" />
             <rect x="17" y="116" width="74" height="92" fill="url(#schem-tank)" stroke="var(--pipe-line)" strokeWidth="1" />
             <ellipse cx="54" cy="146" rx="37" ry="10" fill="none" stroke="var(--pipe-line)" strokeWidth="1" />
@@ -208,7 +229,7 @@ export default function ProcessSchematic({ reading, series }) {
           </g>
 
           {/* suction pipe — shaded tube with flange rings */}
-          <g className={`schematic__equip${active === 'suction' ? ' is-hot' : ''}`}>
+          <g className={equipClass('suction')}>
             <rect x="88" y="141" width="172" height="18" rx="9" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1" />
             <line x1="94" y1="145.5" x2="254" y2="145.5" stroke="var(--pipe-sheen)" strokeWidth="1.6" strokeLinecap="round" />
             <ellipse cx="104" cy="150" rx="4" ry="11.5" fill="var(--pipe-mid)" stroke="var(--pipe-line)" strokeWidth="1" />
@@ -221,7 +242,7 @@ export default function ProcessSchematic({ reading, series }) {
           </g>
 
           {/* pump — amber volute (the hero piece) with wireframe rings */}
-          <g className={`schematic__equip${active === 'pump' ? ' is-hot' : ''}`}>
+          <g className={`${equipClass('pump')} schematic__pump-body`}>
             <ellipse cx="312" cy="212" rx="48" ry="8" fill="var(--schem-shadow)" />
             <circle cx="312" cy="150" r="54" fill="url(#schem-amber)" stroke="var(--amber-lo)" strokeWidth="2" />
             <circle cx="312" cy="150" r="44" fill="none" stroke="var(--amber-wire)" strokeWidth="1" />
@@ -240,7 +261,7 @@ export default function ProcessSchematic({ reading, series }) {
           </g>
 
           {/* motor — isometric block with cooling fins */}
-          <g className={`schematic__equip${active === 'motor' ? ' is-hot' : ''}`}>
+          <g className={equipClass('motor')}>
             <polygon points="280,62 288,54 352,54 344,62" fill="var(--pipe-hi)" stroke="var(--pipe-line)" strokeWidth="1" />
             <polygon points="344,62 352,54 352,88 344,96" fill="var(--pipe-lo)" stroke="var(--pipe-line)" strokeWidth="1" />
             <rect x="280" y="62" width="64" height="34" rx="2" fill="url(#schem-pipe)" stroke="var(--pipe-line)" strokeWidth="1.2" />
@@ -253,7 +274,7 @@ export default function ProcessSchematic({ reading, series }) {
           </g>
 
           {/* discharge pipe — layered strokes for a cylindrical sheen */}
-          <g className={`schematic__equip${active === 'discharge' ? ' is-hot' : ''}`}>
+          <g className={equipClass('discharge')}>
             <path d="M366 150 L497 150 Q506 150 506 141 L506 83 Q506 74 515 74 L664 74"
               fill="none" stroke="var(--pipe-lo)" strokeWidth="19" strokeLinecap="round" />
             <path d="M366 150 L497 150 Q506 150 506 141 L506 83 Q506 74 515 74 L664 74"
@@ -270,7 +291,7 @@ export default function ProcessSchematic({ reading, series }) {
           </g>
 
           {/* check valve — flanged body with a 3D handwheel, like the reference */}
-          <g className={`schematic__equip${active === 'valve' ? ' is-hot' : ''}`}>
+          <g className={equipClass('valve')}>
             <ellipse cx="590" cy="38" rx="21" ry="7.5" fill="none" stroke="var(--pipe-lo)" strokeWidth="2.4" />
             <line x1="569" y1="38" x2="611" y2="38" stroke="var(--pipe-lo)" strokeWidth="1.4" />
             <line x1="590" y1="30.5" x2="590" y2="45.5" stroke="var(--pipe-lo)" strokeWidth="1.4" />
