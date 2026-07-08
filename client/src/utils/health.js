@@ -57,24 +57,15 @@ export function computeHealth(reading) {
   return { score, color, label, alarms, warns };
 }
 
-const VIBRATION = SENSORS.find((s) => s.key === 'vibration');
-const MOTOR_TEMP = SENSORS.find((s) => s.key === 'motorTemp');
-
 /**
- * Efficiency estimate derived from vibration + motor-temp stress — both are
- * standard proxies for mechanical loss (bearing wear, misalignment,
- * cavitation) as a centrifugal pump drifts off its best-efficiency point.
+ * Is the latest reading older than `seconds`? Used to gray out a frozen
+ * number so a stalled feed never looks live. Age is recomputed at render
+ * time (the poll keeps returning the same reading object every second, which
+ * re-renders the cards), so no timer of our own is needed.
  */
-export function estimateEfficiency(reading) {
-  if (!reading) return null;
-  const stress = (value, sensor) => {
-    if (value == null) return 0;
-    const floor = sensor.warnHigh * 0.5;
-    return Math.max(0, Math.min(1, (value - floor) / (sensor.alarmHigh - floor)));
-  };
-  const vibStress  = stress(reading.vibration, VIBRATION);
-  const tempStress = stress(reading.motorTemp, MOTOR_TEMP);
-  return Math.max(60, Math.min(97, 96 - vibStress * 14 - tempStress * 10));
+export function isReadingStale(reading, seconds = 10) {
+  if (!reading || !reading.timestamp) return false;
+  return secondsSince(reading.timestamp) > seconds;
 }
 
 /** Bucket an API-latency figure into a signal-quality label + bar count (1-3). */

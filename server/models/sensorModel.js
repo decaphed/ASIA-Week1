@@ -64,6 +64,66 @@ const latestTimestampStmt = db.prepare(`
   SELECT timestamp FROM raw_telemetry ORDER BY id DESC LIMIT 1
 `);
 
+// Downsampled per-metric time series for trend charts (GET /history/series)
+// and, at a finer bucket, the excursion tally in summaryService.js.
+//
+// One prepared statement covers every range: the bucket width (seconds) and
+// the time-window origin are both BOUND, never concatenated. The window is
+// compared on epoch seconds — strftime('%s', …) on both sides — rather than on
+// the raw ISO strings, because our timestamps are 'YYYY-MM-DDTHH:MM:SS.sssZ'
+// while SQLite's datetime('now', …) renders 'YYYY-MM-DD HH:MM:SS'; a plain
+// string >= would mis-order at the 'T'/space boundary. strftime('%s', …)
+// parses both shapes to a real epoch, so the comparison is correct.
+//
+// Bucket key = floor(epoch / bucketSeconds); MIN(timestamp) is the bucket's
+// start instant; empty buckets simply do not appear (GROUP BY over present
+// rows only). Ordered oldest-first so charts can plot left-to-right.
+const seriesStmt = db.prepare(`
+  SELECT CAST(strftime('%s', timestamp) / @bucketSeconds AS INTEGER) AS bucket,
+         MIN(timestamp)          AS t,
+         AVG(flowRate)           AS flowRate,
+         AVG(rpm)                AS rpm,
+         AVG(vibration)          AS vibration,
+         AVG(suctionPressure)    AS suctionPressure,
+         AVG(dischargePressure)  AS dischargePressure,
+         AVG(motorTemp)          AS motorTemp
+  FROM raw_telemetry
+  WHERE strftime('%s', timestamp) >= strftime('%s', 'now', @sinceModifier)
+  GROUP BY bucket
+  ORDER BY bucket ASC
+`);
+
+// One-shot aggregate over a time window for the management summary
+// (GET /summary). Same epoch-based window guard as seriesStmt. COUNT/SUM give
+// availability + run-time inputs; MIN/MAX(timestamp) give the true observed
+// span (guards against ingest gaps); per-sensor MIN/MAX/AVG feed perSensor.
+const summaryAggregateStmt = db.prepare(`
+  SELECT COUNT(*)                                        AS sampleCount,
+         SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) AS runningCount,
+         MIN(timestamp)          AS firstTs,
+         MAX(timestamp)          AS lastTs,
+         MIN(flowRate)           AS flowRateMin,
+         MAX(flowRate)           AS flowRateMax,
+         AVG(flowRate)           AS flowRateAvg,
+         MIN(rpm)                AS rpmMin,
+         MAX(rpm)                AS rpmMax,
+         AVG(rpm)                AS rpmAvg,
+         MIN(vibration)          AS vibrationMin,
+         MAX(vibration)          AS vibrationMax,
+         AVG(vibration)          AS vibrationAvg,
+         MIN(suctionPressure)    AS suctionPressureMin,
+         MAX(suctionPressure)    AS suctionPressureMax,
+         AVG(suctionPressure)    AS suctionPressureAvg,
+         MIN(dischargePressure)  AS dischargePressureMin,
+         MAX(dischargePressure)  AS dischargePressureMax,
+         AVG(dischargePressure)  AS dischargePressureAvg,
+         MIN(motorTemp)          AS motorTempMin,
+         MAX(motorTemp)          AS motorTempMax,
+         AVG(motorTemp)          AS motorTempAvg
+  FROM raw_telemetry
+  WHERE strftime('%s', timestamp) >= strftime('%s', 'now', @sinceModifier)
+`);
+
 /** Insert one reading row. `record.light` must already be 0 or 1. */
 export function insertReading(record) {
   return insertStmt.run(record);
@@ -94,4 +154,25 @@ export function getAverages() {
 export function getLatestTimestamp() {
   const row = latestTimestampStmt.get();
   return row ? row.timestamp : null;
+}
+
+/**
+ * Downsampled per-metric averages, one row per non-empty bucket, oldest-first.
+ * @param {{ bucketSeconds:number, sinceModifier:string }} opts
+ *   bucketSeconds — bucket width in seconds (bound, not concatenated);
+ *   sinceModifier — a SQLite datetime modifier like '-24 hours' / '-7 days'.
+ * @returns rows: { bucket, t, flowRate, rpm, vibration, suctionPressure,
+ *                  dischargePressure, motorTemp } (metric values are bucket AVGs).
+ */
+export function getSeries({ bucketSeconds, sinceModifier }) {
+  return seriesStmt.all({ bucketSeconds, sinceModifier });
+}
+
+/**
+ * Single aggregate row over the window (counts, observed span, per-sensor
+ * min/max/avg) for the management summary.
+ * @param {{ sinceModifier:string }} opts — SQLite datetime modifier for the window.
+ */
+export function getSummaryAggregate({ sinceModifier }) {
+  return summaryAggregateStmt.get({ sinceModifier });
 }

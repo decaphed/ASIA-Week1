@@ -72,6 +72,18 @@ export async function getProcessedLive() {
   return res.data.data;
 }
 
+/** GET /api/history/series?range → { range, bucketSeconds, points: [...] } — bucketed historical trend. */
+export async function getSeries(range) {
+  const res = await client.get('/history/series', { params: { range } });
+  return res.data.data;
+}
+
+/** GET /api/summary?range → { range, from, to, sampleCount, availabilityPct, runHours, excursions, perSensor }. */
+export async function getSummary(range) {
+  const res = await client.get('/summary', { params: { range } });
+  return res.data.data;
+}
+
 /** POST /api/data → store a reading. (Handy for manual testing from the UI.) */
 export async function postReading(reading) {
   const res = await client.post('/data', reading);

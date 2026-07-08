@@ -11,6 +11,8 @@ import { Router } from 'express';
 import { createReading } from '../controllers/dataController.js';
 import { getLive } from '../controllers/liveController.js';
 import { getHistory } from '../controllers/historyController.js';
+import { getSeries } from '../controllers/seriesController.js';
+import { getSummary } from '../controllers/summaryController.js';
 import { getStats } from '../controllers/statsController.js';
 import { getHealth } from '../controllers/healthController.js';
 import { getForecast } from '../controllers/forecastController.js';
@@ -34,7 +36,12 @@ router.post('/processed', validateProcessedMiddleware, createProcessedReading);
 
 // Retrieval.
 router.get('/live', getLive);
+// Register the more specific /history/series before the /history page route.
+// Both are exact paths so Express 4 wouldn't actually shadow one with the
+// other, but ordering specific-before-generic keeps the intent obvious.
+router.get('/history/series', getSeries);
 router.get('/history', getHistory);
+router.get('/summary', getSummary);
 router.get('/stats', getStats);
 router.get('/health', getHealth);
 router.get('/forecast', getForecast);

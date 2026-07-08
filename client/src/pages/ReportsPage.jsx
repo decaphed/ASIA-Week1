@@ -9,6 +9,7 @@ import Card from '../components/ui/Card.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import ErrorBanner from '../components/ui/ErrorBanner.jsx';
 import StatsPanel from '../components/dashboard/StatsPanel.jsx';
+import PeriodSummary from '../components/dashboard/PeriodSummary.jsx';
 import ViolationsPanel from '../components/dashboard/ViolationsPanel.jsx';
 import HistoryTable from '../components/tables/HistoryTable.jsx';
 import ManualReadingForm from '../components/dashboard/ManualReadingForm.jsx';
@@ -22,7 +23,9 @@ export default function ReportsPage({ liveLoading, refresh }) {
 
   return (
     <div className="dashboard" id="reports">
-      <Card id="settings" title="Operating Statistics" subtitle="Session averages across all stored readings">
+      <PeriodSummary />
+
+      <Card id="settings" title="Operating Statistics" subtitle="Averages across every reading ever stored">
         <StatsPanel stats={stats} />
       </Card>
 

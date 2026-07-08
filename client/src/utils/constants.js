@@ -11,6 +11,8 @@ export const POLL_INTERVALS = {
   drift:     15000,
   trend:     15000,
   processed: 15000,
+  series:    60000,
+  summary:   60000,
 };
 
 // Above this fraction of a window's samples being reconstructed (not

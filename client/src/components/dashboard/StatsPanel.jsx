@@ -29,7 +29,7 @@ export default function StatsPanel({ stats }) {
   const s = stats;
   return (
     <div className="stats-panel-wrap">
-      <StatDivider label="Pump Averages" />
+      <StatDivider label="Pump Averages — all stored readings" />
       <div className="stats-panel">
         <Stat label="Avg Flow Rate"   value={s ? formatNumber(s.averageFlowRate,          1) : '--'} unit="L/min" />
         <Stat label="Avg Shaft Speed" value={s ? formatNumber(s.averageRpm,               0) : '--'} unit="rpm"  />

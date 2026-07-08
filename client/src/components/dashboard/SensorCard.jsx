@@ -57,7 +57,7 @@ function TrendArrow({ trend }) {
   return null;
 }
 
-export default function SensorCard({ sensor, value, history }) {
+export default function SensorCard({ sensor, value, history, stale = false }) {
   const Icon      = ICONS[sensor.key] ?? FlowIcon;
   const precision = sensor.prec ?? 1;
   const alarm     = getAlarmState(sensor, value);
@@ -96,8 +96,8 @@ export default function SensorCard({ sensor, value, history }) {
 
   return (
     <article
-      className={`sensor-card sensor-card--${sensor.accent} sensor-card--alarm-${alarm}${pulse ? ' is-pulsing' : ''}`}
-      aria-label={`${sensor.label}: ${hasValue ? formatNumber(value, precision) : 'no data'} ${sensor.unit}${alarm !== 'normal' && alarm !== 'nodata' ? '. ' + alarm.toUpperCase() : ''}`}
+      className={`sensor-card sensor-card--${sensor.accent} sensor-card--alarm-${alarm}${pulse && !stale ? ' is-pulsing' : ''}${stale ? ' sensor-card--stale' : ''}`}
+      aria-label={`${sensor.label}: ${hasValue ? formatNumber(value, precision) : 'no data'} ${sensor.unit}${stale ? ' (stale — feed frozen)' : ''}${alarm !== 'normal' && alarm !== 'nodata' ? '. ' + alarm.toUpperCase() : ''}`}
     >
       {/* Alarm badge — only visible when warn or alarm */}
       {(alarm === 'warn' || alarm === 'alarm') && (
@@ -121,9 +121,13 @@ export default function SensorCard({ sensor, value, history }) {
           {hasValue ? formatNumber(value, precision) : '--'}
           <span className="sensor-card__unit">{sensor.unit}</span>
         </div>
-        <span className={`sensor-card__trend sensor-card__trend--${trend}`}>
-          <TrendArrow trend={trend} />
-        </span>
+        {stale ? (
+          <span className="sensor-card__stale-tag" title="No fresh reading — last known value">STALE</span>
+        ) : (
+          <span className={`sensor-card__trend sensor-card__trend--${trend}`}>
+            <TrendArrow trend={trend} />
+          </span>
+        )}
       </div>
 
       {/* Sparkline — last 18 points, locally scaled */}

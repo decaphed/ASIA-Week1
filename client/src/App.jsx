@@ -75,7 +75,8 @@ export default function App() {
         <Topbar
           health={health}
           healthError={healthError}
-          alarmCount={alarms + warns}
+          alarms={alarms}
+          warns={warns}
           theme={theme}
           onToggleTheme={toggleTheme}
         />

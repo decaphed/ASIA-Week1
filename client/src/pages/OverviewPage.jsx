@@ -6,7 +6,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react';
-import { useStats, useDrift, useProcessedLive, useForecast, useTrend } from '../hooks/useSensorData.js';
+import { useStats, useDrift, useProcessedLive, useForecast, useTrend, useSummary } from '../hooks/useSensorData.js';
+import { isReadingStale } from '../utils/health.js';
 import ExecutiveSummary, { buildSummary } from '../components/dashboard/ExecutiveSummary.jsx';
 import HealthStrip from '../components/dashboard/HealthStrip.jsx';
 import ProcessSchematic from '../components/dashboard/ProcessSchematic.jsx';
@@ -77,7 +78,14 @@ export default function OverviewPage({ reading, series, health, healthError }) {
   const { data: processed } = useProcessedLive();
   const { data: forecast } = useForecast();
   const { data: trend } = useTrend();
+  const { data: summary } = useSummary('24h');
   const [view, setView] = useState('model'); // 'model' | 'pid'
+
+  // A frozen number must never look live: if the newest reading is older than
+  // 10 s the feed has stalled — gray the KPI cards so the values read as
+  // "last known", not "now". Recomputed each render (the 1 s poll re-renders
+  // even when it keeps returning the same reading).
+  const stale = isReadingStale(reading, 10);
 
   return (
     <div className="dashboard" id="dashboard">
@@ -90,7 +98,7 @@ export default function OverviewPage({ reading, series, health, healthError }) {
       </section>
 
       <section className="dashboard__section" id="health">
-        <HealthStrip reading={reading} uptimeSeconds={health?.uptimeSeconds} />
+        <HealthStrip reading={reading} summary={summary} />
       </section>
 
       <section className="dashboard__section hero-row" id="schematic">
@@ -133,7 +141,7 @@ export default function OverviewPage({ reading, series, health, healthError }) {
           <span className="dashboard__section-title">Live Readings</span>
           <span className="dashboard__section-hint">All six measurements · updates every second</span>
         </div>
-        <SensorCardGrid reading={reading} series={series} />
+        <SensorCardGrid reading={reading} series={series} stale={stale} />
       </section>
     </div>
   );

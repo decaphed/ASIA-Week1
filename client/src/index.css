@@ -1625,3 +1625,123 @@ button { font-family: inherit; cursor: pointer; border: none; }
   .pump3d--running .pump3d__impeller,
   .pump3d--running .pump3d__body { animation: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RANGE SELECTOR — Analytics historical trend ranges + Reports period toggle.
+   Shares the pill-tab language of .hero-view__tabs but sits inline in flow.
+   ══════════════════════════════════════════════════════════════════════════ */
+.range-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.range-tabs {
+  display: inline-flex; gap: 2px; padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+.range-tabs__tab {
+  border: none; background: transparent; color: var(--text-dim);
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 4px 13px; border-radius: 999px; cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, transform 140ms cubic-bezier(0.23,1,0.32,1);
+}
+.range-tabs__tab:hover { color: var(--text-muted); }
+.range-tabs__tab:active { transform: scale(0.96); }
+.range-tabs__tab.is-active { background: var(--accent-dim); color: var(--accent); }
+.range-bar__hint {
+  font-size: 10px; color: var(--text-faint);
+  letter-spacing: 0.4px; font-family: var(--mono);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STALE SENSOR CARD — mute a frozen value so it never reads as live.
+   ══════════════════════════════════════════════════════════════════════════ */
+.sensor-card--stale { animation: none; }
+.sensor-card--stale .sensor-card__value,
+.sensor-card--stale .sensor-card__spark,
+.sensor-card--stale .sensor-card__bar-wrap {
+  opacity: 0.42; filter: saturate(0.25);
+  transition: opacity var(--t-base), filter var(--t-base);
+}
+.sensor-card__stale-tag {
+  flex-shrink: 0; align-self: center;
+  font-family: var(--mono); font-size: 8px; font-weight: 800;
+  letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--panel-2); border: 1px solid var(--border);
+  padding: 2px 6px; border-radius: var(--radius-xs);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HEALTH TILE — split alarm/warn count (Active Alarms tile).
+   ══════════════════════════════════════════════════════════════════════════ */
+.health-tile__value--split { font-size: 20px; letter-spacing: 0.5px; }
+.health-tile__count { font-family: var(--mono); font-weight: 700; }
+.health-tile__count--alarm { color: var(--danger-bright); }
+.health-tile__count--warn  { color: var(--warn-bright); }
+.health-tile__count-sep { color: var(--text-faint); font-weight: 400; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TOPBAR BELL BADGE — honest severity colouring.
+   ══════════════════════════════════════════════════════════════════════════ */
+.topbar__bell-badge--alarm { background: var(--danger-bright); color: #03080d; }
+.topbar__bell-badge--warn  { background: var(--warn-bright); color: #03080d; }
+.topbar__bell-badge--none  {
+  background: var(--panel-2); color: var(--text-dim);
+  border-color: var(--border);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PERIOD SUMMARY — Reports page top card (toggle, stats, CSV, sensor table).
+   ══════════════════════════════════════════════════════════════════════════ */
+.period-summary__actions { display: flex; align-items: center; gap: 10px; }
+.btn-download {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-dim);
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  padding: 6px 12px; cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), transform 140ms cubic-bezier(0.23,1,0.32,1);
+}
+.btn-download:hover { border-color: var(--accent); }
+.btn-download:active { transform: scale(0.97); }
+.btn-download:disabled { opacity: 0.45; cursor: not-allowed; }
+.period-summary__stats {
+  grid-template-columns: repeat(5, 1fr);
+  margin-bottom: 16px;
+}
+.period-table-wrap { overflow-x: auto; }
+.period-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px;
+}
+.period-table th {
+  text-align: left; padding: 8px 10px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.period-table td {
+  padding: 9px 10px; border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.period-table tr:last-child td { border-bottom: none; }
+.period-table__num {
+  text-align: right;
+  font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text);
+}
+.period-table__label { color: var(--text); }
+.period-table__unit {
+  margin-left: 6px; font-size: 10px; color: var(--text-faint);
+  font-family: var(--mono);
+}
+.period-summary__footnote {
+  margin: 12px 0 0; font-size: 10px; color: var(--text-faint);
+  font-family: var(--mono); letter-spacing: 0.3px;
+}
+
+@media (max-width: 720px) {
+  .period-summary__stats { grid-template-columns: repeat(2, 1fr); }
+}

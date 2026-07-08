@@ -8,7 +8,7 @@
 import SensorCard from './SensorCard.jsx';
 import { SENSORS } from '../../utils/constants.js';
 
-export default function SensorCardGrid({ reading, series }) {
+export default function SensorCardGrid({ reading, series, stale = false }) {
   const hasReading = reading !== null && reading !== undefined;
 
   return (
@@ -19,6 +19,7 @@ export default function SensorCardGrid({ reading, series }) {
           sensor={sensor}
           value={hasReading ? reading[sensor.key] : null}
           history={series ? series[sensor.key]?.map((p) => p.v) : null}
+          stale={stale}
         />
       ))}
     </div>

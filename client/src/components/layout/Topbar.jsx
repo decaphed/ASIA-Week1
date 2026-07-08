@@ -12,8 +12,16 @@ import { computeServiceStatus } from '../../utils/health.js';
 import { PUMP_ID, PUMP_AREA } from '../../utils/constants.js';
 import { AlarmIcon, SunIcon, MoonIcon } from '../ui/Icons.jsx';
 
-export default function Topbar({ health, healthError, alarmCount = 0, theme = 'dark', onToggleTheme }) {
+export default function Topbar({ health, healthError, alarms = 0, warns = 0, theme = 'dark', onToggleTheme }) {
   const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
+
+  // Honest severity on the bell: show the critical count in danger styling
+  // when there are alarms, otherwise the caution count, otherwise a quiet 0.
+  const badgeSeverity = alarms > 0 ? 'alarm' : warns > 0 ? 'warn' : 'none';
+  const badgeCount = alarms > 0 ? alarms : warns;
+  const bellLabel = alarms > 0 || warns > 0
+    ? `Notifications: ${alarms} alarm${alarms === 1 ? '' : 's'}, ${warns} warning${warns === 1 ? '' : 's'}`
+    : 'Notifications: none active';
 
   return (
     <header className="topbar">
@@ -43,9 +51,9 @@ export default function Topbar({ health, healthError, alarmCount = 0, theme = 'd
         {theme === 'dark' ? <SunIcon width={17} height={17} /> : <MoonIcon width={17} height={17} />}
       </button>
 
-      <button type="button" className="topbar__bell" aria-label={`Notifications: ${alarmCount} active`}>
+      <button type="button" className="topbar__bell" aria-label={bellLabel}>
         <AlarmIcon width={17} height={17} />
-        <span className="topbar__bell-badge">{alarmCount}</span>
+        <span className={`topbar__bell-badge topbar__bell-badge--${badgeSeverity}`}>{badgeCount}</span>
       </button>
 
       <Clock />
