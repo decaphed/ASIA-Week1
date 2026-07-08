@@ -3,6 +3,10 @@
    Dark control-room theme. Operator-grade clarity.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Management-facing layer (Executive Summary hero, trend roll-up strip,
+   forecast badges, Data Confidence panel). @import must precede all rules. */
+@import './styles/management.css';
+
 :root {
   --bg:           #070c10;
   --bg-elevated:  #0b1520;

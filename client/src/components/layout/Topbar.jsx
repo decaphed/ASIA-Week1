@@ -26,9 +26,11 @@ export default function Topbar({ health, healthError, alarmCount = 0, theme = 'd
       </div>
 
       <div className="topbar__status">
-        <StatusIndicator label="Server"    status={backend} />
-        <StatusIndicator label="Node-RED"  status={nodeRed} />
-        <StatusIndicator label="SQLite"    status={database} />
+        {/* Plain names for the exec audience; the vendor/tech names live in
+            the hover tooltips for engineers. */}
+        <StatusIndicator label="System"       status={backend}  title="Express backend" />
+        <StatusIndicator label="Sensor Feed"  status={nodeRed}  title="Node-RED ingestion flow" />
+        <StatusIndicator label="Data Storage" status={database} title="SQLite database" />
       </div>
 
       <button

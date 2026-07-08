@@ -5,9 +5,9 @@
 // entirely from CSS (.status--online etc.), so this component is pure props.
 // ─────────────────────────────────────────────────────────────────────────
 
-export default function StatusIndicator({ label, status = 'unknown' }) {
+export default function StatusIndicator({ label, status = 'unknown', title }) {
   return (
-    <div className={`status status--${status}`} title={`${label}: ${status}`}>
+    <div className={`status status--${status}`} title={`${title ?? label}: ${status}`}>
       <span className="status__dot" />
       <span className="status__label">{label}</span>
     </div>

@@ -1,24 +1,32 @@
 // ─────────────────────────────────────────────────────────────────────────
-// ViolationsPanel.jsx — "Sensor Health / Data Quality" panel: per-metric
-// physics-violation counts for the latest processed window, so a sensor
-// that's glitching (e.g. rpm consistently out of range) is visible by name
-// instead of buried in the single aggregate qualityScore (see
-// preprocessing/quality.js::computeQuality's violationsByMetric).
+// ViolationsPanel.jsx — "Data Confidence" panel for the Reports page.
 //
-// Mirrors StatsPanel.jsx's "grouped stat rows" layout/classes exactly, so
-// this reuses .stats-panel/.stat/.stat-divider rather than introducing a
-// second grid system.
+// Management-facing on top: one confidence badge (driven by the
+// preprocessing pipeline's qualityScore/qualityLabel) plus a plain-English
+// sentence naming any sensor that reported unusual values in the latest
+// one-minute window. The engineering breakdown (per-sensor physics
+// violations vs Hampel-capped statistical spikes vs cross-variable checks —
+// different failure modes, different remediation, see quality.js) is still
+// here for engineers, but folded behind a "Show technical detail"
+// disclosure instead of leading the page. The `unmatched` counter
+// (a validator.js rule drifting out of sync with quality.js's category
+// table) is a developer diagnostic and is no longer rendered at all — it
+// stays visible in the API payload/logs.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { SENSORS } from '../../utils/constants.js';
 
-// The two cross-variable rules aren't attributable to a single sensor (see
-// quality.js), so they get their own fixed rows here, listed after the
-// per-metric grid.
 const CROSS_VARIABLE_CHECKS = [
-  { key: 'dischargePressureVsSuction', label: 'Discharge vs Suction' },
-  { key: 'statusMismatch', label: 'Status vs Flow/RPM' },
+  { key: 'dischargePressureVsSuction', label: 'Outlet vs inlet pressure consistency' },
+  { key: 'statusMismatch', label: 'Running status vs flow & speed consistency' },
 ];
+
+// qualityLabel → management wording.
+const CONFIDENCE = {
+  GOOD: { tone: 'ok',     word: 'High',   blurb: 'Readings this minute look clean and trustworthy.' },
+  FAIR: { tone: 'warn',   word: 'Medium', blurb: 'Some readings this minute needed cleaning up — treat small changes with care.' },
+  POOR: { tone: 'danger', word: 'Low',    blurb: 'Many readings this minute were unreliable — numbers on this page may be off.' },
+};
 
 function StatDivider({ label }) {
   return (
@@ -42,57 +50,69 @@ function ViolationStat({ label, count }) {
 
 export default function ViolationsPanel({ processed }) {
   // Null before the first window closes (~60s after startup) or for any
-  // processed_telemetry row stored before this column existed — treat both
-  // the same as SystemHealthPanel treats "no processed data yet".
+  // processed_telemetry row stored before these columns existed.
   const violations = processed?.violationsByMetric;
   const outliers = processed?.outliersByMetric;
 
   if (!violations) {
-    return <div className="dashboard__empty">Collecting…</div>;
+    return <div className="dashboard__empty">Collecting the first minute of data…</div>;
   }
+
+  const confidence = CONFIDENCE[processed.qualityLabel] ?? CONFIDENCE.FAIR;
+  const flaggedSensors = SENSORS.filter(
+    (s) => (violations[s.key] ?? 0) > 0 || (outliers?.[s.key] ?? 0) > 0,
+  );
 
   return (
     <div className="stats-panel-wrap">
-      <StatDivider label="Per-Sensor Violations" />
-      <div className="stats-panel">
-        {SENSORS.map((sensor) => (
-          <ViolationStat key={sensor.key} label={sensor.shortLabel} count={violations[sensor.key] ?? 0} />
-        ))}
-      </div>
-      {/* outliersByMetric is a separate signal from violationsByMetric on
-          purpose (see pipeline.js/quality.js): a physics violation usually
-          means a broken/miscalibrated sensor, an outlier is a statistical
-          spike that got Hampel-capped — different failure modes, different
-          remediation, so they're not merged into one counter. */}
-      {outliers && (
-        <>
-          <StatDivider label="Per-Sensor Outliers" />
-          <div className="stats-panel">
-            {SENSORS.map((sensor) => (
-              <ViolationStat key={sensor.key} label={sensor.shortLabel} count={outliers[sensor.key] ?? 0} />
-            ))}
+      <div className={`data-confidence data-confidence--${confidence.tone}`}>
+        <div className="data-confidence__badge">
+          <span className="data-confidence__word">{confidence.word}</span>
+          <span className="data-confidence__caption">confidence</span>
+        </div>
+        <div className="data-confidence__body">
+          <p className="data-confidence__blurb">{confidence.blurb}</p>
+          <p className="data-confidence__detail">
+            {flaggedSensors.length === 0
+              ? 'No sensor reported unusual values in the last minute.'
+              : `${flaggedSensors.map((s) => s.label).join(', ')} reported unusual values in the last minute.`}
+          </p>
+        </div>
+        {processed.qualityScore != null && (
+          <div className="data-confidence__score" title="Overall data-quality score for the latest one-minute window">
+            {Math.round(processed.qualityScore)}<span>/100</span>
           </div>
-        </>
-      )}
-      <StatDivider label="Cross-Variable Checks" />
-      <div className="stats-panel stats-panel--system">
-        {CROSS_VARIABLE_CHECKS.map((check) => (
-          <ViolationStat key={check.key} label={check.label} count={violations[check.key] ?? 0} />
-        ))}
+        )}
       </div>
-      {/* unmatched exists so a validator.js rule that drifts out of sync
-          with VIOLATION_CATEGORY (quality.js) fails loudly instead of being
-          silently dropped — only rendered when non-zero, same "quiet unless
-          something needs attention" convention as SystemHealthPanel's
-          DriftRow list. */}
-      {violations.unmatched > 0 && (
-        <>
-          <StatDivider label="Unrecognized" />
-          <div className="stats-panel stats-panel--system">
-            <ViolationStat label="Unmatched Rule" count={violations.unmatched} />
-          </div>
-        </>
-      )}
+
+      <details className="data-confidence__details">
+        <summary>Show technical detail</summary>
+
+        <StatDivider label="Readings outside physical limits, by sensor" />
+        <div className="stats-panel">
+          {SENSORS.map((sensor) => (
+            <ViolationStat key={sensor.key} label={sensor.label} count={violations[sensor.key] ?? 0} />
+          ))}
+        </div>
+
+        {outliers && (
+          <>
+            <StatDivider label="Sudden spikes smoothed out, by sensor" />
+            <div className="stats-panel">
+              {SENSORS.map((sensor) => (
+                <ViolationStat key={sensor.key} label={sensor.label} count={outliers[sensor.key] ?? 0} />
+              ))}
+            </div>
+          </>
+        )}
+
+        <StatDivider label="Consistency checks between sensors" />
+        <div className="stats-panel stats-panel--system">
+          {CROSS_VARIABLE_CHECKS.map((check) => (
+            <ViolationStat key={check.key} label={check.label} count={violations[check.key] ?? 0} />
+          ))}
+        </div>
+      </details>
     </div>
   );
 }

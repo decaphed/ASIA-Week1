@@ -66,7 +66,13 @@ export const METRICS = [
 
 const REFIT_WINDOW = 200; // ~3.3 hours of one-minute processed records
 const REFIT_INTERVAL_MS = 15 * 60 * 1000;
-const MIN_READINGS = 4;
+// Minimum rows before the grid search is allowed to fit. With fewer rows
+// the 486-combination alpha/beta/phi search only has a handful of residuals
+// to minimise over and will happily drive them to ~0 — an overfit that
+// yields a near-zero RMSE and therefore a spuriously tight confidence band
+// until the next scheduled refit. 12 rows (~12 minutes) gives 11 residuals,
+// enough for the winning MSE to reflect real noise rather than luck.
+const MIN_READINGS = 12;
 const RESIDUAL_WINDOW = 30;
 const ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 const BETAS = ALPHAS;

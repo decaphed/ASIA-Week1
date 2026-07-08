@@ -47,6 +47,32 @@ function toPct(v, yMin, yMax) {
   return Math.max(0, Math.min(100, ((v - yMin) / (yMax - yMin)) * 100));
 }
 
+// Plain-language rendering of the trend service's {direction, magnitude}
+// pair — "Rising steadily" instead of the server's "Moderate Increasing".
+const TREND_PACE = { slight: 'slowly', moderate: 'steadily', sharp: 'quickly' };
+function plainTrendText(trend) {
+  if (trend.direction === 'stable') return 'Holding steady';
+  const verb = trend.direction === 'up' ? 'Rising' : 'Falling';
+  const pace = TREND_PACE[trend.magnitude];
+  return pace ? `${verb} ${pace}` : verb;
+}
+
+// Qualitative badge for where the forecast is heading relative to this
+// metric's caution/critical limits — the business framing of the number.
+function forecastTone(forecast, warnHigh, alarmHigh) {
+  if (alarmHigh != null && forecast.forecast >= alarmHigh) return 'danger';
+  if (warnHigh != null && forecast.forecast >= warnHigh) return 'warn';
+  if (warnHigh != null && forecast.upperBound >= warnHigh) return 'watch';
+  return 'ok';
+}
+function forecastToneText(forecast, warnHigh, alarmHigh) {
+  const tone = forecastTone(forecast, warnHigh, alarmHigh);
+  return tone === 'danger' ? 'heading past critical'
+    : tone === 'warn' ? 'nearing caution level'
+      : tone === 'watch' ? 'could touch caution'
+        : 'in normal range';
+}
+
 export default function LiveChart({ label, color, unit, points, warnHigh, alarmHigh, forecast: rawForecast, trend }) {
   // The forecast API always returns an object per metric (never bare null),
   // but its numeric fields can individually be null — either "not enough
@@ -210,25 +236,36 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
         </span>
       </div>
 
-      {/* Short-horizon graded trend classification (Mann-Kendall + Sen's slope) */}
+      {/* Short-horizon graded trend classification (Mann-Kendall + Sen's
+          slope server-side) — rendered here in plain language rather than
+          the raw label, so a manager reads "Rising steadily", never a
+          statistics term. */}
       {trend && (
         <div className="live-chart__forecast-row">
           <span className={`live-chart__forecast-trend live-chart__forecast-trend--${trend.direction === 'up' ? 'up' : trend.direction === 'down' ? 'down' : 'flat'}`}>
             {trend.direction === 'up' ? '▲' : trend.direction === 'down' ? '▼' : '—'}
           </span>
-          <span className="live-chart__forecast-text">{trend.label}</span>
+          <span className="live-chart__forecast-text">{plainTrendText(trend)}</span>
         </div>
       )}
 
-      {/* ETS forecast summary — next predicted value ± 95% interval */}
+      {/* ETS forecast summary — the ± interval is deliberately kept out of
+          the visible text (it reads as statistics jargon); it lives in the
+          title tooltip for anyone who hovers, and the shaded band on the
+          chart already shows the same uncertainty visually. */}
       {forecast && (
-        <div className="live-chart__forecast-row">
+        <div
+          className="live-chart__forecast-row"
+          title={`Prediction range: ${decimals(forecast.lowerBound)} – ${decimals(forecast.upperBound)} ${unit}`}
+        >
           <span className={`live-chart__forecast-trend live-chart__forecast-trend--${forecast.trend > 0 ? 'up' : forecast.trend < 0 ? 'down' : 'flat'}`}>
             {forecast.trend > 0 ? '▲' : forecast.trend < 0 ? '▼' : '—'}
           </span>
           <span className="live-chart__forecast-text">
-            Next: {decimals(forecast.forecast)} <span className="live-chart__unit">{unit}</span>
-            {' '}(±{decimals((forecast.upperBound - forecast.lowerBound) / 2)})
+            Expected next: {decimals(forecast.forecast)} <span className="live-chart__unit">{unit}</span>
+            <span className={`live-chart__forecast-badge live-chart__forecast-badge--${forecastTone(forecast, warnHigh, alarmHigh)}`}>
+              {forecastToneText(forecast, warnHigh, alarmHigh)}
+            </span>
           </span>
         </div>
       )}

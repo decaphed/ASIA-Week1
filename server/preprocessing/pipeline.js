@@ -171,6 +171,25 @@ function ingestSample(rawSample, provenance) {
  *   any gap-fill rows created along the way are a side effect, not part of the response.
  */
 export function processSample(sample) {
+  // Chronology guard: everything downstream (gap-fill interpolation, window
+  // start/end bounds, the "last" aggregate stat, Mann-Kendall/Theil-Sen row
+  // ordering, drift's reference-vs-recent split) trusts arrival order to be
+  // time order. A retried request or a client with a skewed clock would
+  // silently corrupt all of it, so a sample whose timestamp is not strictly
+  // after the last accepted one is rejected here — before it is stored or
+  // buffered — rather than caught nowhere.
+  const last = getLastSample();
+  if (last?.timestamp && sample.timestamp) {
+    const dtMs = Date.parse(sample.timestamp) - Date.parse(last.timestamp);
+    if (Number.isFinite(dtMs) && dtMs <= 0) {
+      const err = new Error(
+        `timestamp must be after the last accepted reading (${last.timestamp}); received ${sample.timestamp}`,
+      );
+      err.status = 400;
+      throw err;
+    }
+  }
+
   const fillSamples = generateFillSamples(getLastSample(), sample, METRICS);
   for (const fill of fillSamples) {
     ingestSample(fill, 'IMPUTED');

@@ -146,18 +146,27 @@ function mannKendall(series) {
 }
 
 /**
- * Theil-Sen slope estimator: median of all pairwise slopes, in
- * units-per-row-step (rows are ~1 RUNNING minute apart — see driftService's
- * module comment on why "row" and "wall-clock minute" aren't identical).
+ * Theil-Sen slope estimator: median of all pairwise slopes, in units per
+ * WALL-CLOCK MINUTE. Slopes are computed against each row's actual
+ * timestamp rather than its row index — rows are ~1 RUNNING minute apart,
+ * but a skipped FAULT/STOPPED episode can put several real minutes between
+ * two adjacent RUNNING rows, and dividing by row-step there would overstate
+ * the rate by the gap factor. Pairs with a non-positive time delta
+ * (duplicate/out-of-order timestamps) are skipped rather than allowed to
+ * produce an infinite or sign-flipped slope.
+ * @param minutes chronological timestamps, in minutes (same length as values).
+ * @param values  chronological metric values.
  */
-function senSlope(series) {
+function senSlope(minutes, values) {
   const slopes = [];
-  const n = series.length;
+  const n = values.length;
   for (let i = 0; i < n - 1; i++) {
     for (let j = i + 1; j < n; j++) {
-      slopes.push((series[j] - series[i]) / (j - i));
+      const dt = minutes[j] - minutes[i];
+      if (dt > 0) slopes.push((values[j] - values[i]) / dt);
     }
   }
+  if (slopes.length === 0) return 0;
   slopes.sort((a, b) => a - b);
   const mid = Math.floor(slopes.length / 2);
   return slopes.length % 2 === 0 ? (slopes[mid - 1] + slopes[mid]) / 2 : slopes[mid];
@@ -187,12 +196,14 @@ function nextBucketIndex(rangePct, heldIndex) {
  * actually published (the numeric fields still refresh every call once a
  * label is confirmed — only the label itself is protected from flicker).
  */
-function classify(metric, series) {
+function classify(metric, minutes, series) {
   const z = mannKendall(series);
-  const slope = senSlope(series);
-  const span = series.length - 1;
+  const slope = senSlope(minutes, series);
+  // Elapsed real time across the window, so rangePct describes what the
+  // slope amounts to over the minutes the window actually spans.
+  const spanMinutes = minutes[minutes.length - 1] - minutes[0];
   const { min, max } = OPERATING_RANGE[metric];
-  const rangePct = (Math.abs(slope) * span) / (max - min) * 100;
+  const rangePct = (Math.abs(slope) * spanMinutes) / (max - min) * 100;
 
   const h = held[metric];
   if (h.significant) {
@@ -266,9 +277,10 @@ function runTrendCheck() {
   }
 
   const window = runningOnly.slice(-WINDOW);
+  const minutes = window.map((row) => Date.parse(row.timestamp) / 60000);
   for (const metric of METRICS) {
     const series = window.map((row) => metricMean(row, metric));
-    trendCache[metric] = classify(metric, series);
+    trendCache[metric] = classify(metric, minutes, series);
   }
 }
 

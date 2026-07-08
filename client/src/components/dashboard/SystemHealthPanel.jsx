@@ -5,6 +5,7 @@
 // GET /api/health and GET /api/stats — nothing here is simulated.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { memo } from 'react';
 import { computeServiceStatus, connectionQuality } from '../../utils/health.js';
 import { formatTime } from '../../utils/formatters.js';
 import { SENSORS, IMPUTATION_WARN_THRESHOLD } from '../../utils/constants.js';
@@ -44,7 +45,7 @@ function DriftRow({ metric, entry }) {
     <div className="drift-row">
       <span className="drift-row__label">
         <span className="drift-row__arrow">{arrow}</span>
-        {sensor.shortLabel}
+        {sensor.label}
       </span>
       <span className="drift-row__delta">
         {sign}{entry.delta.toFixed(sensor.prec)} {sensor.unit}
@@ -53,7 +54,10 @@ function DriftRow({ metric, entry }) {
   );
 }
 
-export default function SystemHealthPanel({ health, healthError, stats, drift, processed }) {
+// memo: the Overview page re-renders every second on the live poll, but
+// this panel's props (health/stats/drift/processed) only change every
+// 5-15s — shallow prop comparison skips the wasted renders in between.
+function SystemHealthPanel({ health, healthError, stats, drift, processed }) {
   const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
   const quality = connectionQuality(stats?.apiLatencyMs);
   const lastUpdate = stats?.latestTimestamp ? formatTime(stats.latestTimestamp) : '--';
@@ -70,9 +74,12 @@ export default function SystemHealthPanel({ health, healthError, stats, drift, p
         <span className="rail-panel__title">System Health</span>
       </div>
       <div className="system-health-body">
-        <ServiceRow label="Express Backend" online={backend === 'online'} onlineText="ONLINE" />
-        <ServiceRow label="Node-RED Feed"   online={nodeRed === 'online'}  onlineText="STREAMING" />
-        <ServiceRow label="SQLite Store"    online={database === 'online'} onlineText="CONNECTED" />
+        {/* Business-meaningful names, not implementation names — the
+            underlying tech (Express / Node-RED / SQLite) is an engineering
+            detail the Topbar tooltips still carry. */}
+        <ServiceRow label="Monitoring Service" online={backend === 'online'} onlineText="ONLINE" />
+        <ServiceRow label="Sensor Feed"        online={nodeRed === 'online'}  onlineText="STREAMING" />
+        <ServiceRow label="Data Storage"       online={database === 'online'} onlineText="CONNECTED" />
 
         <div className="system-health-divider" />
 
@@ -95,8 +102,11 @@ export default function SystemHealthPanel({ health, healthError, stats, drift, p
           {!processed ? (
             <span className="system-health-stat__value--muted">Collecting…</span>
           ) : processed.imputationRate > IMPUTATION_WARN_THRESHOLD ? (
-            <span className="system-health-stat__value--warn">
-              {Math.round(processed.imputationRate * 100)}% Estimated
+            <span
+              className="system-health-stat__value--warn"
+              title="Part of the last minute's data was reconstructed to bridge a short sensor gap"
+            >
+              {Math.round(processed.imputationRate * 100)}% gap-filled
             </span>
           ) : (
             <span className="system-health-stat__value--ok">Live</span>
@@ -109,10 +119,10 @@ export default function SystemHealthPanel({ health, healthError, stats, drift, p
           {driftEntries.length === 0 ? (
             <span className="system-health-stat__value--muted">Collecting baseline…</span>
           ) : driftingEntries.length === 0 ? (
-            <span className="system-health-stat__value--ok">Stable</span>
+            <span className="system-health-stat__value--ok">Steady</span>
           ) : (
             <span className="system-health-stat__value--warn">
-              {driftingEntries.length} drifting
+              {driftingEntries.length} shifting from normal
             </span>
           )}
         </StatRow>
@@ -128,3 +138,5 @@ export default function SystemHealthPanel({ health, healthError, stats, drift, p
     </div>
   );
 }
+
+export default memo(SystemHealthPanel);

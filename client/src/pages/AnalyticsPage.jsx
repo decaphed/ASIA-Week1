@@ -25,7 +25,9 @@ function ChartGroup({ title, subtitle, defs, series, forecast, trend, id }) {
   return (
     <div className="chart-group" id={id}>
       <div className="chart-group__header">
-        <h3 className="chart-group__title">{title}</h3>
+        {/* h2, not h3 — the Topbar owns the page's h1 and nothing else on
+            this page emits an h2, so h3 here would skip a heading level. */}
+        <h2 className="chart-group__title">{title}</h2>
         {subtitle && <span className="chart-group__subtitle">{subtitle}</span>}
       </div>
       <div className="chart-group__grid">
@@ -51,12 +53,57 @@ function ChartGroup({ title, subtitle, defs, series, forecast, trend, id }) {
   );
 }
 
+// Roll-up strip so a reader gets the page's story in one line before the
+// six charts: how many readings are steady vs moving, and which one is
+// moving fastest.
+function TrendSummary({ trend }) {
+  const entries = trend
+    ? SENSORS.map((s) => ({ sensor: s, t: trend[s.key] })).filter((e) => e.t != null)
+    : [];
+  if (entries.length === 0) {
+    return (
+      <div className="trend-summary" id="analytics-summary">
+        <span className="trend-summary__item trend-summary__item--muted">
+          Building up enough history to read the direction of each measurement…
+        </span>
+      </div>
+    );
+  }
+
+  const moving = entries.filter((e) => e.t.direction !== 'stable');
+  const steady = entries.length - moving.length;
+  // "Fastest mover" = the moving metric covering the most of its own
+  // operating range over the window (rangePct), so different units compare
+  // fairly.
+  const fastest = moving.slice().sort((a, b) => (b.t.rangePct ?? 0) - (a.t.rangePct ?? 0))[0];
+
+  return (
+    <div className="trend-summary" id="analytics-summary">
+      <span className="trend-summary__item trend-summary__item--ok">
+        <strong>{steady}</strong>&nbsp;of {entries.length} readings holding steady
+      </span>
+      {moving.length > 0 && (
+        <span className="trend-summary__item trend-summary__item--warn">
+          <strong>{moving.length}</strong>&nbsp;on the move
+        </span>
+      )}
+      {fastest && (
+        <span className="trend-summary__item">
+          Fastest mover: <strong>&nbsp;{fastest.sensor.label}</strong>&nbsp;
+          ({fastest.t.direction === 'up' ? '▲ rising' : '▼ falling'})
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function AnalyticsPage({ series }) {
   const { data: forecast } = useForecast();
   const { data: trend } = useTrend();
 
   return (
     <div className="dashboard" id="analytics">
+      <TrendSummary trend={trend} />
       <ChartGroup
         id="analytics-hydraulic"
         title="Hydraulic Performance"

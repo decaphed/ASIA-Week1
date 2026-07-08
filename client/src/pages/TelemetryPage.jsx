@@ -24,7 +24,7 @@ export default function TelemetryPage({ reading, series, refresh }) {
       <Card
         id="manual-entry"
         title="Manual Test Reading"
-        subtitle="Submit one reading directly to POST /api/data — bypasses Node-RED"
+        subtitle="For testing only — records a one-off reading outside the normal sensor feed"
       >
         <ManualReadingForm onSubmitted={refresh} />
       </Card>

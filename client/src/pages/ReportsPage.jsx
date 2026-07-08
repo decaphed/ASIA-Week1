@@ -27,8 +27,8 @@ export default function ReportsPage({ liveLoading }) {
 
       <Card
         id="violations"
-        title="Sensor Health — Data Quality"
-        subtitle="Physics-check violations by sensor, latest one-minute window"
+        title="Data Confidence"
+        subtitle="How trustworthy the numbers on this page are right now"
       >
         <ViolationsPanel processed={processed} />
       </Card>
@@ -36,7 +36,7 @@ export default function ReportsPage({ liveLoading }) {
       <Card
         id="history"
         title="Data Log"
-        subtitle="Latest 100 readings · search &amp; sort · refreshes every 5 s"
+        subtitle="Latest 100 readings · updates automatically — detail view for engineers"
       >
         {historyError && rows.length === 0 ? (
           <ErrorBanner title="Could not load data log" message="Retrying automatically…" />
