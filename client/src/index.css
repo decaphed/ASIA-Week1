@@ -1632,7 +1632,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
    ══════════════════════════════════════════════════════════════════════════ */
 .range-bar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: var(--content-pad);
 }
 .range-tabs {
   display: inline-flex; gap: 2px; padding: 3px;

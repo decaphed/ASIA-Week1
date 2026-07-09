@@ -89,7 +89,7 @@ const OPERATING_RANGE = {
 // Per-metric hysteresis/debounce state, persisted across calls.
 const held = {};
 function resetHeld(metric) {
-  held[metric] = { significant: false, bucketIndex: 0, pendingLabel: null, pendingCount: 0, published: null };
+  held[metric] = { significant: false, bucketIndex: 0, pendingCount: 0, published: null };
 }
 for (const m of METRICS) resetHeld(m);
 
@@ -233,13 +233,23 @@ function classify(metric, minutes, series) {
     significant: h.significant,
   };
 
-  if (h.published === null || label === h.pendingLabel) {
-    h.pendingLabel = label;
-    h.pendingCount += 1;
-    if (h.published === null || h.pendingCount >= 2) h.published = candidate;
-  } else {
-    h.pendingLabel = label;
-    h.pendingCount = 1;
+  // Debounce a label CHANGE: require the computed label to differ from the
+  // currently PUBLISHED label for 2 consecutive evaluations before
+  // switching (protects against one noisy minute flipping the badge).
+  // Compared against the published label, not the previous candidate — so a
+  // continuously escalating trend (Slight -> Moderate -> Sharp on back-to-
+  // back calls) still reads as "differs from published" on every one of
+  // those calls and correctly confirms after 2 evaluations, instead of
+  // resetting the debounce counter each time the bucket advances to a new
+  // magnitude (which used to make the badge jump straight from Stable to
+  // Sharp, skipping every intermediate grade). This also means a fresh
+  // published=null state (startup, or just after a regime reset) requires
+  // 2 agreeing evaluations too, rather than trusting a single reading.
+  const differsFromPublished = h.published === null || label !== h.published.label;
+  h.pendingCount = differsFromPublished ? h.pendingCount + 1 : 0;
+  if (h.pendingCount >= 2) {
+    h.published = candidate;
+    h.pendingCount = 0;
   }
 
   return h.published;
