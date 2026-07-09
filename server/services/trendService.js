@@ -89,7 +89,7 @@ const OPERATING_RANGE = {
 // Per-metric hysteresis/debounce state, persisted across calls.
 const held = {};
 function resetHeld(metric) {
-  held[metric] = { significant: false, bucketIndex: 0, pendingCount: 0, published: null };
+  held[metric] = { significant: false, bucketIndex: 0, pendingCount: 0, published: null, prevCandidate: null };
 }
 for (const m of METRICS) resetHeld(m);
 
@@ -172,13 +172,34 @@ function senSlope(minutes, values) {
   return slopes.length % 2 === 0 ? (slopes[mid - 1] + slopes[mid]) / 2 : slopes[mid];
 }
 
-/** Step the held magnitude bucket toward rangePct, with hysteresis on the way down. */
+/**
+ * Step the held magnitude bucket toward rangePct, ASYMMETRICALLY: escalation
+ * is capped at one grade per evaluation, de-escalation is not.
+ *
+ * Escalating one grade at a time is what makes ESCALATION read as a
+ * progression (Stable -> Slight -> Moderate -> Sharp across successive
+ * evaluations) instead of a jump: even when rangePct already qualifies for
+ * "sharp" on the very first significant evaluation, the bucket only advances
+ * to the next grade up from wherever it's currently held, so the label has
+ * to pass through each intermediate grade (and its 2-evaluation debounce in
+ * classify()) on the way to the top.
+ *
+ * De-escalation deliberately does NOT mirror that: once rangePct has
+ * genuinely dropped below the held bucket's hysteresis band, this jumps
+ * straight to whichever bucket rangePct actually supports (same lookback
+ * this function used before the escalation fix). A metric that has actually
+ * flattened should be reported as flat right away — capping the way down
+ * too previously left a stale "still trending" label/bucket on screen for
+ * several extra evaluations (minutes) after the real movement had already
+ * stopped, which read as the trend badge lying about current conditions.
+ */
 function nextBucketIndex(rangePct, heldIndex) {
   let enterIndex = 0;
   for (let i = ENTER_THRESHOLDS.length - 1; i >= 1; i--) {
     if (rangePct >= ENTER_THRESHOLDS[i]) { enterIndex = i; break; }
   }
-  if (enterIndex >= heldIndex) return enterIndex; // rising, or steady at/above the held level
+  if (enterIndex > heldIndex) return heldIndex + 1; // escalate exactly one grade
+  if (enterIndex === heldIndex) return heldIndex; // steady at the held level
 
   const exitThreshold = heldIndex === 0 ? 0 : ENTER_THRESHOLDS[heldIndex] * EXIT_FACTOR;
   if (rangePct >= exitThreshold) return heldIndex; // within the hysteresis band — stay put
@@ -187,14 +208,16 @@ function nextBucketIndex(rangePct, heldIndex) {
   for (let i = heldIndex - 1; i >= 1; i--) {
     if (rangePct >= ENTER_THRESHOLDS[i]) { dropIndex = i; break; }
   }
-  return dropIndex;
+  return dropIndex; // de-escalate straight to the bucket rangePct actually supports
 }
 
 /**
  * Classify one metric's windowed series, applying significance hysteresis,
- * bucket hysteresis, and a 2-evaluation debounce before a label CHANGE is
- * actually published (the numeric fields still refresh every call once a
- * label is confirmed — only the label itself is protected from flicker).
+ * bucket hysteresis, and a debounce that requires two consecutive RAW
+ * candidates to agree on direction before a DIRECTION change is published
+ * (a magnitude-only change within the already-published direction publishes
+ * immediately — see the debounce block below for why the two cases need
+ * different rules).
  */
 function classify(metric, minutes, series) {
   const z = mannKendall(series);
@@ -233,24 +256,39 @@ function classify(metric, minutes, series) {
     significant: h.significant,
   };
 
-  // Debounce a label CHANGE: require the computed label to differ from the
-  // currently PUBLISHED label for 2 consecutive evaluations before
-  // switching (protects against one noisy minute flipping the badge).
-  // Compared against the published label, not the previous candidate — so a
-  // continuously escalating trend (Slight -> Moderate -> Sharp on back-to-
-  // back calls) still reads as "differs from published" on every one of
-  // those calls and correctly confirms after 2 evaluations, instead of
-  // resetting the debounce counter each time the bucket advances to a new
-  // magnitude (which used to make the badge jump straight from Stable to
-  // Sharp, skipping every intermediate grade). This also means a fresh
-  // published=null state (startup, or just after a regime reset) requires
-  // 2 agreeing evaluations too, rather than trusting a single reading.
-  const differsFromPublished = h.published === null || label !== h.published.label;
-  h.pendingCount = differsFromPublished ? h.pendingCount + 1 : 0;
-  if (h.pendingCount >= 2) {
+  // Debounce a DIRECTION change ('up' <-> 'down' <-> 'stable', including the
+  // very first classification after startup/regime-reset) against the
+  // PREVIOUS RAW CANDIDATE, not against the stale published label. Two
+  // consecutive candidates must actually AGREE on direction before a
+  // direction change is trusted — a single noisy flip (e.g. one evaluation
+  // reads "Slight Increasing", the next reads "Slight Decreasing", neither
+  // direction ever confirmed twice) must not be able to publish either
+  // direction just because both differ from whatever was published before.
+  // The earlier version of this debounce compared each candidate to
+  // `h.published` instead, which let exactly that flip-flop slip through as
+  // a "confirmed" reversal, and — worse — let published=null (startup/reset)
+  // accept any two calls in a row regardless of whether they agreed.
+  //
+  // A magnitude-only change (still the same direction as what's already
+  // published — e.g. Slight Increasing -> Moderate Increasing) publishes
+  // immediately with no extra debounce: nextBucketIndex already caps
+  // escalation at one grade per evaluation, so there's nothing left to
+  // debounce, and re-debouncing every grade step would reintroduce the old
+  // Stable -> Sharp jump (skipping every intermediate grade) this scheme
+  // exists to prevent.
+  const directionChanged = h.published === null || candidate.direction !== h.published.direction;
+  if (directionChanged) {
+    const agreesWithPrevCandidate = h.prevCandidate !== null && candidate.direction === h.prevCandidate.direction;
+    h.pendingCount = agreesWithPrevCandidate ? h.pendingCount + 1 : 1;
+    if (h.pendingCount >= 2) {
+      h.published = candidate;
+      h.pendingCount = 0;
+    }
+  } else {
     h.published = candidate;
     h.pendingCount = 0;
   }
+  h.prevCandidate = candidate;
 
   return h.published;
 }

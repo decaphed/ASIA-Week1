@@ -52,6 +52,28 @@ const RECENT_WINDOW_ROWS = 15;     // "right now" — last ~15 minutes of RUNNIN
 const REFERENCE_WINDOW_ROWS = 120; // "normal" — the ~2 hours of RUNNING data before that
 const MIN_ROWS_FOR_DETECTION = RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS;
 const Z_THRESHOLD = 3; // standard errors from the reference mean
+
+// Operating range (mirrors trendService.js's OPERATING_RANGE / client's
+// SENSORS min/max) — used only to gate direction on PRACTICAL magnitude,
+// alongside the z-test's statistical significance. Needed because the
+// z-test's standard error (referenceStd / sqrt(RECENT_WINDOW_ROWS)) assumes
+// the recent window's samples are independent; per-minute pump metrics are
+// not (motorTemp's observed lag-1 autocorrelation is ~0.9), so the true
+// uncertainty is far larger than sqrt(n) suggests and the naive z-test
+// reports "significant" drift almost continuously — including shifts under
+// 1% of a sensor's operating range, which is noise, not condition change.
+// Requiring the shift to also clear MIN_RANGE_PCT of the range keeps the
+// z-test (still useful for catching truly flat vs. truly moving) while
+// refusing to call a shift "drift" unless it's big enough to matter.
+const OPERATING_RANGE = {
+  flowRate: { min: 50, max: 300 },
+  rpm: { min: 1000, max: 3600 },
+  vibration: { min: 0.5, max: 12 },
+  suctionPressure: { min: 0.5, max: 3 },
+  dischargePressure: { min: 2, max: 12 },
+  motorTemp: { min: 20, max: 90 },
+};
+const MIN_RANGE_PCT = 5; // recentMean vs. referenceMean must differ by at least this % of the operating range
 // The simulator spends ~86% of its time in RUNNING and the rest in short
 // FAULT/STOPPED episodes (see node-red/flow.json). Those episodes are real,
 // but they aren't "drift" — the pipeline already flags them directly via
@@ -80,13 +102,14 @@ function stdDev(values, avg) {
 }
 
 /**
+ * @param metric metric key — looked up in OPERATING_RANGE for the magnitude gate.
  * @param series chronological (oldest-first), RUNNING-only per-minute mean
  *   values for one metric — FAULT/STOPPED records are filtered out before
  *   this is called, so consecutive entries may skip real wall-clock time.
  * @returns the drift entry for that metric, or null if there isn't yet
  *   enough RUNNING history to compare against.
  */
-function classify(series) {
+function classify(metric, series) {
   const recent = series.slice(-RECENT_WINDOW_ROWS);
   const reference = series.slice(-(RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS), -RECENT_WINDOW_ROWS);
   if (reference.length < REFERENCE_WINDOW_ROWS) return null;
@@ -94,6 +117,7 @@ function classify(series) {
   const referenceMean = mean(reference);
   const referenceStd = stdDev(reference, referenceMean);
   const recentMean = mean(recent);
+  const delta = recentMean - referenceMean;
 
   // Guard against a perfectly flat reference window (std = 0) producing a
   // divide-by-zero / infinite z — treat near-zero noise as a tiny noise
@@ -101,16 +125,20 @@ function classify(series) {
   const standardError = Math.max(referenceStd, 1e-6) / Math.sqrt(recent.length);
   const z = (recentMean - referenceMean) / standardError;
 
+  const { min, max } = OPERATING_RANGE[metric];
+  const rangePct = (Math.abs(delta) / (max - min)) * 100;
+  const isSignificant = Math.abs(z) > Z_THRESHOLD && rangePct >= MIN_RANGE_PCT;
+
   let direction = 'stable';
-  if (z > Z_THRESHOLD) direction = 'rising';
-  else if (z < -Z_THRESHOLD) direction = 'falling';
+  if (isSignificant) direction = z > 0 ? 'rising' : 'falling';
 
   return {
     direction,
     z: round2(z),
     referenceMean: round2(referenceMean),
     recentMean: round2(recentMean),
-    delta: round2(recentMean - referenceMean),
+    delta: round2(delta),
+    rangePct: round2(rangePct),
   };
 }
 
@@ -134,7 +162,7 @@ function runDriftCheck() {
 
   for (const metric of METRICS) {
     const series = runningOnly.map((row) => metricMean(row, metric));
-    driftCache[metric] = classify(series);
+    driftCache[metric] = classify(metric, series);
   }
 }
 

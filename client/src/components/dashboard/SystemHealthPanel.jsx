@@ -86,7 +86,7 @@ function SystemHealthPanel({ health, healthError, stats, drift, processed }) {
         <StatRow label="API Latency">
           {stats?.apiLatencyMs != null ? `${stats.apiLatencyMs} ms` : '--'}
         </StatRow>
-        <StatRow label="Connection Quality">
+        <StatRow label="Network Signal">
           <span className={`system-health-quality system-health-quality--${quality.bars}`}>
             <span className="system-health-quality__bars" aria-hidden="true">
               <span className="system-health-quality__bar" />
@@ -98,6 +98,18 @@ function SystemHealthPanel({ health, healthError, stats, drift, processed }) {
         </StatRow>
         <StatRow label="Stored Records">{stats?.totalRecords ?? '--'}</StatRow>
         <StatRow label="Last Update">{lastUpdate}</StatRow>
+        <StatRow label="Data Quality">
+          {!processed || processed.qualityScore == null ? (
+            <span className="system-health-stat__value--muted">Collecting…</span>
+          ) : (
+            <span
+              className={`system-health-stat__value--${processed.qualityLabel === 'GOOD' ? 'ok' : processed.qualityLabel === 'FAIR' ? 'warn' : 'danger'}`}
+              title="Weighted score for the latest one-minute window: completeness, outliers, and physics checks. See the Reports page for the full breakdown."
+            >
+              {Math.round(processed.qualityScore)}/100 · {processed.qualityLabel === 'GOOD' ? 'Good' : processed.qualityLabel === 'FAIR' ? 'Fair' : 'Poor'}
+            </span>
+          )}
+        </StatRow>
         <StatRow label="Data Reliability">
           {!processed ? (
             <span className="system-health-stat__value--muted">Collecting…</span>

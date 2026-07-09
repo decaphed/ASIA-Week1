@@ -31,8 +31,8 @@ export default function ReportsPage({ liveLoading, refresh }) {
 
       <Card
         id="violations"
-        title="Data Confidence"
-        subtitle="How trustworthy the numbers on this page are right now"
+        title="Data Quality & Confidence"
+        subtitle="How clean the latest one-minute window is, and how trustworthy the numbers on this page are right now"
       >
         <ViolationsPanel processed={processed} />
       </Card>

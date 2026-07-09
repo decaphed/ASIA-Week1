@@ -707,6 +707,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .system-health-stat__value--ok    { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--ok-bright); }
 .system-health-stat__value--warn  { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--warn-bright); }
 .system-health-stat__value--muted { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--text-faint); }
+.system-health-stat__value--danger { font-family: var(--mono); font-weight: 600; font-size: 11px; color: var(--danger-bright); }
 
 /* Always rendered (even with 0 rows) so its presence in the DOM doesn't
    change. SystemHealthPanel itself is `rail-panel--grow` (flex:1, sized to

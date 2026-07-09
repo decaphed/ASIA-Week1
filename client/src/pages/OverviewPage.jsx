@@ -30,6 +30,7 @@ function PageSummaryRow({ reading, trend, forecast, processed }) {
   const confidence = processed?.qualityLabel === 'GOOD' ? 'High'
     : processed?.qualityLabel === 'FAIR' ? 'Medium'
       : processed?.qualityLabel === 'POOR' ? 'Low' : '—';
+  const qualityScore = processed?.qualityScore != null ? Math.round(processed.qualityScore) : null;
 
   const cards = [
     {
@@ -51,9 +52,9 @@ function PageSummaryRow({ reading, trend, forecast, processed }) {
       tone: watchCount > 0 ? 'warn' : 'muted',
     },
     {
-      href: '#/reports', label: 'Data confidence',
-      value: confidence,
-      sub: confidence === '—' ? 'Collecting first minute…' : 'Quality of the numbers shown',
+      href: '#/reports', label: 'Data quality',
+      value: qualityScore != null ? `${qualityScore}/100` : confidence,
+      sub: confidence === '—' ? 'Collecting first minute…' : `${confidence} confidence — how clean the raw readings are, not sensor alarm status`,
       tone: confidence === 'High' ? 'ok' : confidence === '—' ? 'muted' : 'warn',
     },
   ];

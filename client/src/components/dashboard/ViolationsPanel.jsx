@@ -62,27 +62,42 @@ export default function ViolationsPanel({ processed }) {
   const flaggedSensors = SENSORS.filter(
     (s) => (violations[s.key] ?? 0) > 0 || (outliers?.[s.key] ?? 0) > 0,
   );
+  const crossVariableFlags = CROSS_VARIABLE_CHECKS.filter((c) => (violations[c.key] ?? 0) > 0);
+  const checksRun = SENSORS.length + CROSS_VARIABLE_CHECKS.length;
+  const checksFlagged = flaggedSensors.length + crossVariableFlags.length;
+  const allClear = checksFlagged === 0;
 
   return (
     <div className="stats-panel-wrap">
       <div className={`data-confidence data-confidence--${confidence.tone}`}>
         <div className="data-confidence__badge">
           <span className="data-confidence__word">{confidence.word}</span>
-          <span className="data-confidence__caption">confidence</span>
+          <span className="data-confidence__caption">data quality</span>
         </div>
         <div className="data-confidence__body">
           <p className="data-confidence__blurb">{confidence.blurb}</p>
           <p className="data-confidence__detail">
             {flaggedSensors.length === 0
-              ? 'No sensor reported unusual values in the last minute.'
-              : `${flaggedSensors.map((s) => s.label).join(', ')} reported unusual values in the last minute.`}
+              ? 'No sensor reported missing, spiky, or physically-implausible readings in the last minute.'
+              : `${flaggedSensors.map((s) => s.label).join(', ')} reported missing, spiky, or physically-implausible readings in the last minute.`}
+          </p>
+          <p className="data-confidence__note">
+            This measures how trustworthy the raw readings are — not whether a sensor is operating outside its normal range. A sensor can be in WARN or ALARM (see Alarms &amp; Events) while still scoring high here.
           </p>
         </div>
         {processed.qualityScore != null && (
-          <div className="data-confidence__score" title="Overall data-quality score for the latest one-minute window">
+          <div className="data-confidence__score" title="Overall data-quality score for the latest one-minute window: 40% completeness + 30% no outliers + 30% within physical limits">
             {Math.round(processed.qualityScore)}<span>/100</span>
+            <span className="data-confidence__score-caption">quality score</span>
           </div>
         )}
+      </div>
+
+      <div className={`data-confidence__checks-summary data-confidence__checks-summary--${allClear ? 'ok' : 'warn'}`}>
+        <span className="data-confidence__checks-icon" aria-hidden="true">{allClear ? '✓' : '!'}</span>
+        {allClear
+          ? `All ${checksRun} data-quality checks passed for the last one-minute window — every sensor and cross-check came back clean.`
+          : `${checksFlagged} of ${checksRun} data-quality checks flagged something in the last one-minute window — see detail below.`}
       </div>
 
       <details className="data-confidence__details">

@@ -21,7 +21,7 @@ export const RANGES = {
   vibration: { min: 0, max: 25 }, // mm/s
   suctionPressure: { min: 0, max: 10 }, // bar
   dischargePressure: { min: 0, max: 25 }, // bar
-  motorTemp: { min: -20, max: 150 }, // °C
+  motorTemp: { min: 0, max: 150 }, // °C
 };
 
 const NUMERIC_FIELDS = Object.keys(RANGES);

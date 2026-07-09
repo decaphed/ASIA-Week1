@@ -333,7 +333,7 @@ export default function ProcessSchematic({ reading, series }) {
           label="VIBRATION"
           value={formatNumber(r.vibration, 2)}
           unit="mm/s"
-          color={vibState === 'alarm' ? 'var(--danger-bright)' : vibState === 'warn' ? 'var(--warn-bright)' : 'var(--danger-bright)'}
+          color={vibState === 'alarm' ? 'var(--danger-bright)' : vibState === 'warn' ? 'var(--warn-bright)' : 'var(--accent)'}
           className={vibAlarm ? `schematic__tag--${vibState}` : ''}
         />
         <Tag position="temp"     label="MOTOR TEMP"    value={formatNumber(r.motorTemp, 1)}          unit="°C"    color="#f97316" />
