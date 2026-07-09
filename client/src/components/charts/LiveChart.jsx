@@ -71,6 +71,16 @@ function toPct(v, yMin, yMax) {
   return Math.max(0, Math.min(100, ((v - yMin) / (yMax - yMin)) * 100));
 }
 
+// Shared "up/down/stable" direction → arrow/CSS-modifier mapping, used for
+// both the trend badge (server direction: 'up'|'down'|'stable') and the
+// forecast badge (derived from the sign of forecast.trend below).
+function directionClass(direction) {
+  return direction === 'up' ? 'up' : direction === 'down' ? 'down' : 'flat';
+}
+function directionArrow(direction) {
+  return direction === 'up' ? '▲' : direction === 'down' ? '▼' : '—';
+}
+
 // Plain-language rendering of the trend service's {direction, magnitude}
 // pair — "Rising steadily" instead of the server's "Moderate Increasing".
 const TREND_PACE = { slight: 'slowly', moderate: 'steadily', sharp: 'quickly' };
@@ -278,6 +288,7 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
       : color;
 
   const decimals = (v) => v.toFixed(Math.abs(v) < 10 ? 2 : Math.abs(v) < 100 ? 1 : 0);
+  const forecastDirection = forecast ? (forecast.trend > 0 ? 'up' : forecast.trend < 0 ? 'down' : 'stable') : null;
 
   return (
     <div className="live-chart">
@@ -295,8 +306,8 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
           statistics term. */}
       {trend && (
         <div className="live-chart__forecast-row">
-          <span className={`live-chart__forecast-trend live-chart__forecast-trend--${trend.direction === 'up' ? 'up' : trend.direction === 'down' ? 'down' : 'flat'}`}>
-            {trend.direction === 'up' ? '▲' : trend.direction === 'down' ? '▼' : '—'}
+          <span className={`live-chart__forecast-trend live-chart__forecast-trend--${directionClass(trend.direction)}`}>
+            {directionArrow(trend.direction)}
           </span>
           <span className="live-chart__forecast-text">{plainTrendText(trend)}</span>
         </div>
@@ -311,8 +322,8 @@ export default function LiveChart({ label, color, unit, points, warnHigh, alarmH
           className="live-chart__forecast-row"
           title={`Prediction range: ${decimals(forecast.lowerBound)} – ${decimals(forecast.upperBound)} ${unit}`}
         >
-          <span className={`live-chart__forecast-trend live-chart__forecast-trend--${forecast.trend > 0 ? 'up' : forecast.trend < 0 ? 'down' : 'flat'}`}>
-            {forecast.trend > 0 ? '▲' : forecast.trend < 0 ? '▼' : '—'}
+          <span className={`live-chart__forecast-trend live-chart__forecast-trend--${directionClass(forecastDirection)}`}>
+            {directionArrow(forecastDirection)}
           </span>
           <span className="live-chart__forecast-text">
             Expected next: {decimals(forecast.forecast)} <span className="live-chart__unit">{unit}</span>
