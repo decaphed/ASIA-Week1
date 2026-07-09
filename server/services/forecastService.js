@@ -35,10 +35,11 @@
 //
 // Two things drive the model:
 //   • every 15 minutes: a full re-fit against the last 200 processed rows
-//     (~3.3 hours) — a grid search over alpha/beta/phi picks the triple that
-//     minimises one-step-ahead MSE over that window, and level/trend are
-//     re-initialised from the window's first two values then advanced
-//     through the rest of the window with the winning alpha/beta/phi.
+//     (~3.3 hours) — a grid search over alpha/beta/phi (plus a no-trend
+//     alpha-only candidate, see simulateSES()) picks whichever minimises
+//     one-step-ahead MSE over that window, and level/trend are re-initialised
+//     from the window's first two values then advanced through the rest of
+//     the window with the winning parameters.
 //   • on every new processed record (once per minute, event-driven — see
 //     onNewProcessedRecord): a lightweight "forward slide" that advances
 //     level and trend by one ETS update using only that record (alpha/beta/
@@ -160,7 +161,44 @@ function simulate(series, alpha, beta, phi) {
   return { level, trend, residuals };
 }
 
-/** Grid search alpha/beta/phi over a chronological series, minimising MSE. */
+/**
+ * Run simple exponential smoothing (no trend term at all) over a
+ * chronological series with fixed alpha.
+ *
+ * Why this candidate exists: the simulated pump's "load" (see
+ * node-red/flow.json) is a mean-reverting random walk, not a persistently
+ * trending one. Damped trend (phi < 1) approximates mean-reversion by
+ * decaying whatever trend it last saw, but backtesting confirmed every one
+ * of the 6 metrics fits at least as well, and usually better, with no trend
+ * term at all rather than a decaying one.
+ *
+ * Represented with beta=0, phi=1, trend=0 (not a special "no-trend" shape)
+ * so it plugs into computeForecastEntry() and onNewProcessedRecord()'s
+ * forward-slide/regime-reset code unchanged: with trend pinned at 0 and
+ * beta=0, the shared trend-update formula (`beta*(newLevel-level) +
+ * (1-beta)*phi*trend`) always evaluates to 0, so trend simply never leaves
+ * zero.
+ * @returns { level, trend: 0, residuals }
+ */
+function simulateSES(series, alpha) {
+  let level = series[0];
+  const residuals = [];
+
+  for (let t = 1; t < series.length; t++) {
+    const actual = series[t];
+    residuals.push(actual - level);
+    level = alpha * actual + (1 - alpha) * level;
+  }
+
+  return { level, trend: 0, residuals };
+}
+
+/**
+ * Grid search alpha/beta/phi (damped-trend family) plus alpha-only
+ * (no-trend family) over a chronological series, minimising MSE across
+ * both families combined — see simulateSES() for why the no-trend family
+ * is in the running at all.
+ */
 function fitMetric(series) {
   let best = null;
 
@@ -173,6 +211,14 @@ function fitMetric(series) {
           best = { alpha, beta, phi, mse, ...result };
         }
       }
+    }
+  }
+
+  for (const alpha of ALPHAS) {
+    const result = simulateSES(series, alpha);
+    const mse = meanSquare(result.residuals);
+    if (mse < best.mse) {
+      best = { alpha, beta: 0, phi: 1, mse, ...result };
     }
   }
 
