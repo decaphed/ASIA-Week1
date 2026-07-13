@@ -30,8 +30,9 @@ export function round2(value) {
 /**
  * @param {object[]} window the full completed 60-sample audit window (every
  *   sample that arrived, physics-valid or not), in arrival order.
- * @param {object[]} statsWindow the physics-valid subset of `window` (never
- *   empty — see pipeline.js) — what cappedByMetric was computed from.
+ * @param {object[]} statsWindow same length as `window`, with physics-invalid
+ *   runs replaced by interpolated values (see missing.js::imputeInvalidRuns)
+ *   — what cappedByMetric was computed from.
  * @param {Record<string, number[]>} cappedByMetric outlier-capped series per
  *   metric, aligned with `statsWindow`.
  * @returns aggregate stats, status breakdown, sample count, and window bounds.

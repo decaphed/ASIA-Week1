@@ -24,6 +24,15 @@ const GAP_THRESHOLD_SECONDS = 1.5;
 // leave it as a genuine, uninterpolated gap instead of fabricating it.
 export const MAX_FILLABLE_GAP_SECONDS = 10;
 
+/** Linearly interpolate each of `metrics` between `from` and `to` at position `t` (0..1). */
+function interpolateMetrics(from, to, t, metrics) {
+  const out = {};
+  for (const metric of metrics) {
+    out[metric] = from[metric] + t * (to[metric] - from[metric]);
+  }
+  return out;
+}
+
 /**
  * @param {object[]} window a completed 60-sample window, in arrival order.
  * @returns {number} missingSampleCount — estimated number of ticks that never arrived.
@@ -63,15 +72,12 @@ export function generateFillSamples(lastSample, newSample, metrics) {
   const fills = [];
   for (let i = 1; i <= missingTicks; i++) {
     const t = i / (missingTicks + 1); // evenly spaced across the gap
-    const fill = {
+    fills.push({
       timestamp: new Date(lastMs + t * (newMs - lastMs)).toISOString(),
       status: lastSample.status, // categorical — carry forward, can't interpolate
       provenance: 'IMPUTED',
-    };
-    for (const metric of metrics) {
-      fill[metric] = lastSample[metric] + t * (newSample[metric] - lastSample[metric]);
-    }
-    fills.push(fill);
+      ...interpolateMetrics(lastSample, newSample, t, metrics),
+    });
   }
   return fills;
 }
@@ -107,28 +113,18 @@ export function imputeInvalidRuns(window, metrics) {
     const after = j < result.length ? result[j] : null;
     const runLength = j - i;
 
-    for (let k = 0; k < runLength; k++) {
-      const sample = result[i + k];
-      const filled = { ...sample, imputedForPhysics: true };
-
-      if (before && after) {
-        const t = (k + 1) / (runLength + 1);
-        for (const metric of metrics) {
-          filled[metric] = before[metric] + t * (after[metric] - before[metric]);
-        }
-      } else if (before) {
-        for (const metric of metrics) filled[metric] = before[metric];
-      } else if (after) {
-        for (const metric of metrics) filled[metric] = after[metric];
-      } else {
-        // No valid neighbor on either side (whole window invalid) — nothing
-        // to interpolate from; leave as-is, handled upstream by the
-        // all-invalid-window skip in pipeline.js.
-        i = j;
-        continue;
+    // Interpolate between whichever neighbors exist; with only one side
+    // available, t = 1 makes interpolateMetrics degenerate to a flat
+    // carry-forward/back from that side. With neither side available (whole
+    // window invalid), there's nothing to interpolate from — leave the run
+    // as-is, handled upstream by the all-invalid-window skip in pipeline.js.
+    if (before || after) {
+      const from = before ?? after;
+      const to = after ?? before;
+      for (let k = 0; k < runLength; k++) {
+        const t = before && after ? (k + 1) / (runLength + 1) : 1;
+        result[i + k] = { ...result[i + k], imputedForPhysics: true, ...interpolateMetrics(from, to, t, metrics) };
       }
-
-      result[i + k] = filled;
     }
 
     i = j;

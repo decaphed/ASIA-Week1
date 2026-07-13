@@ -64,11 +64,13 @@ function tallyViolationsByMetric(window) {
  * @param {number} args.missingCount from missing.js::detectMissing — RESIDUAL
  *   gaps only (ones too large to fill, see missing.js::MAX_FILLABLE_GAP_SECONDS).
  * @param {number} args.outlierCount total across all metrics, from outlier.js
- *   (evaluated only over the physics-valid subset — see pipeline.js).
+ *   (evaluated over statsWindow, which interpolates physics-invalid runs
+ *   rather than dropping them — see pipeline.js).
  * @param {number} args.metricCount number of metrics.
- * @param {number} args.evaluatedSampleCount size of the physics-valid subset
- *   Hampel filtering actually ran over (outlierRate's denominator) — may be
- *   smaller than window.length when some samples failed validation.
+ * @param {number} args.evaluatedSampleCount size of statsWindow Hampel
+ *   filtering actually ran over (outlierRate's denominator) — always equal to
+ *   window.length now, since invalid runs are interpolated in place rather
+ *   than filtered out.
  * @param {number} args.imputedSampleCount actual count of provenance==='IMPUTED'
  *   rows in `window` — an exact count now that gap-filling really happens,
  *   not an estimate.
