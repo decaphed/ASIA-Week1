@@ -73,7 +73,7 @@ function tallyViolationsByMetric(window) {
  *   rows in `window` — an exact count now that gap-filling really happens,
  *   not an estimate.
  */
-export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount }) {
+export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount, physicsImputedCount = 0 }) {
   const n = window.length;
   const physicsViolationCount = window.filter((sample) => sample.physicsValid === false).length;
   const violationsByMetric = tallyViolationsByMetric(window);
@@ -82,6 +82,7 @@ export function computeQuality({ window, missingCount, outlierCount, metricCount
   const outlierRate = outlierCount / (evaluatedSampleCount * metricCount);
   const physicsPassRate = 1 - physicsViolationCount / n;
   const imputationRate = imputedSampleCount / n;
+  const physicsImputationRate = physicsImputedCount / n;
 
   const qualityScore = round2(100 * (
     0.4 * (1 - missingRate) +
@@ -100,6 +101,8 @@ export function computeQuality({ window, missingCount, outlierCount, metricCount
     qualityLabel,
     imputedSampleCount,
     imputationRate: round2(imputationRate),
+    physicsImputedCount,
+    physicsImputationRate: round2(physicsImputationRate),
     isImputed: imputedSampleCount > 0,
   };
 }

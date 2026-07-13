@@ -68,6 +68,15 @@ if (!processedTelemetryColumns.includes('outliersByMetric')) {
   db.exec('ALTER TABLE processed_telemetry ADD COLUMN outliersByMetric TEXT');
 }
 
+// Same idempotent-migration need, for a data.db created before physics-invalid
+// runs were imputed (rather than dropped) into the stats window.
+if (!processedTelemetryColumns.includes('physicsImputedCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN physicsImputedCount INTEGER NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('physicsImputationRate')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN physicsImputationRate REAL NOT NULL DEFAULT 0');
+}
+
 logger.info(`SQLite ready at ${DB_PATH}`);
 
 /**

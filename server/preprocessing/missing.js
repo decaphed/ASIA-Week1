@@ -75,3 +75,64 @@ export function generateFillSamples(lastSample, newSample, metrics) {
   }
   return fills;
 }
+
+/**
+ * Replace runs of physics-invalid samples inside a completed window with
+ * linearly-interpolated values, the same way generateFillSamples reconstructs
+ * a genuine gap — except both endpoints are already in `window` here, so no
+ * streaming/lookahead is needed. The raw invalid values are never mutated
+ * (they're already stored for audit before this runs); this only affects the
+ * copy used for stats/forecast/trend.
+ *
+ * @param {object[]} window completed AUDIT window, in arrival order.
+ * @param {string[]} metrics numeric metric names to interpolate.
+ * @returns {object[]} same length as window; invalid runs replaced with
+ *   samples flagged imputedForPhysics: true, everything else untouched.
+ */
+export function imputeInvalidRuns(window, metrics) {
+  const result = window.slice();
+  let i = 0;
+
+  while (i < result.length) {
+    if (result[i].physicsValid !== false) {
+      i++;
+      continue;
+    }
+
+    let j = i;
+    while (j < result.length && result[j].physicsValid === false) j++;
+    // Invalid run is [i, j).
+
+    const before = i > 0 ? result[i - 1] : null;
+    const after = j < result.length ? result[j] : null;
+    const runLength = j - i;
+
+    for (let k = 0; k < runLength; k++) {
+      const sample = result[i + k];
+      const filled = { ...sample, imputedForPhysics: true };
+
+      if (before && after) {
+        const t = (k + 1) / (runLength + 1);
+        for (const metric of metrics) {
+          filled[metric] = before[metric] + t * (after[metric] - before[metric]);
+        }
+      } else if (before) {
+        for (const metric of metrics) filled[metric] = before[metric];
+      } else if (after) {
+        for (const metric of metrics) filled[metric] = after[metric];
+      } else {
+        // No valid neighbor on either side (whole window invalid) — nothing
+        // to interpolate from; leave as-is, handled upstream by the
+        // all-invalid-window skip in pipeline.js.
+        i = j;
+        continue;
+      }
+
+      result[i + k] = filled;
+    }
+
+    i = j;
+  }
+
+  return result;
+}

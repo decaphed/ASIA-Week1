@@ -15,9 +15,15 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
 import { logger } from './utils/logger.js';
+import { assertRangeConsistency } from './utils/rangeConsistency.js';
 import { startForecastLoop } from './services/forecastService.js';
 import { startDriftLoop } from './services/driftService.js';
 import { startTrendLoop } from './services/trendService.js';
+
+// Fail fast, before accepting any traffic, if the three hand-maintained
+// range tables (RANGES / OPERATING_RANGE / THRESHOLDS) have drifted out of
+// their required nesting — see rangeConsistency.js for why.
+assertRangeConsistency();
 
 const PORT = process.env.PORT || 3000;
 const app = createApp();

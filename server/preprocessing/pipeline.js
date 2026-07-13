@@ -21,7 +21,7 @@
 
 import { validatePhysics } from './validator.js';
 import { pushSample, isWindowComplete, getWindow, resetBuffer, getLastSample, WINDOW_SIZE } from './buffer.js';
-import { detectMissing, generateFillSamples } from './missing.js';
+import { detectMissing, generateFillSamples, imputeInvalidRuns } from './missing.js';
 import { hampelCap } from './outlier.js';
 import { aggregateWindow } from './aggregation.js';
 import { computeQuality } from './quality.js';
@@ -68,9 +68,10 @@ function ingestSample(rawSample, provenance) {
     const missingCount = detectMissing(window);
     const imputedSampleCount = window.filter((s) => s.provenance === 'IMPUTED').length;
 
-    // Physics-invalid samples are still stored/counted (see quality.js) but
-    // must not influence the Hampel baseline, aggregate stats, forecasting,
-    // drift, or the dashboard.
+    // Physics-invalid samples are still stored/counted (see quality.js).
+    // validWindow itself is only used below to detect the all-invalid-window
+    // case; for stats/forecast/trend, invalid runs get interpolated instead
+    // of dropped (see statsWindow below), so they don't leave a hole.
     const validWindow = window.filter((s) => s.physicsValid !== false);
 
     // Total failure — every sample in the window failed validation (e.g. a
@@ -87,7 +88,12 @@ function ingestSample(rawSample, provenance) {
       return savedReading;
     }
 
-    const statsWindow = validWindow;
+    // Physics-invalid runs get interpolated (same math as a gap-fill) rather
+    // than dropped, so a sensor glitch doesn't leave a hole or a step-change
+    // in the series forecast/trend consume. The raw invalid values already
+    // stored above are untouched; only this stats-facing copy is smoothed.
+    const statsWindow = imputeInvalidRuns(window, METRICS);
+    const physicsImputedCount = statsWindow.filter((s) => s.imputedForPhysics === true).length;
 
     // 7. Hampel-filter outliers, per metric — evaluated over statsWindow only.
     const cappedByMetric = {};
@@ -112,6 +118,7 @@ function ingestSample(rawSample, provenance) {
       metricCount: METRICS.length,
       evaluatedSampleCount: statsWindow.length,
       imputedSampleCount,
+      physicsImputedCount,
     });
 
     const processedRecord = {
@@ -126,12 +133,14 @@ function ingestSample(rawSample, provenance) {
       expectedSampleCount: WINDOW_SIZE,
       missingSampleCount: missingCount,
       imputedSampleCount: quality.imputedSampleCount,
+      physicsImputedCount: quality.physicsImputedCount,
       outlierCount,
       outliersByMetric,
       physicsViolationCount: quality.physicsViolationCount,
       violationsByMetric: quality.violationsByMetric,
       missingRate: quality.missingRate,
       imputationRate: quality.imputationRate,
+      physicsImputationRate: quality.physicsImputationRate,
       outlierRate: quality.outlierRate,
       physicsPassRate: quality.physicsPassRate,
       qualityScore: quality.qualityScore,

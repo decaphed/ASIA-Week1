@@ -43,14 +43,15 @@ function rowToProcessed(row) {
     faultSeconds: row.faultSeconds,
     stoppedSeconds: row.stoppedSeconds,
     sampleCount: row.sampleCount,
-    // How many of sampleCount actually backed the mean/median/etc — derived,
-    // not a stored column. Physics-invalid samples are excluded from the
-    // aggregate stats (see preprocessing/pipeline.js), so a window with many
-    // violations can produce a mean from far fewer samples than sampleCount
-    // suggests; this makes that visible instead of leaving it implicit in
-    // physicsViolationCount. A window where every sample fails validation is
-    // skipped entirely (no row is ever stored for it), so this is always
-    // accurate — never the "all samples invalid" edge case.
+    // How many of sampleCount were genuine measurements, not derived from an
+    // interpolated physics-invalid run — derived, not a stored column.
+    // Physics-invalid runs are now interpolated INTO the aggregate stats
+    // (see preprocessing/missing.js::imputeInvalidRuns) rather than excluded,
+    // so sampleCount itself already reflects the full window; this just makes
+    // visible how many of those samples were reconstructed rather than
+    // measured. A window where every sample fails validation is skipped
+    // entirely (no row is ever stored for it), so this is always accurate —
+    // never the "all samples invalid" edge case.
     validSampleCount: row.sampleCount - row.physicsViolationCount,
     expectedSampleCount: row.expectedSampleCount,
     missingSampleCount: row.missingSampleCount,
@@ -63,10 +64,14 @@ function rowToProcessed(row) {
     // Per-metric + cross-variable tally (see preprocessing/quality.js). Can
     // be null for rows written before this column existed.
     violationsByMetric: row.violationsByMetric ? JSON.parse(row.violationsByMetric) : null,
+    // Physics-invalid samples that were interpolated into the stats window
+    // (see preprocessing/missing.js::imputeInvalidRuns) rather than dropped.
+    physicsImputedCount: row.physicsImputedCount,
     missingRate: row.missingRate,
     imputationRate: row.imputationRate,
     outlierRate: row.outlierRate,
     physicsPassRate: row.physicsPassRate,
+    physicsImputationRate: row.physicsImputationRate,
     qualityScore: row.qualityScore,
     qualityLabel: row.qualityLabel,
     isImputed: !!row.isImputed,

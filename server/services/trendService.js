@@ -77,7 +77,7 @@ const EXIT_FACTOR = 0.8; // hysteresis: must drop 20% below a bucket's enter thr
 // min/max. Kept as a plain local table (same "ported, not shared" approach
 // preprocessing/validator.js documents for RANGES) since client and server
 // don't share a module boundary.
-const OPERATING_RANGE = {
+export const OPERATING_RANGE = {
   flowRate: { min: 50, max: 300 },
   rpm: { min: 1000, max: 3600 },
   vibration: { min: 0.5, max: 12 },
