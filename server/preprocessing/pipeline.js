@@ -23,6 +23,7 @@ import { validatePhysics } from './validator.js';
 import { pushSample, isWindowComplete, getWindow, resetBuffer, getLastSample, WINDOW_SIZE } from './buffer.js';
 import { detectMissing, generateFillSamples, imputeInvalidRuns } from './missing.js';
 import { hampelCap } from './outlier.js';
+import { computePrecapFeatures } from './precapFeatures.js';
 import { aggregateWindow } from './aggregation.js';
 import { computeQuality } from './quality.js';
 import { METRICS } from '../services/forecastService.js';
@@ -96,8 +97,12 @@ function ingestSample(rawSample, provenance) {
     const physicsImputedCount = statsWindow.filter((s) => s.imputedForPhysics === true).length;
 
     // 7. Hampel-filter outliers, per metric — evaluated over statsWindow only.
+    // Pre-cap features are captured from the SAME `raw` array, before
+    // hampelCap smooths it, so the spike/rapid-change signal hampelCap
+    // discards is preserved rather than lost.
     const cappedByMetric = {};
     const outliersByMetric = {};
+    const precapFeaturesByMetric = {};
     let outlierCount = 0;
     for (const metric of METRICS) {
       const raw = statsWindow.map((s) => s[metric]);
@@ -105,6 +110,7 @@ function ingestSample(rawSample, provenance) {
       cappedByMetric[metric] = capped;
       outliersByMetric[metric] = metricOutliers;
       outlierCount += metricOutliers;
+      precapFeaturesByMetric[metric] = computePrecapFeatures(raw);
     }
 
     // 8. One-minute aggregation.
@@ -136,6 +142,7 @@ function ingestSample(rawSample, provenance) {
       physicsImputedCount: quality.physicsImputedCount,
       outlierCount,
       outliersByMetric,
+      precapFeaturesByMetric,
       physicsViolationCount: quality.physicsViolationCount,
       violationsByMetric: quality.violationsByMetric,
       missingRate: quality.missingRate,

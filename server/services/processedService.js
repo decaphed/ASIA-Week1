@@ -60,6 +60,10 @@ function rowToProcessed(row) {
     // Per-metric Hampel-capped outlier count (see preprocessing/pipeline.js).
     // Can be null for rows written before this column existed.
     outliersByMetric: row.outliersByMetric ? JSON.parse(row.outliersByMetric) : null,
+    // Per-metric rawStdDev/rawRateOfChange/rawMaxExcursion computed BEFORE
+    // Hampel capping (see preprocessing/precapFeatures.js). Can be null for
+    // rows written before this column existed.
+    precapFeaturesByMetric: row.precapFeaturesByMetric ? JSON.parse(row.precapFeaturesByMetric) : null,
     physicsViolationCount: row.physicsViolationCount,
     // Per-metric + cross-variable tally (see preprocessing/quality.js). Can
     // be null for rows written before this column existed.
@@ -90,6 +94,7 @@ export function saveProcessedReading(data) {
     // the literal string "undefined" instead of a valid JSON object.
     outliersByMetric: JSON.stringify(data.outliersByMetric ?? {}),
     violationsByMetric: JSON.stringify(data.violationsByMetric ?? {}),
+    precapFeaturesByMetric: JSON.stringify(data.precapFeaturesByMetric ?? {}),
   };
   const info = model.insertProcessed(record);
   return rowToProcessed({ id: Number(info.lastInsertRowid), ...record });

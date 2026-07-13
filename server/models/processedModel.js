@@ -16,7 +16,7 @@ const insertStmt = db.prepare(`
     (windowStart, windowEnd, timestamp,
      ${METRIC_COLUMNS.join(', ')},
      dominantStatus, runningSeconds, faultSeconds, stoppedSeconds,
-     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount,
+     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric,
      missingRate, imputationRate, outlierRate, physicsPassRate, physicsImputationRate,
      qualityScore, qualityLabel, isImputed,
      preprocessingVersion, preprocessingTimestamp)
@@ -24,7 +24,7 @@ const insertStmt = db.prepare(`
     (@windowStart, @windowEnd, @timestamp,
      ${METRIC_COLUMNS.map((c) => `@${c}`).join(', ')},
      @dominantStatus, @runningSeconds, @faultSeconds, @stoppedSeconds,
-     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount,
+     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric,
      @missingRate, @imputationRate, @outlierRate, @physicsPassRate, @physicsImputationRate,
      @qualityScore, @qualityLabel, @isImputed,
      @preprocessingVersion, @preprocessingTimestamp)
