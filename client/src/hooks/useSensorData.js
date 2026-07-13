@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { usePolling } from './usePolling.js';
-import { getLive, getHistory, getStats, getHealth, getForecast, getDrift, getTrend, getProcessedLive, getSeries, getSummary } from '../services/api.js';
+import { getLive, getHistory, getStats, getHealth, getForecast, getDrift, getTrend, getProcessedLive, getProcessedHistory, getSeries, getSummary } from '../services/api.js';
 import { POLL_INTERVALS } from '../utils/constants.js';
 
 /** Latest reading — polled every second to drive cards + charts. */
@@ -51,6 +51,13 @@ export function useTrend(intervalMs = POLL_INTERVALS.trend, enabled = true) {
 /** Latest one-minute processed aggregate (quality/imputation) — polled every 15s (the model itself only updates every 60s). */
 export function useProcessedLive(intervalMs = POLL_INTERVALS.processed) {
   return usePolling(getProcessedLive, intervalMs);
+}
+
+/** Recent one-minute processed aggregates — polled every 15s (the model itself only updates
+ *  every 60s). Drives the Analytics "Live" chart line. Pass enabled=false to pause the poll
+ *  while a historical range is shown instead. */
+export function useProcessedHistory(limit, intervalMs = POLL_INTERVALS.processed, enabled = true) {
+  return usePolling(() => getProcessedHistory({ page: 1, limit, sort: 'desc' }), intervalMs, { enabled });
 }
 
 /**

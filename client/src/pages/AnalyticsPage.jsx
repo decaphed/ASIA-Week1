@@ -2,22 +2,43 @@
 // AnalyticsPage.jsx — trend charts grouped by subsystem (hydraulic /
 // mechanical) with per-metric forecast and trend classification.
 //
-// Headline feature: a range selector (Live · 1h · 8h · 24h · 7d). "Live" is
-// the original per-second in-memory buffer with its short-horizon forecast +
-// trend rows. Any historical range instead pulls bucketed averages from
-// /api/history/series and hides the forecast/trend rows — those describe the
-// live model, not what already happened, so showing them over history would
-// be dishonest.
+// Headline feature: a range selector (Live · 1h · 8h · 24h · 7d). "Live"
+// plots the processed_telemetry 1-minute means (same cleaned, aggregated
+// data trendService/forecastService read from) with its short-horizon
+// forecast + trend rows still attached. An earlier version plotted the raw
+// per-second feed instead, then tried overlaying processed as a second
+// stepped line on top of it — both were dropped: raw updates were too noisy
+// to read at a glance, and the stepped overlay looked broken (flat, then a
+// sudden drop, then flat again) rather than like a real trend line. Any
+// historical range instead pulls bucketed averages from /api/history/series
+// and hides the forecast/trend rows — those describe the live model, not
+// what already happened, so showing them over history would be dishonest.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from 'react';
-import { useForecast, useTrend, useSeries } from '../hooks/useSensorData.js';
+import { useForecast, useTrend, useSeries, useProcessedHistory } from '../hooks/useSensorData.js';
 import LiveChart from '../components/charts/LiveChart.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import { SENSORS, POLL_INTERVALS } from '../utils/constants.js';
 import { formatClock, formatDayTime, describeBucket } from '../utils/formatters.js';
 
 const SENSOR_MAP = Object.fromEntries(SENSORS.map((s) => [s.key, s]));
+
+// 30 processed rows = last 30 minutes at ~1 row/min. Enough for a readable
+// line without pulling in so much history it stops feeling "live".
+const PROCESSED_LIVE_LIMIT = 30;
+
+// Turn /api/processed rows (newest-first, nested `metrics.<key>.mean`) into
+// LiveChart's per-metric [{ t, v }] shape, oldest-first for left-to-right
+// plotting.
+function buildLiveSeriesFromProcessed(rows) {
+  const ascending = (rows || []).slice().sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  const out = {};
+  for (const sensor of SENSORS) {
+    out[sensor.key] = ascending.map((row) => ({ t: formatClock(row.timestamp), v: row.metrics[sensor.key].mean }));
+  }
+  return out;
+}
 
 const HYDRAULIC_CHARTS = [
   { key: 'flowRate',          color: '#00b4d8' },
@@ -153,7 +174,7 @@ function RangeSelector({ range, onSelect, hint }) {
   );
 }
 
-export default function AnalyticsPage({ series }) {
+export default function AnalyticsPage() {
   const [range, setRange] = useState('live');
   const isLive = range === 'live';
 
@@ -161,21 +182,26 @@ export default function AnalyticsPage({ series }) {
   // past — pause their polls entirely while a historical range is shown.
   const { data: forecast } = useForecast(POLL_INTERVALS.forecast, isLive);
   const { data: trend } = useTrend(POLL_INTERVALS.trend, isLive);
+  // Chart line source for Live mode — paused while a historical range is shown.
+  const { data: processedHistory, loading: processedLoading } = useProcessedHistory(PROCESSED_LIVE_LIMIT, POLL_INTERVALS.processed, isLive);
   // Only fetches when a non-live range is selected (null pauses the poll);
   // `range` is the poll key, so switching refetches and drops stale responses.
   const { data: history, loading: historyLoading } = useSeries(isLive ? null : range);
 
   // Memoized: this page re-renders on every poll tick, but the mapped series
-  // only changes when a new history payload (or range) arrives.
+  // only changes when a new payload (or range/mode) arrives.
+  const liveSeries = useMemo(
+    () => buildLiveSeriesFromProcessed(processedHistory?.data),
+    [processedHistory],
+  );
   const historicalSeries = useMemo(
     () => buildSeriesFromPoints(history?.points, range),
     [history, range],
   );
-  const points = history?.points ?? [];
-  const chartSeries = isLive ? series : historicalSeries;
+  const chartSeries = isLive ? liveSeries : historicalSeries;
 
   const hint = isLive
-    ? 'Live feed · one point every second'
+    ? 'Live feed · 1-minute averages · last 30 min'
     : history
       ? describeBucket(history.bucketSeconds)
       : 'Loading…';
@@ -183,11 +209,13 @@ export default function AnalyticsPage({ series }) {
   const chartForecast = isLive ? forecast : null;
   const chartTrend = isLive ? trend : null;
 
-  // While a NEW range is loading, show the spinner rather than the previous
-  // range's data under the new label — a mislabeled chart is worse than a
-  // brief wait.
-  const historyPending = !isLive && historyLoading;
-  const historyEmpty = !isLive && !historyLoading && points.length === 0;
+  // While data for the current mode/range is loading, show the spinner
+  // rather than the previous mode's data under the new label — a mislabeled
+  // chart is worse than a brief wait.
+  const pending = isLive ? (processedLoading && !processedHistory) : historyLoading;
+  const empty = isLive
+    ? !processedLoading && (processedHistory?.data?.length ?? 0) === 0
+    : !historyLoading && (history?.points?.length ?? 0) === 0;
 
   return (
     <div className="dashboard" id="analytics">
@@ -195,12 +223,14 @@ export default function AnalyticsPage({ series }) {
 
       {isLive && <TrendSummary trend={trend} />}
 
-      {historyPending ? (
+      {pending ? (
         <div className="dashboard__empty">
-          <Spinner label="Loading historical trend…" />
+          <Spinner label={isLive ? 'Loading live trend…' : 'Loading historical trend…'} />
         </div>
-      ) : historyEmpty ? (
-        <div className="dashboard__empty">No data recorded in this period yet.</div>
+      ) : empty ? (
+        <div className="dashboard__empty">
+          {isLive ? 'No processed data yet — check back in a minute.' : 'No data recorded in this period yet.'}
+        </div>
       ) : (
         <>
           <ChartGroup

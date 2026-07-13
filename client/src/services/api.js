@@ -72,6 +72,12 @@ export async function getProcessedLive() {
   return res.data.data;
 }
 
+/** GET /api/processed?page&limit&sort → { page, limit, total, totalPages, data: [...] } — 1-minute aggregates. */
+export async function getProcessedHistory({ page = 1, limit = 100, sort = 'desc' } = {}) {
+  const res = await client.get('/processed', { params: { page, limit, sort } });
+  return res.data;
+}
+
 /** GET /api/history/series?range → { range, bucketSeconds, points: [...] } — bucketed historical trend. */
 export async function getSeries(range) {
   const res = await client.get('/history/series', { params: { range } });
