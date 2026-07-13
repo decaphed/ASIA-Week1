@@ -29,6 +29,7 @@ function rowToReading(row) {
     dischargePressure: row.dischargePressure,
     motorTemp: row.motorTemp,
     status: row.status,
+    faultType: row.faultType ?? null,
     timestamp: row.timestamp,
     provenance: row.provenance,
     physicsValid: !!row.physicsValid,
@@ -57,6 +58,7 @@ export function saveReading(data) {
     dischargePressure: data.dischargePressure,
     motorTemp: data.motorTemp,
     status: data.status || 'RUNNING',
+    faultType: data.faultType ?? null,
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
     timestamp: data.timestamp || new Date().toISOString(),
     provenance: data.provenance || 'MEASURED',

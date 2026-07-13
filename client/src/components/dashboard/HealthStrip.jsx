@@ -16,6 +16,11 @@ import { formatNumber, secondsSince } from '../../utils/formatters.js';
 
 const GAUGE_CIRCUMFERENCE = 113; // 2 * PI * r18, matches the r=18 gauge below
 
+// Human-readable labels for the simulator's fault signatures (see
+// node-red/flow.json's FAULT_PROFILES) — each pairs with a distinct,
+// dominant metric so "Thermal" reliably means motorTemp is the one spiking.
+const FAULT_LABELS = { THERMAL: 'Thermal', CAVITATION: 'Cavitation', BEARING: 'Bearing' };
+
 function HealthGauge({ score, color }) {
   const dashoffset = score == null ? GAUGE_CIRCUMFERENCE : GAUGE_CIRCUMFERENCE * (1 - score / 100);
   return (
@@ -84,7 +89,11 @@ export default function HealthStrip({ reading, summary }) {
           {reading?.status ?? '—'}
         </span>
         <span className="health-tile__sub">
-          {!hasReading ? 'Awaiting data' : statusFault ? 'Auto-trip engaged' : 'Auto mode · nominal'}
+          {!hasReading
+            ? 'Awaiting data'
+            : statusFault
+              ? (reading?.faultType ? `Auto-trip · ${FAULT_LABELS[reading.faultType] ?? reading.faultType}` : 'Auto-trip engaged')
+              : 'Auto mode · nominal'}
         </span>
       </Tile>
 

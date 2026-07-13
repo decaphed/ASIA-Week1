@@ -18,10 +18,10 @@ import db from '../database/db.js';
 // object passed to .run({...}). Returns info incl. lastInsertRowid.
 const insertStmt = db.prepare(`
   INSERT INTO raw_telemetry
-    (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, timestamp,
+    (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, faultType, timestamp,
      provenance, physicsValid, physicsViolations)
   VALUES
-    (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @timestamp,
+    (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @faultType, @timestamp,
      @provenance, @physicsValid, @physicsViolations)
 `);
 

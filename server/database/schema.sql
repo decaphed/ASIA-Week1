@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS raw_telemetry (
   -- Run state as a short text enum: 'RUNNING' | 'STOPPED' | 'FAULT'.
   status             TEXT NOT NULL DEFAULT 'STOPPED',
 
+  -- Failure signature, only set while status = 'FAULT': 'THERMAL' |
+  -- 'CAVITATION' | 'BEARING' (see node-red/flow.json's FAULT_PROFILES).
+  -- NULL for RUNNING/STOPPED rows.
+  faultType          TEXT,
+
   -- ISO-8601 timestamp of the reading (e.g. 2026-07-05T10:00:00.000Z). Stored
   -- as TEXT because SQLite has no dedicated date type; ISO strings sort
   -- chronologically as plain text, which is exactly what we want.
@@ -90,6 +95,7 @@ CREATE TABLE IF NOT EXISTS processed_telemetry (
   physicsViolationCount   INTEGER NOT NULL DEFAULT 0,
   violationsByMetric      TEXT,                        -- JSON object: per-metric + cross-variable violation tally (see preprocessing/quality.js)
   physicsImputedCount     INTEGER NOT NULL DEFAULT 0,   -- physics-invalid samples interpolated into the stats window (see preprocessing/missing.js::imputeInvalidRuns)
+  precapFeaturesByMetric  TEXT,                        -- JSON object: per-metric rawStdDev/rawRateOfChange/rawMaxExcursion computed BEFORE Hampel capping (see preprocessing/precapFeatures.js)
 
   -- Rates derived from the counters above (0..1), stored pre-computed so the
   -- dashboard/quality panel never has to recompute them client-side.

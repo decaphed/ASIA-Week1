@@ -26,6 +26,7 @@ export const RANGES = {
 
 const NUMERIC_FIELDS = Object.keys(RANGES);
 const VALID_STATUSES = ['RUNNING', 'STOPPED', 'FAULT'];
+export const VALID_FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING'];
 
 /**
  * Validate a reading body.
@@ -54,6 +55,12 @@ export function validateReading(body) {
   // status is optional; if present it must be one of the known run states.
   if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     errors.push(`status must be one of: ${VALID_STATUSES.join(', ')}`);
+  }
+
+  // faultType is optional (only meaningful when status === 'FAULT') and, if
+  // present and non-null, must be one of the known failure signatures.
+  if (body.faultType !== undefined && body.faultType !== null && !VALID_FAULT_TYPES.includes(body.faultType)) {
+    errors.push(`faultType must be one of: ${VALID_FAULT_TYPES.join(', ')}`);
   }
 
   // timestamp is optional; if present it must be a parseable date string.

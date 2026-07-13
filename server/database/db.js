@@ -49,6 +49,9 @@ const rawTelemetryColumns = db.prepare('PRAGMA table_info(raw_telemetry)').all()
 if (!rawTelemetryColumns.includes('provenance')) {
   db.exec("ALTER TABLE raw_telemetry ADD COLUMN provenance TEXT NOT NULL DEFAULT 'MEASURED'");
 }
+if (!rawTelemetryColumns.includes('faultType')) {
+  db.exec('ALTER TABLE raw_telemetry ADD COLUMN faultType TEXT');
+}
 if (rawTelemetryColumns.includes('isSynthetic')) {
   try {
     db.exec('ALTER TABLE raw_telemetry DROP COLUMN isSynthetic');
@@ -75,6 +78,12 @@ if (!processedTelemetryColumns.includes('physicsImputedCount')) {
 }
 if (!processedTelemetryColumns.includes('physicsImputationRate')) {
   db.exec('ALTER TABLE processed_telemetry ADD COLUMN physicsImputationRate REAL NOT NULL DEFAULT 0');
+}
+
+// Same idempotent-migration need, for a data.db created before pre-cap
+// (pre-Hampel-cap) per-metric features were captured.
+if (!processedTelemetryColumns.includes('precapFeaturesByMetric')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN precapFeaturesByMetric TEXT');
 }
 
 logger.info(`SQLite ready at ${DB_PATH}`);
