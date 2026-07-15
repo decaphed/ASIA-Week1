@@ -18,6 +18,7 @@
 import { useMemo, useState } from 'react';
 import { useForecast, useTrend, useSeries, useProcessedHistory } from '../hooks/useSensorData.js';
 import LiveChart from '../components/charts/LiveChart.jsx';
+import MetricSummaryStrip from '../components/dashboard/MetricSummaryStrip.jsx';
 import Spinner from '../components/ui/Spinner.jsx';
 import { SENSORS, POLL_INTERVALS } from '../utils/constants.js';
 import { formatClock, formatDayTime, describeBucket } from '../utils/formatters.js';
@@ -222,6 +223,8 @@ export default function AnalyticsPage() {
       <RangeSelector range={range} onSelect={setRange} hint={hint} />
 
       {isLive && <TrendSummary trend={trend} />}
+
+      {!pending && !empty && <MetricSummaryStrip series={chartSeries} />}
 
       {pending ? (
         <div className="dashboard__empty">
