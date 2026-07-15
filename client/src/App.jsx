@@ -70,7 +70,7 @@ export default function App() {
   return (
     <div className="app">
       <div className={`app-ambient app-ambient--${ambientTone}`} aria-hidden="true" />
-      <Sidebar route={route} />
+      <Sidebar route={route} health={health} healthError={healthError} />
       <div className="app__main">
         <Topbar
           health={health}

@@ -4,10 +4,12 @@
 //     from the current route instead of being hardcoded.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { Signal, Server, Database } from 'lucide-react';
 import {
   DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReportsNavIcon,
 } from '../ui/Icons.jsx';
 import { PUMP_ID } from '../../utils/constants.js';
+import { computeServiceStatus } from '../../utils/health.js';
 
 // Telemetry was retired as a destination: its KPI cards moved to Overview
 // (the at-a-glance layer management wants on landing) and its manual test
@@ -21,7 +23,15 @@ const NAV_ITEMS = [
   { label: 'Reports',     Icon: ReportsNavIcon,   route: 'reports' },
 ];
 
-export default function Sidebar({ route }) {
+const STATUS_ITEMS = [
+  { key: 'backend', label: 'API', Icon: Signal },
+  { key: 'nodeRed', label: 'Network', Icon: Server },
+  { key: 'database', label: 'Data Feed', Icon: Database },
+];
+
+export default function Sidebar({ route, health, healthError }) {
+  const serviceStatus = computeServiceStatus(health, healthError);
+
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
@@ -56,6 +66,22 @@ export default function Sidebar({ route }) {
           );
         })}
       </nav>
+
+      <div className="sidebar__section-label">System Status</div>
+      <div className="sidebar__status" aria-live="polite">
+        {STATUS_ITEMS.map(({ key, label, Icon }) => (
+          <div key={key} className="sidebar__status-row">
+            <span className="sidebar__status-label">
+              <Icon width={12} height={12} /> {label}
+            </span>
+            <span
+              className={`sidebar__status-dot sidebar__status-dot--${serviceStatus[key]}`}
+              role="status"
+              aria-label={`${label}: ${serviceStatus[key]}`}
+            />
+          </div>
+        ))}
+      </div>
 
       <div className="sidebar__footer">
         <div className="sidebar__footer-dot" aria-hidden="true" />
