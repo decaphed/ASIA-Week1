@@ -48,8 +48,12 @@ import * as model from '../models/forecastModel.js';
 import { METRICS } from './forecastService.js';
 import { logger } from '../utils/logger.js';
 
-const RECENT_WINDOW_ROWS = 15;     // "right now" — last ~15 minutes of RUNNING data
-const REFERENCE_WINDOW_ROWS = 120; // "normal" — the ~2 hours of RUNNING data before that
+// Exported (not just module-local) so historicalFeatures.js can replay this
+// exact z-test causally over stored history — see that module's header for
+// why the fault-prediction training set needs a byte-identical drift feature
+// rather than a re-derived approximation.
+export const RECENT_WINDOW_ROWS = 15;     // "right now" — last ~15 minutes of RUNNING data
+export const REFERENCE_WINDOW_ROWS = 120; // "normal" — the ~2 hours of RUNNING data before that
 const MIN_ROWS_FOR_DETECTION = RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS;
 const Z_THRESHOLD = 3; // standard errors from the reference mean
 
@@ -109,10 +113,18 @@ function stdDev(values, avg) {
  * @returns the drift entry for that metric, or null if there isn't yet
  *   enough RUNNING history to compare against.
  */
-function classify(metric, series) {
+export function classify(metric, series) {
   const recent = series.slice(-RECENT_WINDOW_ROWS);
   const reference = series.slice(-(RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS), -RECENT_WINDOW_ROWS);
   if (reference.length < REFERENCE_WINDOW_ROWS) return null;
+
+  // A single non-finite value poisons referenceMean/recentMean/z to NaN.
+  // Math.abs(NaN) > Z_THRESHOLD is false, so isSignificant would silently
+  // become false and direction would default to 'stable' — read as a
+  // confident "confirmed no drift" rather than "couldn't compute". Report
+  // null (same as "not enough data") instead of a misleadingly confident
+  // answer built on bad data.
+  if (!recent.every(Number.isFinite) || !reference.every(Number.isFinite)) return null;
 
   const referenceMean = mean(reference);
   const referenceStd = stdDev(reference, referenceMean);

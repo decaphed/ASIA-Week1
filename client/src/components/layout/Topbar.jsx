@@ -1,20 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Topbar.jsx — system header with pump ID, connection status, clock.
 // v4: adds the V2 spec's notification bell (active alarm/warn count) and
-//     operator avatar; status pills renamed to match the spec (Server /
-//     Node-RED / SQLite) and now share computeServiceStatus with the
-//     System Health panel instead of duplicating the derivation.
+//     operator avatar. The System/Sensor Feed/Data Storage status pills
+//     were removed from here — that status is still shown in the Sidebar's
+//     system-status section, so this bar no longer duplicates it.
 // ─────────────────────────────────────────────────────────────────────────
 
 import Clock from './Clock.jsx';
-import StatusIndicator from './StatusIndicator.jsx';
-import { computeServiceStatus } from '../../utils/health.js';
 import { PUMP_ID, PUMP_AREA } from '../../utils/constants.js';
 import { AlarmIcon, SunIcon, MoonIcon } from '../ui/Icons.jsx';
 
-export default function Topbar({ health, healthError, alarms = 0, warns = 0, theme = 'dark', onToggleTheme }) {
-  const { backend, database, nodeRed } = computeServiceStatus(health, healthError);
-
+export default function Topbar({ alarms = 0, warns = 0, theme = 'dark', onToggleTheme }) {
   // Honest severity on the bell: show the critical count in danger styling
   // when there are alarms, otherwise the caution count, otherwise a quiet 0.
   const badgeSeverity = alarms > 0 ? 'alarm' : warns > 0 ? 'warn' : 'none';
@@ -31,14 +27,6 @@ export default function Topbar({ health, healthError, alarms = 0, warns = 0, the
           <h1>Industrial Pump Monitor</h1>
           <p>{PUMP_AREA}</p>
         </div>
-      </div>
-
-      <div className="topbar__status">
-        {/* Plain names for the exec audience; the vendor/tech names live in
-            the hover tooltips for engineers. */}
-        <StatusIndicator label="System"       status={backend}  title="Express backend" />
-        <StatusIndicator label="Sensor Feed"  status={nodeRed}  title="Node-RED ingestion flow" />
-        <StatusIndicator label="Data Storage" status={database} title="SQLite database" />
       </div>
 
       <button

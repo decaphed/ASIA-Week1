@@ -290,6 +290,27 @@ function classify(metric, minutes, series) {
   }
   h.prevCandidate = candidate;
 
+  // classify() only runs once MIN_ROWS_FOR_TREND is already met (see
+  // runTrendCheck), so if h.published is still null here it's not "no data"
+  // — it's "enough data, but no direction has ever been confirmed" (still
+  // warming up, or genuinely oscillating so no two consecutive candidates
+  // ever agree). getTrend() would otherwise return null for both cases,
+  // making them indistinguishable to any consumer (dashboard or a future
+  // fault-prediction feature). direction stays 'stable' so existing
+  // up/down/stable-only rendering still degrades sensibly; the 'Fluctuating'
+  // label is what actually marks this as the unconfirmed case.
+  if (h.published === null) {
+    return {
+      direction: 'stable',
+      magnitude: null,
+      label: 'Fluctuating',
+      slopePerMin: candidate.slopePerMin,
+      rangePct: candidate.rangePct,
+      z: candidate.z,
+      significant: candidate.significant,
+    };
+  }
+
   return h.published;
 }
 

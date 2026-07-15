@@ -48,6 +48,8 @@ This number is the single metric that decides whether it's time to move to model
 | 2026-07-13 (session start) | 909 | 23 |
 | 2026-07-13 (after Phase 1 deploy) | 957 | 24 |
 | 2026-07-13 (session end) | ~965 | 25 |
+| 2026-07-15 (session start) | 2,757 | 95 |
+| 2026-07-15 (after historical-feature backfill, same session) | 2,787 | 99 |
 
 Target before any model training is attempted: **~100-200 episodes.**
 
@@ -148,6 +150,49 @@ reconciliation, zero behavior change), and a correctness review that traced ever
 (start/end-of-array episodes, boundary-row split behavior, double-counting risk in the greedy
 match, gate fall-through) — zero bugs found, one unreachable-today edge case noted.
 
+### Phase 3.5 — Historical feature backfill (commit pending; closes a Phase 4 data gap)
+
+**Problem it fixes:** `forecastService.js` (rolling level/trend) and `driftService.js`
+(reference-vs-recent z-test) only ever held **live, in-memory state** — neither wrote its
+computed values back into `processed_telemetry`. That meant nothing about "what did the drift
+z-score look like 10 minutes before this past fault" was recoverable from the database once
+this project got to Phase 4 — every row's engineered features would have had to be
+reconstructed retroactively before a single model could be fit, which would have stalled Phase
+4 the moment the episode gate cleared.
+
+**What changed:**
+- New file `server/preprocessing/historicalFeatures.js` — computes, causally (row *i* only ever
+  sees rows `0..i`, never later ones, matching the no-leakage rule Phase 3's `walkForwardSplit`
+  already enforces), two feature families per metric:
+  - `driftZ` / `driftDirection` — replays `driftService.js`'s own two-sample z-test **verbatim**
+    (the function is now `export`ed as `classify`, plus its `RECENT_WINDOW_ROWS`/
+    `REFERENCE_WINDOW_ROWS` constants) over the RUNNING-only prefix up to that row. This is
+    provably identical to what the live dashboard would have shown at that moment, not a
+    re-derived approximation.
+  - `rollingMean` / `rollingStd` / `rollingSlope` — a deliberately **simpler stand-in** for
+    `forecastService.js`'s damped-trend ETS state (a plain trailing-window OLS slope over the
+    last 30 rows). Reproducing the live ETS model exactly would require replaying its 15-minute
+    wall-clock refit timer and regime-reset/outlier-capping logic historically, which depends on
+    real-time arrival timing that can't be reconstructed from stored rows alone. This is
+    adequate signal for a linear model but is **not** byte-identical to forecastService's live
+    trend/level output — Phase 4 training/eval code must not assume parity between the two.
+- `server/database/schema.sql` + `db.js` migration — new nullable JSON column
+  `historicalFeaturesByMetric` on `processed_telemetry`, following the exact existing pattern
+  used for `precapFeaturesByMetric`.
+- `server/models/processedModel.js`, `server/services/processedService.js` — the field is
+  computed and persisted **at ingest time**, before insert, for every new row going forward
+  (`saveProcessedReading` now calls `computeFeaturesForNewRow` using recent prior rows plus the
+  not-yet-inserted record's own values) — so the gap cannot reopen for future data.
+- New script `server/scripts/backfillHistoricalFeatures.js` — one-time, idempotent, re-runnable
+  backfill for rows written before this wiring existed. Already run once this session:
+  backfilled all 2,787 existing rows (verified: 0 rows left with `historicalFeaturesByMetric
+  IS NULL`; spot-checked recent rows for sane values, e.g. `motorTemp` rolling mean ~39°C with
+  `driftDirection: "stable"`).
+
+**Verified:** `node server/scripts/evaluateFaultPrediction.js` still runs cleanly after the
+backfill (99/100 episodes at last check) — confirms the migration and backfill didn't disturb
+existing columns or the evaluation harness.
+
 ## What's next (Phases 4-6, not started — intentionally blocked)
 
 ### Phase 4 — Model (blocked on Phase 0's episode count)
@@ -156,8 +201,9 @@ Do not start until `node server/scripts/evaluateFaultPrediction.js` reports the 
 `ready`. When it does:
 
 1. Start with a plain **L2-regularized logistic regression** baseline on the engineered
-   features (per-metric means/std/slope from `forecastService.js`, drift z-scores from
-   `driftService.js`, and the new pre-cap features from Phase 2) — interpretable, hard to
+   features — now all directly queryable per row, no retroactive reconstruction needed: the
+   new `historicalFeaturesByMetric` column (Phase 3.5, rolling mean/std/slope + drift z-score)
+   and the existing `precapFeaturesByMetric` column (Phase 2) — interpretable, hard to
    overfit, easy to explain to management.
 2. Only escalate to a constrained gradient-boosted model (shallow depth, few leaves, early
    stopping) if the logistic baseline clears the promotion bar below.
@@ -208,4 +254,10 @@ Only after a real model clears Phase 4's promotion bar:
    resulting model.
 3. If at or above 100: start Phase 4 as scoped above, using
    `server/preprocessing/evaluation/episodes.js` and `metrics.js` as the evaluation
-   foundation — do not rebuild evaluation logic from scratch.
+   foundation — do not rebuild evaluation logic from scratch. Feature inputs are already sitting
+   in the DB (`precapFeaturesByMetric`, `historicalFeaturesByMetric` — see Phase 3.5); don't
+   re-derive them from `forecastService.js`/`driftService.js`'s live state.
+4. If new rows were added to `processed_telemetry` by any path other than the normal
+   preprocessing pipeline / `saveProcessedReading` (e.g. a raw SQL insert), re-run
+   `node server/scripts/backfillHistoricalFeatures.js` to fill in `historicalFeaturesByMetric`
+   for them — it's idempotent and safe to re-run on the whole table at any time.

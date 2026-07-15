@@ -73,8 +73,6 @@ export default function App() {
       <Sidebar route={route} health={health} healthError={healthError} />
       <div className="app__main">
         <Topbar
-          health={health}
-          healthError={healthError}
           alarms={alarms}
           warns={warns}
           theme={theme}

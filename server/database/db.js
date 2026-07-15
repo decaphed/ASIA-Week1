@@ -86,6 +86,15 @@ if (!processedTelemetryColumns.includes('precapFeaturesByMetric')) {
   db.exec('ALTER TABLE processed_telemetry ADD COLUMN precapFeaturesByMetric TEXT');
 }
 
+// Same idempotent-migration need, for a data.db created before the
+// causally-computed rolling/drift feature snapshot existed (see
+// preprocessing/historicalFeatures.js) — closes the gap where
+// forecastService/driftService only kept live in-memory state, with nothing
+// persisted per historical row for fault-prediction training to draw on.
+if (!processedTelemetryColumns.includes('historicalFeaturesByMetric')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN historicalFeaturesByMetric TEXT');
+}
+
 logger.info(`SQLite ready at ${DB_PATH}`);
 
 /**

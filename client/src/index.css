@@ -361,13 +361,12 @@ button { font-family: inherit; cursor: pointer; border: none; }
   font-size: 10px; color: var(--text-dim); margin-top: 1px;
   text-transform: uppercase; letter-spacing: 0.5px;
 }
-.topbar__status { display: flex; gap: 6px; margin-left: auto; }
-
 .topbar__theme {
   width: 34px; height: 34px;
   background: var(--panel); border: 1px solid var(--border-light);
   display: grid; place-items: center; color: var(--text-muted);
   flex-shrink: 0;
+  margin-left: auto;
   transition: color var(--t-fast), border-color var(--t-fast);
 }
 .topbar__theme:hover { color: var(--text); border-color: var(--accent); }
@@ -1250,7 +1249,6 @@ button { font-family: inherit; cursor: pointer; border: none; }
   .chart-group__grid { grid-template-columns: 1fr; }
   .sensor-grid { grid-template-columns: repeat(2, 1fr); }
   .topbar { flex-wrap: wrap; height: auto; padding: 10px 14px; gap: 8px; }
-  .topbar__status { margin-left: 0; order: 3; width: 100%; flex-wrap: wrap; }
   .clock { display: none; }
   .hero-row { grid-template-columns: 1fr; }
   .health-strip { grid-template-columns: repeat(2, 1fr); }

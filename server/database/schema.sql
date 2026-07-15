@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS processed_telemetry (
   violationsByMetric      TEXT,                        -- JSON object: per-metric + cross-variable violation tally (see preprocessing/quality.js)
   physicsImputedCount     INTEGER NOT NULL DEFAULT 0,   -- physics-invalid samples interpolated into the stats window (see preprocessing/missing.js::imputeInvalidRuns)
   precapFeaturesByMetric  TEXT,                        -- JSON object: per-metric rawStdDev/rawRateOfChange/rawMaxExcursion computed BEFORE Hampel capping (see preprocessing/precapFeatures.js)
+  historicalFeaturesByMetric TEXT,                     -- JSON object: per-metric rollingMean/rollingStd/rollingSlope + driftZ/driftDirection, computed causally as of this row (see preprocessing/historicalFeatures.js)
 
   -- Rates derived from the counters above (0..1), stored pre-computed so the
   -- dashboard/quality panel never has to recompute them client-side.

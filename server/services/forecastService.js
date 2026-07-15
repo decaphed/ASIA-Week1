@@ -354,6 +354,25 @@ export function onNewProcessedRecord(row) {
 
     const actual = metricMean(row, metric);
 
+    // A non-finite reading should never reach here — POST /api/processed is
+    // guarded by validateProcessedMiddleware, and the preprocessing pipeline
+    // guarantees every metric mean is computed from a non-empty, physics-valid
+    // window before calling saveAndTrigger. This is defense-in-depth for that
+    // invariant breaking later (a pipeline/aggregation regression, or a future
+    // caller that invokes saveAndTrigger directly and skips HTTP validation —
+    // preprocessing/pipeline.js already does exactly that), not a fix for a
+    // currently-reachable hole. If it ever did happen: alpha * NaN is NaN
+    // forever, and Math.abs(NaN) > threshold is always false so the outlier
+    // guard below can't catch it either — level/trend would stay NaN until
+    // the next scheduled refitAll() (up to 15 minutes). Skipping the slide
+    // instead leaves this metric's state exactly as it was before this
+    // record, which is what "one bad minute" should cost — not a 15-minute
+    // forecasting outage.
+    if (!Number.isFinite(actual)) {
+      logger.warn(`Forecast forward-slide skipped for ${metric}: non-finite reading (row id ${row.id ?? '(unsaved)'})`);
+      continue;
+    }
+
     if (confirmedRegimeChange) {
       metricState.level = actual;
       metricState.trend = 0;

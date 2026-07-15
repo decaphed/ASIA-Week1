@@ -13,6 +13,7 @@ import * as model from '../models/processedModel.js';
 import { onNewProcessedRecord as forecastOnNewRecord } from './forecastService.js';
 import { onNewProcessedRecord as driftOnNewRecord } from './driftService.js';
 import { onNewProcessedRecord as trendOnNewRecord } from './trendService.js';
+import { computeFeaturesForNewRow, INGEST_FETCH_ROWS } from '../preprocessing/historicalFeatures.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 
@@ -64,6 +65,11 @@ function rowToProcessed(row) {
     // Hampel capping (see preprocessing/precapFeatures.js). Can be null for
     // rows written before this column existed.
     precapFeaturesByMetric: row.precapFeaturesByMetric ? JSON.parse(row.precapFeaturesByMetric) : null,
+    // Per-metric rollingMean/rollingStd/rollingSlope + driftZ/driftDirection,
+    // computed causally as of this row (see
+    // preprocessing/historicalFeatures.js). Can be null for rows written
+    // before this column existed and not yet backfilled.
+    historicalFeaturesByMetric: row.historicalFeaturesByMetric ? JSON.parse(row.historicalFeaturesByMetric) : null,
     physicsViolationCount: row.physicsViolationCount,
     // Per-metric + cross-variable tally (see preprocessing/quality.js). Can
     // be null for rows written before this column existed.
@@ -86,6 +92,13 @@ function rowToProcessed(row) {
 
 /** Persist one incoming one-minute aggregate. `data` was already validated. */
 export function saveProcessedReading(data) {
+  // Computed here, before insert, from data's own (not-yet-stored) metric
+  // means/dominantStatus plus recent prior rows — see
+  // preprocessing/historicalFeatures.js for why this can't be derived later
+  // from forecastService/driftService, which only hold live in-memory state.
+  const recentRows = model.getRecentProcessed(INGEST_FETCH_ROWS);
+  const historicalFeaturesByMetric = computeFeaturesForNewRow(recentRows, data);
+
   const record = {
     ...data,
     isImputed: data.isImputed ? 1 : 0,
@@ -95,6 +108,7 @@ export function saveProcessedReading(data) {
     outliersByMetric: JSON.stringify(data.outliersByMetric ?? {}),
     violationsByMetric: JSON.stringify(data.violationsByMetric ?? {}),
     precapFeaturesByMetric: JSON.stringify(data.precapFeaturesByMetric ?? {}),
+    historicalFeaturesByMetric: JSON.stringify(historicalFeaturesByMetric),
   };
   const info = model.insertProcessed(record);
   return rowToProcessed({ id: Number(info.lastInsertRowid), ...record });

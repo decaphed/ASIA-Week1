@@ -16,7 +16,7 @@ const insertStmt = db.prepare(`
     (windowStart, windowEnd, timestamp,
      ${METRIC_COLUMNS.join(', ')},
      dominantStatus, runningSeconds, faultSeconds, stoppedSeconds,
-     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric,
+     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric, historicalFeaturesByMetric,
      missingRate, imputationRate, outlierRate, physicsPassRate, physicsImputationRate,
      qualityScore, qualityLabel, isImputed,
      preprocessingVersion, preprocessingTimestamp)
@@ -24,10 +24,14 @@ const insertStmt = db.prepare(`
     (@windowStart, @windowEnd, @timestamp,
      ${METRIC_COLUMNS.map((c) => `@${c}`).join(', ')},
      @dominantStatus, @runningSeconds, @faultSeconds, @stoppedSeconds,
-     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric,
+     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric, @historicalFeaturesByMetric,
      @missingRate, @imputationRate, @outlierRate, @physicsPassRate, @physicsImputationRate,
      @qualityScore, @qualityLabel, @isImputed,
      @preprocessingVersion, @preprocessingTimestamp)
+`);
+
+const updateHistoricalFeaturesStmt = db.prepare(`
+  UPDATE processed_telemetry SET historicalFeaturesByMetric = @historicalFeaturesByMetric WHERE id = @id
 `);
 
 // Newest-first. Used both by the dashboard (small n) and by forecasting /
@@ -48,6 +52,9 @@ const historyAscStmt = db.prepare(`
 `);
 const countStmt = db.prepare(`
   SELECT COUNT(*) AS count FROM processed_telemetry
+`);
+const allChronologicalStmt = db.prepare(`
+  SELECT * FROM processed_telemetry ORDER BY id ASC
 `);
 
 /** Insert one processed (one-minute aggregate) record. */
@@ -74,4 +81,14 @@ export function getProcessedHistory({ limit, offset, sort }) {
 /** @returns total number of processed rows. */
 export function getProcessedCount() {
   return countStmt.get().count;
+}
+
+/** @returns every processed row, oldest first (id ASC) — used by the historical-features backfill script. */
+export function getAllProcessedChronological() {
+  return allChronologicalStmt.all();
+}
+
+/** Overwrite historicalFeaturesByMetric for one existing row (backfill script only — new rows set it at insert time). */
+export function updateHistoricalFeatures(id, historicalFeaturesByMetricJson) {
+  return updateHistoricalFeaturesStmt.run({ id, historicalFeaturesByMetric: historicalFeaturesByMetricJson });
 }
