@@ -8,7 +8,8 @@
 //     "highlight the valve, see its data" inspection view).
 // ─────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { animate } from 'animejs';
 import { SENSORS, getAlarmState } from '../../utils/constants.js';
 import { formatNumber } from '../../utils/formatters.js';
 
@@ -99,6 +100,18 @@ function HotspotPopover({ spot, reading, series }) {
   const state = worstState(reading, spot.metrics);
   const primary = SENSOR_MAP[spot.metrics[0]];
   const spark = sparkPoints(series?.[primary.key]);
+  const popRef = useRef(null);
+
+  // Fade + settle in whenever a new hotspot becomes active.
+  useEffect(() => {
+    if (!popRef.current) return;
+    animate(popRef.current, {
+      opacity: [0, 1],
+      scale: [0.96, 1],
+      duration: 180,
+      ease: 'outQuad',
+    });
+  }, [spot.id]);
 
   const style = {};
   for (const side of ['left', 'right', 'top', 'bottom']) {
@@ -106,7 +119,7 @@ function HotspotPopover({ spot, reading, series }) {
   }
 
   return (
-    <div className={`schematic__pop schematic__pop--${state}`} style={style} role="status">
+    <div className={`schematic__pop schematic__pop--${state}`} style={style} role="status" ref={popRef}>
       <div className="schematic__pop-head">
         <div>
           <div className="schematic__pop-name">{spot.name}</div>
@@ -161,6 +174,13 @@ export default function ProcessSchematic({ reading, series }) {
     ? `${Math.min(3, Math.max(0.55, 1.1 * (175 / r.flowRate))).toFixed(2)}s`
     : '1.1s';
 
+  // Status pill tone: ok while running, warn while deliberately stopped,
+  // alarm on an auto-trip fault, neutral before the first reading arrives.
+  const statusTone = !r.status ? 'neutral'
+    : r.status === 'RUNNING' ? 'ok'
+      : r.status === 'FAULT' ? 'alarm'
+        : 'warn';
+
   // Persistent per-component alarm glow — a fault is flagged on the diagram
   // itself, not only when someone happens to hover the right hotspot.
   const equipState = {};
@@ -185,8 +205,17 @@ export default function ProcessSchematic({ reading, series }) {
 
       <div className="schematic__body">
        <div className="schematic__stage">
+        {r.status && (
+          <div className={`schematic__status schematic__status--${statusTone}`} role="status">
+            <span className="schematic__status-dot" aria-hidden="true" />
+            {r.status}
+          </div>
+        )}
         <svg viewBox="0 0 720 300" className="schematic__svg">
           <defs>
+            <pattern id="schem-grid" width="16" height="16" patternUnits="userSpaceOnUse">
+              <circle cx="1" cy="1" r="1" fill="var(--border-light)" opacity="0.5" />
+            </pattern>
             <marker id="schematic-arrow-d" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto">
               <path d="M0 0l7 4.5-7 4.5z" fill="#818cf8" />
             </marker>
@@ -213,6 +242,8 @@ export default function ProcessSchematic({ reading, series }) {
               <stop offset="1"   style={{ stopColor: 'var(--amber-lo)' }} />
             </radialGradient>
           </defs>
+
+          <rect x="0" y="0" width="720" height="300" fill="url(#schem-grid)" />
 
           {/* sump tank — 3D cylinder with wireframe hoops */}
           <g className={equipClass('tank')}>

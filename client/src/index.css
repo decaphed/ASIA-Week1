@@ -510,6 +510,44 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .health-tile__sub--ok { color: var(--ok-bright); }
 .health-gauge { flex-shrink: 0; }
 
+/* ── Analytics per-metric summary strip (real min/avg/max, no fabricated data) ── */
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: var(--content-pad);
+}
+.metric-strip__card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--border-light);
+  border-radius: var(--radius); padding: 12px 14px; min-width: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.metric-strip__card--flow        { border-left-color: var(--flow); }
+.metric-strip__card--rpm         { border-left-color: var(--rpm); }
+.metric-strip__card--vibration   { border-left-color: var(--vibration); }
+.metric-strip__card--pressure-s  { border-left-color: var(--pressure-s); }
+.metric-strip__card--pressure-d  { border-left-color: var(--pressure-d); }
+.metric-strip__card--temp        { border-left-color: var(--temp); }
+.metric-strip__label {
+  font-family: var(--mono); font-weight: 700; font-size: 9px;
+  letter-spacing: 0.9px; color: var(--text-dim); text-transform: uppercase;
+}
+.metric-strip__value {
+  font-family: var(--mono); font-weight: 700; font-size: 18px; color: var(--text);
+  line-height: 1.1;
+}
+.metric-strip__unit { font-size: 10px; color: var(--text-dim); font-weight: 400; }
+.metric-strip__bar {
+  height: 4px; background: var(--bg-elevated); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.metric-strip__bar-fill { height: 100%; background: var(--accent); }
+.metric-strip__minmax {
+  display: flex; justify-content: space-between; gap: 4px;
+  font-family: var(--mono); font-size: 9px; color: var(--text-faint);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    HERO ROW — process schematic + alarms/system-health rail
    ══════════════════════════════════════════════════════════════════════════ */
@@ -566,6 +604,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .schematic__tag {
   position: absolute; background: var(--bg-elevated); border: 1px solid var(--border-light);
   border-radius: 0;
+  box-shadow: var(--shadow-sm);
   /* clamp(floor, scales-with-stage-width, ceiling) — same box proportions
      whether the stage renders at 350px or 1400px wide. */
   padding: clamp(4px, 0.9cqw, 8px) clamp(7px, 1.6cqw, 14px);
@@ -598,6 +637,27 @@ button { font-family: inherit; cursor: pointer; border: none; }
   white-space: nowrap;
 }
 .schematic__tag-unit { font-size: clamp(6.5px, 1.05cqw, 9px); color: var(--text-dim); font-weight: 400; }
+
+/* ── Schematic status pill (RUNNING/STOPPED/FAULT overlay) ────────────── */
+.schematic__status {
+  position: absolute; left: 3%; top: 4%; z-index: 1;
+  display: flex; align-items: center; gap: 6px;
+  padding: clamp(4px, 0.9cqw, 7px) clamp(8px, 1.6cqw, 12px);
+  background: var(--bg-elevated); border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--mono); font-weight: 700;
+  font-size: clamp(8px, 1.2cqw, 10px); letter-spacing: 1px;
+  color: var(--text-muted); text-transform: uppercase;
+}
+.schematic__status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+.schematic__status--ok      { color: var(--ok-bright); }
+.schematic__status--ok      .schematic__status-dot { background: var(--ok-bright); box-shadow: 0 0 6px var(--ok-glow); animation: pulse-dot 1.6s ease-in-out infinite; }
+.schematic__status--warn    { color: var(--warn-bright); }
+.schematic__status--warn    .schematic__status-dot { background: var(--warn-bright); }
+.schematic__status--alarm   { color: var(--danger-bright); }
+.schematic__status--alarm   .schematic__status-dot { background: var(--danger-bright); }
+.schematic__status--neutral { color: var(--text-faint); }
+.schematic__status--neutral .schematic__status-dot { background: var(--text-faint); }
 
 /* ── Interactive equipment hotspots + data popover ──────────────────────
    Invisible SVG zones sit over each drawn component; hovering (or keyboard-
@@ -1241,6 +1301,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
   .stats-panel { grid-template-columns: repeat(3, 1fr); }
   .manual-entry__grid { grid-template-columns: repeat(2, 1fr); }
   .health-strip { grid-template-columns: repeat(3, 1fr); }
+  .metric-strip { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 900px) {
   :root { --sidebar-w: 0px; }
@@ -1252,12 +1313,14 @@ button { font-family: inherit; cursor: pointer; border: none; }
   .clock { display: none; }
   .hero-row { grid-template-columns: 1fr; }
   .health-strip { grid-template-columns: repeat(2, 1fr); }
+  .metric-strip { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 500px) {
   :root { --content-pad: 12px; }
   .sensor-grid { grid-template-columns: 1fr; }
   .stats-panel { grid-template-columns: 1fr 1fr; }
   .health-strip { grid-template-columns: 1fr; }
+  .metric-strip { grid-template-columns: 1fr; }
 }
 
 /* ── Chart threshold overlay lines ───────────────────────────────────── */
