@@ -1,10 +1,11 @@
-# Industrial IoT Live-Data Monitoring Dashboard
+# Industrial Pump Monitoring Dashboard
 
-A full-stack, real-time industrial monitoring dashboard built for a university IoT
-assignment. **Node-RED** simulates sensor hardware, **Express + SQLite** ingests
-and stores every reading, and a **React + Vite** dashboard displays live values,
-scrolling charts, and searchable historical records — all without a single
-manual page refresh.
+A full-stack, real-time SCADA dashboard for industrial pump monitoring built for a
+university IoT assignment. **Node-RED** simulates a sensor gateway, **Express + SQLite**
+ingests and stores pump telemetry, and a **React + Vite** dashboard (reskinned with a
+teal/navy control-room theme, lucide-react icons, and four-page architecture) displays
+live metrics, rolling trend charts, fault predictions, and historical analysis — all
+without manual page refresh.
 
 This README is written to be read *and* to teach: after the reference sections
 there is a complete, beginner-friendly Node-RED tutorial and a step-by-step
@@ -35,14 +36,20 @@ explain and rebuild every part of this project.
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Data generation | **Node-RED** | Simulates a sensor every second and POSTs a JSON reading to the backend |
-| Backend | **Node.js + Express** | Validates, stores, and serves sensor data over a REST API |
-| Storage | **SQLite** (`better-sqlite3`) | A single-file, zero-config database holding every reading ever recorded |
-| Frontend | **React (Vite) + Chart.js** | Polls the API and renders live cards, scrolling charts, and a history table |
+| Data generation | **Node-RED** | Simulates a sensor gateway every second, injecting pump telemetry (6 metrics, 3 fault signatures) and POSTs to the backend |
+| Backend | **Node.js + Express** | Validates, preprocesses (outlier-caps, smooths), stores pump readings, computes trends/forecasts, serves REST API |
+| Storage | **SQLite** (`better-sqlite3`) | A single-file database holding raw telemetry and preprocessed signals; supports fault-prediction feature pipelines |
+| Frontend | **React (Vite) + Lucide icons + Chart.js** | Four-page dashboard (Overview / Analytics / Predictions / Reports) with teal/navy control-room theme; polls API and renders live metrics, trend charts, and fault analysis |
 
 The three pieces are fully decoupled — each only knows about HTTP. You could
-swap Node-RED for a real sensor, or React for a mobile app, without touching
+swap Node-RED for a real gateway, or React for a mobile app, without touching
 the other two.
+
+**Dashboard pages (v4 redesign, July 2026):**
+- **Overview** — at-a-glance: machine health gauge, current readings, active alarms, process schematic
+- **Analytics** — detailed trend analysis: scrolling time-series per metric, statistical summaries, 24h/7d rollups
+- **Predictions** — fault forecasting (in progress): statistical outlook (ETS forecast) and placeholder for AI/ML failure-prediction model
+- **Reports** — engineering tools: historical data export, manual test-reading form, system events log
 
 ---
 
@@ -86,42 +93,117 @@ the other two.
 
 ---
 
+## Design System (v4, July 2026)
+
+**Color palette:** Operator-grade, brutalist dark mode. No pure black, no gradients, no blur.
+
+- **Substrate:** deep navy (`#0d1117` background, `#141a21` panels) — mimics a
+  control-room CRT aesthetic
+- **Accent:** teal (`#00d4c8`) — functional brand color, accessible against navy,
+  used for highlights and primary CTAs
+- **Status indicators:** flat, no soft glow — `#00a89d` (ok/green), `#f59e0b` (warn/amber),
+  `#ef4444` (danger/red), each with darkened background `rgba(..., 0.08-0.10)` for badge
+  contrast
+- **Metric colors:** desaturated to sit inside the utilitarian palette (flow, RPM,
+  vibration, suction/discharge pressure, motor temp) — each metric is instantly
+  recognizable on overlaid charts
+- **Typography:** `Inter` body (system-ui fallback), `Archivo Black` for headers and hero
+  numerals (tight tracking, uppercase, applied selectively)
+- **Shape:** zero border radius everywhere (mechanical rigidity, no rounded corners)
+- **Shadows:** hard offset only (2-5px, 90% opacity black), no color tint or blur
+- **Icons:** lucide-react library replacing custom SVG icons — consistent stroke weight,
+  scalable, semantic (Power for status, Bell for alarms, Activity for vibration, etc.)
+
+**Pages and their purpose:**
+
+| Page | URL | Purpose |
+|---|---|---|
+| **Overview** | `#/overview` | At-a-glance: machine health gauge, current readings (6 metrics), active alarms, process schematic (P&ID diagram) |
+| **Analytics** | `#/analytics` | Detailed trend analysis: scrolling time-series per metric, min/max/avg stats, 24h/7d rollups |
+| **Predictions** | `#/predict` | Short-horizon forecasting (ETS statistical model) and placeholder UI for future AI/ML failure-prediction model |
+| **Reports** | `#/reports` | Engineering tools: searchable historical data export, manual test-reading form, system events log |
+
+**Component immutability:** ProcessSchematic.jsx and PumpModel3D.jsx (3D SVG visualization)
+are deliberately left untouched — they are not part of the v4 redesign and serve as
+reference implementations for complex visualizations.
+
+---
+
 ## Folder Structure
 
 ```
 ASIA-Week1/
-├── client/                     # React + Vite frontend
+├── client/                          # React + Vite frontend (v4 reskin: teal/navy, lucide-react)
 │   ├── src/
-│   │   ├── assets/
+│   │   ├── assets/                  # SVG/PNG assets
 │   │   ├── components/
-│   │   │   ├── charts/         # LiveChart.jsx
-│   │   │   ├── dashboard/      # SensorCard, SensorCardGrid, StatsPanel
-│   │   │   ├── layout/         # Sidebar, Topbar, StatusIndicator, Clock
-│   │   │   ├── tables/         # HistoryTable
-│   │   │   └── ui/             # Card, Spinner, ErrorBanner
-│   │   ├── hooks/               # usePolling, useSensorData (useLiveData, …)
-│   │   ├── pages/               # DashboardPage.jsx
-│   │   ├── services/            # api.js — the ONLY file that makes HTTP calls
-│   │   ├── utils/               # formatters.js, constants.js
-│   │   ├── App.jsx
-│   │   ├── main.jsx
-│   │   └── index.css            # dark industrial theme
+│   │   │   ├── charts/              # LiveChart.jsx (rolling trend visualization)
+│   │   │   ├── dashboard/           # domain-specific panels
+│   │   │   │   ├── HealthStrip.jsx           # 6-tile machine health summary (gauge, status, availability, alarms, runtime)
+│   │   │   │   ├── SensorCard.jsx            # individual metric card with trend sparkline
+│   │   │   │   ├── SensorCardGrid.jsx        # grid layout for 6 metrics
+│   │   │   │   ├── StatsPanel.jsx            # aggregate stats (min/max/avg)
+│   │   │   │   ├── AlarmsPanel.jsx           # active alarms with timestamps
+│   │   │   │   ├── ViolationsPanel.jsx       # threshold violations log
+│   │   │   │   ├── SystemHealthPanel.jsx     # health indicator + status colors
+│   │   │   │   ├── ExecutiveSummary.jsx      # management-facing KPI rollup
+│   │   │   │   ├── PeriodSummary.jsx         # 24h/7d summaries
+│   │   │   │   ├── ProcessSchematic.jsx      # P&ID pump diagram (immutable)
+│   │   │   │   ├── PumpModel3D.jsx           # 3D pump visualization (immutable)
+│   │   │   │   └── ManualReadingForm.jsx     # manual test entry form
+│   │   │   ├── layout/              # page chrome
+│   │   │   │   ├── Sidebar.jsx              # 4-page navigation (Overview/Analytics/Predict/Reports)
+│   │   │   │   ├── Topbar.jsx               # system status indicators + theme toggle
+│   │   │   │   ├── StatusIndicator.jsx      # health/backend/database status lights
+│   │   │   │   └── Clock.jsx                # system time display
+│   │   │   ├── tables/              # HistoryTable.jsx (searchable, paginated historical data)
+│   │   │   └── ui/                  # design system + utilities
+│   │   │       ├── Icons.jsx                # lucide-react icon wrappers (Power, Bell, Activity, RotateCw, …)
+│   │   │       ├── Card.jsx                 # base card component
+│   │   │       ├── Spinner.jsx              # loading indicator
+│   │   │       └── ErrorBanner.jsx          # connection error UI
+│   │   ├── hooks/
+│   │   │   ├── usePolling.js                 # base polling logic (memoized, deduped)
+│   │   │   ├── useSensorData.js              # hooks: useHealth, useLiveData, useHistory, useStats, useForecast, useTrend
+│   │   │   ├── useHashRoute.js               # hash-based routing (/#/overview, etc.)
+│   │   │   └── useTheme.js                   # light/dark theme toggle persistence
+│   │   ├── pages/
+│   │   │   ├── OverviewPage.jsx              # current state (health gauge, alarms, process schematic)
+│   │   │   ├── AnalyticsPage.jsx             # trends & statistics (per-metric time series)
+│   │   │   ├── PredictPage.jsx               # forecasting & AI model placeholder
+│   │   │   └── ReportsPage.jsx               # export, manual readings, event log
+│   │   ├── services/                # api.js — the ONLY file making HTTP calls to /api
+│   │   ├── utils/                   # formatters.js, health.js, constants.js (PUMP_NAME, SENSORS, CHART_WINDOW)
+│   │   ├── styles/                  # management.css (executive summary layer)
+│   │   ├── App.jsx                  # application shell (Sidebar + Topbar + routed Page)
+│   │   ├── main.jsx                 # React entry point
+│   │   └── index.css                # design tokens (teal #00d4c8, navy #0d1117, metric colors, shadows)
 │   ├── index.html
 │   ├── vite.config.js
 │   └── .env.example
-├── server/                     # Express + SQLite backend
-│   ├── controllers/             # HTTP request/response shaping
-│   ├── routes/                  # URL → controller mapping
-│   ├── middleware/               # validation, error handling, latency timer
-│   ├── database/                 # db.js (connection), schema.sql
-│   ├── models/                    # ALL SQL lives here (sensorModel.js)
-│   ├── services/                  # business logic (sensorService.js)
-│   ├── utils/                      # logger.js, validation.js
-│   ├── app.js                      # Express app config
-│   ├── server.js                   # entry point
+├── server/                          # Express + SQLite backend (telemetry ingestion & preprocessing)
+│   ├── config/                      # thresholds.js (alarm bands per metric)
+│   ├── controllers/                 # HTTP routing → JSON response shaping
+│   ├── routes/                      # URL → controller mapping
+│   ├── middleware/                  # validation, error handling, latency timing
+│   ├── database/                    # db.js (connection setup), schema.sql (raw_telemetry, processed_telemetry)
+│   ├── models/                      # data access layer: sensorModel.js, processedModel.js (ALL SQL here)
+│   ├── services/                    # business logic: sensorService.js, trendService.js, forecastService.js, driftService.js
+│   ├── preprocessing/               # signal processing pipeline
+│   │   ├── pipeline.js              # main entry: normalizes, caps outliers, captures pre-cap features
+│   │   ├── precapFeatures.js        # raw stddev/rate-of-change/excursion (pre-Hampel-cap)
+│   │   └── evaluation/              # fault-prediction evaluation harness (Phases 3+)
+│   │       ├── episodes.js          # identify contiguous FAULT episodes, walk-forward split
+│   │       └── metrics.js           # precision/recall/Brier score at lead times
+│   ├── scripts/                     # utilities: evaluateFaultPrediction.js
+│   ├── utils/                       # logger.js, validation.js (field ranges)
+│   ├── app.js                       # Express app configuration (CORS, middleware stack)
+│   ├── server.js                    # entry point (port 3000)
 │   └── .env.example
-├── node-red/
-│   └── flow.json                # importable Node-RED flow
+├── node-red/                        # sensor gateway simulator
+│   └── flow.json                    # importable flow: inject (1s timer) → function (generate reading + fault signature) → HTTP POST → debug
+├── scripts/                         # repository-level utilities
+├── FAULT_PREDICTION_PLAN.md         # detailed plan for ML pipeline (Phases 1-3 done, 4-6 planned)
 └── README.md
 ```
 
@@ -374,6 +456,50 @@ must be running — no dedicated "Node-RED heartbeat" endpoint is needed.
 
 ---
 
+## Fault Prediction Pipeline (In Progress)
+
+**Status:** Phases 1–3 complete. ML model training gated on data collection milestone.
+See `FAULT_PREDICTION_PLAN.md` for detailed phases, rationale, and progress tracking.
+
+### What's been implemented
+
+**Phase 1 — Fault-type diversity** (commit `048b7fe`)
+- Node-RED now injects one of three realistic failure signatures (THERMAL, CAVITATION,
+  BEARING) when a fault occurs, each biasing a different subset of the 6 metrics
+  (e.g., THERMAL spikes motor temp; CAVITATION collapses pressure/flow).
+- Backend validates and persists the `faultType` field on every reading.
+- Dashboard displays "Auto-trip - [Type]" instead of generic "Auto-trip".
+
+**Phase 2 — Pre-cap feature capture** (commit `a10dd6e`)
+- New preprocessing module (`server/preprocessing/precapFeatures.js`) captures raw
+  statistical anomalies *before* outlier-smoothing: standard deviation, rate-of-change,
+  max excursion per metric.
+- Stored as `precapFeaturesByMetric` JSON column on `processed_telemetry`.
+- These features survive the signal-suppression problem (outlier caps smooth away the
+  very spikes a predictor needs to learn from).
+
+**Phase 3 — Evaluation harness** (commit `8777c4c`)
+- Implemented a mechanical gate: `checkEvaluationGate()` requires ≥100 fault episodes
+  before any model can be trained or evaluated.
+- Walk-forward split (`walkForwardSplit()`) ensures chronological ordering and
+  episode-boundary discipline — no leakage via autocorrelation.
+- Baseline metrics (`precisionRecallAtLeadTime`, `brierScore`) so a future classifier
+  has concrete targets to beat.
+- Script: `node server/scripts/evaluateFaultPrediction.js` — prints current episode
+  count and blocks model work until the gate clears.
+
+### Phases 4–6 (planned)
+
+After reaching ~100–200 fault episodes (estimated 3–6 days of continuous runtime):
+
+- **Phase 4** — Candidate model selection (SVM, RF, temporal CNN)
+- **Phase 5** — Hyperparameter tuning & lead-time optimization
+- **Phase 6** — Model integration (PredictPage UI population, `/api/predict` endpoint)
+
+Current data collection baseline (2026-07-13): 23 FAULT episodes across 909 rows.
+
+---
+
 ## Node-RED Learning Guide (beginner-friendly)
 
 This section assumes you have **never used Node-RED before**. By the end you
@@ -612,14 +738,23 @@ Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 
 ---
 
-## Future Improvements
+## Future Work
 
-- **Server-Sent Events (SSE) or WebSockets** instead of polling, for
-  instant push updates with less network chatter.
-- **Authentication** on the ingestion endpoint so only trusted devices can
-  POST readings.
+**High priority (blocks fault-prediction model):**
+- Continue collecting fault episodes (target: ~100–200) to clear the evaluation gate
+  and enable Phase 4 (model selection & hyperparameter tuning).
+
+**Medium priority (production readiness):**
+- **Server-Sent Events (SSE) or WebSockets** instead of polling, for instant push
+  updates with less network chatter (currently 1s/5s poll rates are adequate for
+  a university demo, but a real control room would benefit from sub-second latency).
+- **Authentication** on the ingestion endpoint so only trusted gateways can POST readings.
 - **Docker Compose** to spin up backend + Node-RED + client with one command.
-- **Configurable alert thresholds** (e.g. flag temperature > 32°C) surfaced
-  as dashboard notifications.
-- **Data retention/rollup jobs** to downsample very old readings once the
-  table grows large.
+- **Configurable alert thresholds** (e.g. flag motorTemp > 85°C) surfaced as
+  dashboard notifications (currently thresholds live in `server/config/thresholds.js`).
+- **Data retention/rollup jobs** to downsample very old readings once the table grows large
+  (currently unbounded; see SQLite's `PRAGMA auto_vacuum` for cleanup options).
+
+**Nice to have (UX):**
+- Dark/light theme toggle persistence (partially implemented via `useTheme` hook).
+- CSV/JSON export from the Reports page history table (UI button exists, backend endpoint needed).
