@@ -18,13 +18,17 @@ CREATE TABLE IF NOT EXISTS raw_telemetry (
   -- built-in ROWID, so it auto-increments automatically without extra keywords.
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
 
-  -- Pump telemetry. REAL = floating-point column.
-  flowRate           REAL NOT NULL,   -- litres/minute, ~50–300
-  rpm                REAL NOT NULL,   -- revolutions/minute, ~1000–3600
-  vibration          REAL NOT NULL,   -- mm/s, ~0.5–12
-  suctionPressure    REAL NOT NULL,   -- bar, ~0.5–3
-  dischargePressure  REAL NOT NULL,   -- bar, ~2–12
-  motorTemp          REAL NOT NULL,   -- degrees Celsius, ~20–90
+  -- Pump telemetry. REAL = floating-point column. Nullable: an internally
+  -- generated IMPUTED fill row can leave a specific metric null when that
+  -- metric's gap exceeds its own per-metric interpolation ceiling (see
+  -- preprocessing/missing.js) — never true for a real MEASURED reading,
+  -- which is still hard-required at the HTTP boundary (validateReading).
+  flowRate           REAL,   -- litres/minute, ~50–300
+  rpm                REAL,   -- revolutions/minute, ~1000–3600
+  vibration          REAL,   -- mm/s, ~0.5–12
+  suctionPressure    REAL,   -- bar, ~0.5–3
+  dischargePressure  REAL,   -- bar, ~2–12
+  motorTemp          REAL,   -- degrees Celsius, ~20–90
 
   -- Run state as a short text enum: 'RUNNING' | 'STOPPED' | 'FAULT'.
   status             TEXT NOT NULL DEFAULT 'STOPPED',
@@ -42,7 +46,17 @@ CREATE TABLE IF NOT EXISTS raw_telemetry (
   -- Provenance/validation annotations (see preprocessing pipeline docs).
   provenance         TEXT NOT NULL DEFAULT 'MEASURED', -- 'MEASURED' | 'IMPUTED' (gap-filled)
   physicsValid       INTEGER NOT NULL DEFAULT 1,   -- 0 = failed a physics-informed check
-  physicsViolations  TEXT                          -- JSON array of rule names, NULL if none
+  physicsViolations  TEXT,                         -- JSON array of rule names, NULL if none
+
+  -- JSON array of metric names left null on this row because their gap
+  -- exceeded that metric's own interpolation ceiling (see
+  -- preprocessing/missing.js). NULL when every metric was filled/measured.
+  unfilledMetrics    TEXT,
+  -- Set by preprocessing/faultClassifier.js: 1 when a physics-invalid run
+  -- this sample belongs to was classified NOT_SENSOR_FAULT (genuine
+  -- abnormal operation, deliberately left unrepaired) rather than
+  -- SENSOR_FAULT (repaired in the stats-facing copy).
+  abnormalOperation  INTEGER NOT NULL DEFAULT 0
 );
 
 -- Index on timestamp: the dashboard constantly asks for "the newest rows"
@@ -110,6 +124,19 @@ CREATE TABLE IF NOT EXISTS processed_telemetry (
   qualityScore            REAL NOT NULL,   -- 0..100
   qualityLabel            TEXT NOT NULL,   -- GOOD | FAIR | POOR
   isImputed               INTEGER NOT NULL DEFAULT 0,
+
+  -- Event-time windowing / classifier counters (observational, NOT part of
+  -- qualityScore — see preprocessing/quality.js). NOTE: these columns are
+  -- added via CREATE TABLE IF NOT EXISTS, which will NOT retrofit them onto
+  -- an already-created table from before this change — a dev DB created
+  -- prior to this needs a manual `ALTER TABLE processed_telemetry ADD COLUMN
+  -- ...` migration (or simply delete the dev DB file and let it recreate).
+  lateSampleCount          INTEGER NOT NULL DEFAULT 0,
+  mergedSampleCount        INTEGER NOT NULL DEFAULT 0,
+  duplicateSampleCount     INTEGER NOT NULL DEFAULT 0,
+  partiallyImputedCount    INTEGER NOT NULL DEFAULT 0,
+  partiallyImputedRate     REAL NOT NULL DEFAULT 0,
+  abnormalOperationSampleCount INTEGER NOT NULL DEFAULT 0,
 
   -- Metadata.
   preprocessingVersion    TEXT NOT NULL DEFAULT 'v1',

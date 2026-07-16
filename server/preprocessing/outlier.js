@@ -39,7 +39,11 @@
 // ones. Widening HALF_WINDOW would raise the run-length needed to break this
 // but re-introduces some of the whole-window over-smoothing this local
 // design exists to avoid — not changed without evidence it's needed.
-const HALF_WINDOW = 3; // ±3 samples => 7-sample local neighborhood (~7s)
+import { HALF_WINDOW_SECONDS, SAMPLE_INTERVAL_SECONDS } from './config.js';
+
+// Derived from real seconds / cadence, not hardcoded, so a cadence change
+// doesn't silently desync the neighborhood size from real elapsed time.
+const HALF_WINDOW = Math.max(1, Math.round(HALF_WINDOW_SECONDS / SAMPLE_INTERVAL_SECONDS));
 
 function medianOf(values) {
   const sorted = values.slice().sort((a, b) => a - b);
@@ -49,17 +53,35 @@ function medianOf(values) {
 /**
  * @param {number[]} values one metric's raw values across the window.
  * @param {number} [k] outlier threshold in MAD units.
+ * @param {boolean[]|null} [excludeMask] same length as `values`; true at
+ *   indices flagged `abnormalOperation` by missing.js::imputeInvalidRuns.
+ *   Excluded samples are never capped themselves, AND are filtered out of
+ *   every OTHER point's neighborhood so they can't drag a neighbor's
+ *   median/MAD baseline toward them — otherwise a short (1-3 sample)
+ *   genuine abnormal-operation run that imputeInvalidRuns deliberately left
+ *   untouched would still get silently smoothed away here, defeating the
+ *   whole point of preserving it.
  * @returns {{ capped: number[], outlierCount: number }}
  */
-export function hampelCap(values, k = 3) {
+export function hampelCap(values, k = 3, excludeMask = null) {
   const n = values.length;
   const capped = values.slice();
   let outlierCount = 0;
 
   for (let i = 0; i < n; i++) {
+    if (excludeMask && excludeMask[i]) continue; // never capped; capped[i] stays values[i]
+
     const start = Math.max(0, i - HALF_WINDOW);
     const end = Math.min(n, i + HALF_WINDOW + 1);
-    const neighborhood = values.slice(start, end);
+    let neighborhood = values.slice(start, end);
+
+    if (excludeMask) {
+      const filtered = neighborhood.filter((_, idx) => !excludeMask[start + idx]);
+      // If every neighbor is excluded (a long abnormal-operation run), fall
+      // back to the unfiltered neighborhood for this one point rather than
+      // computing a median/MAD over an empty array.
+      if (filtered.length > 0) neighborhood = filtered;
+    }
 
     const median = medianOf(neighborhood);
     const mad = 1.4826 * medianOf(neighborhood.map((v) => Math.abs(v - median)));

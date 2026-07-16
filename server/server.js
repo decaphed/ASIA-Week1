@@ -19,6 +19,8 @@ import { assertRangeConsistency } from './utils/rangeConsistency.js';
 import { startForecastLoop } from './services/forecastService.js';
 import { startDriftLoop } from './services/driftService.js';
 import { startTrendLoop } from './services/trendService.js';
+import { runBackgroundSweep } from './preprocessing/pipeline.js';
+import { LATE_GRACE_SECONDS, WINDOW_DURATION_SECONDS } from './preprocessing/config.js';
 
 // Fail fast, before accepting any traffic, if the three hand-maintained
 // range tables (RANGES / OPERATING_RANGE / THRESHOLDS) have drifted out of
@@ -34,4 +36,10 @@ app.listen(PORT, () => {
   startForecastLoop();
   startDriftLoop();
   startTrendLoop();
+
+  // Guarantees an event-time window closes even during total stream
+  // silence, since ingestion (preprocessing/buffer.js) is otherwise entirely
+  // push-driven and would never force-close a window on its own.
+  const sweepIntervalMs = (Math.min(WINDOW_DURATION_SECONDS, LATE_GRACE_SECONDS) / 2) * 1000;
+  setInterval(runBackgroundSweep, sweepIntervalMs);
 });

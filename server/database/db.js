@@ -95,6 +95,79 @@ if (!processedTelemetryColumns.includes('historicalFeaturesByMetric')) {
   db.exec('ALTER TABLE processed_telemetry ADD COLUMN historicalFeaturesByMetric TEXT');
 }
 
+// Same idempotent-migration need, for a data.db created before event-time
+// windowing (buffer.js) and the sensor-fault-vs-abnormal-operation
+// classifier (faultClassifier.js) existed.
+if (!processedTelemetryColumns.includes('lateSampleCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN lateSampleCount INTEGER NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('mergedSampleCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN mergedSampleCount INTEGER NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('duplicateSampleCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN duplicateSampleCount INTEGER NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('partiallyImputedCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN partiallyImputedCount INTEGER NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('partiallyImputedRate')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN partiallyImputedRate REAL NOT NULL DEFAULT 0');
+}
+if (!processedTelemetryColumns.includes('abnormalOperationSampleCount')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN abnormalOperationSampleCount INTEGER NOT NULL DEFAULT 0');
+}
+
+if (!rawTelemetryColumns.includes('unfilledMetrics')) {
+  db.exec('ALTER TABLE raw_telemetry ADD COLUMN unfilledMetrics TEXT');
+}
+if (!rawTelemetryColumns.includes('abnormalOperation')) {
+  db.exec('ALTER TABLE raw_telemetry ADD COLUMN abnormalOperation INTEGER NOT NULL DEFAULT 0');
+}
+
+// SQLite's ALTER TABLE can't drop a NOT NULL constraint in place — a
+// raw_telemetry table created before per-metric partial-fill rows existed
+// still has NOT NULL on the six metric columns, which would throw on the
+// first IMPUTED row that legitimately leaves one of them null (see
+// preprocessing/missing.js's per-metric interpolation ceilings). Detect that
+// case and rebuild the table (standard SQLite recipe: create the new shape,
+// copy every row across, drop the old table, rename) rather than silently
+// leaving a data-corrupting constraint in place.
+const flowRateColumn = db.prepare('PRAGMA table_info(raw_telemetry)').all().find((col) => col.name === 'flowRate');
+if (flowRateColumn && flowRateColumn.notnull) {
+  db.exec(`
+    CREATE TABLE raw_telemetry_new (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      flowRate           REAL,
+      rpm                REAL,
+      vibration          REAL,
+      suctionPressure    REAL,
+      dischargePressure  REAL,
+      motorTemp          REAL,
+      status             TEXT NOT NULL DEFAULT 'STOPPED',
+      faultType          TEXT,
+      timestamp          TEXT NOT NULL,
+      provenance         TEXT NOT NULL DEFAULT 'MEASURED',
+      physicsValid       INTEGER NOT NULL DEFAULT 1,
+      physicsViolations  TEXT,
+      unfilledMetrics    TEXT,
+      abnormalOperation  INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO raw_telemetry_new
+      (id, flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp,
+       status, faultType, timestamp, provenance, physicsValid, physicsViolations,
+       unfilledMetrics, abnormalOperation)
+    SELECT
+      id, flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp,
+       status, faultType, timestamp, provenance, physicsValid, physicsViolations,
+       unfilledMetrics, abnormalOperation
+    FROM raw_telemetry;
+    DROP TABLE raw_telemetry;
+    ALTER TABLE raw_telemetry_new RENAME TO raw_telemetry;
+    CREATE INDEX IF NOT EXISTS idx_raw_telemetry_timestamp ON raw_telemetry (timestamp DESC);
+  `);
+  logger.info('SQLite migration: rebuilt raw_telemetry with nullable metric columns (per-metric partial-fill support).');
+}
+
 logger.info(`SQLite ready at ${DB_PATH}`);
 
 /**

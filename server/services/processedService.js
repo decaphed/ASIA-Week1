@@ -85,6 +85,15 @@ function rowToProcessed(row) {
     qualityScore: row.qualityScore,
     qualityLabel: row.qualityLabel,
     isImputed: !!row.isImputed,
+    // Event-time windowing / classifier counters (observational, not part of
+    // qualityScore — see preprocessing/quality.js). Can be undefined for
+    // rows written before these columns existed.
+    lateSampleCount: row.lateSampleCount,
+    mergedSampleCount: row.mergedSampleCount,
+    duplicateSampleCount: row.duplicateSampleCount,
+    partiallyImputedCount: row.partiallyImputedCount,
+    partiallyImputedRate: row.partiallyImputedRate,
+    abnormalOperationSampleCount: row.abnormalOperationSampleCount,
     preprocessingVersion: row.preprocessingVersion,
     preprocessingTimestamp: row.preprocessingTimestamp,
   };

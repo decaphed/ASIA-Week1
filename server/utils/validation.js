@@ -73,6 +73,48 @@ export function validateReading(body) {
   return errors;
 }
 
+/**
+ * Sibling to validateReading(), used ONLY for pipeline-internally-generated
+ * IMPUTED rows (see preprocessing/missing.js::generateFillSamples and
+ * imputeInvalidRuns) — never for the external POST /api/data HTTP boundary,
+ * which keeps using validateReading() unchanged (all 6 metrics still
+ * required, no null allowed). A null metric here means the pipeline itself
+ * couldn't confidently reconstruct that value (its gap exceeded that
+ * metric's own interpolation ceiling), which is a privilege the pipeline
+ * grants itself internally — an external client posting an explicit null
+ * still gets rejected by validateReading() exactly as before.
+ * @returns {string[]} human-readable error messages (empty array = valid).
+ */
+export function validateFillRow(body) {
+  const errors = [];
+
+  for (const field of NUMERIC_FIELDS) {
+    const value = body[field];
+    if (value === undefined || value === null) continue; // allowed here, unlike validateReading
+
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      errors.push(`${field} must be a number`);
+      continue;
+    }
+    const { min, max } = RANGES[field];
+    if (value < min || value > max) {
+      errors.push(`${field} must be between ${min} and ${max}`);
+    }
+  }
+
+  if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
+    errors.push(`status must be one of: ${VALID_STATUSES.join(', ')}`);
+  }
+
+  if (body.timestamp !== undefined) {
+    if (typeof body.timestamp !== 'string' || Number.isNaN(Date.parse(body.timestamp))) {
+      errors.push('timestamp must be a valid ISO date string');
+    }
+  }
+
+  return errors;
+}
+
 // One-minute aggregate record produced by the preprocessing pipeline (see
 // server/preprocessing/pipeline.js) and posted to POST /api/processed. Six
 // stats per metric, unlike the single value validated above.

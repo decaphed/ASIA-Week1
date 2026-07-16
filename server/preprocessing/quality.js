@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { round2 } from './aggregation.js';
+import { EXPECTED_SAMPLE_COUNT } from './config.js';
 
 // Maps each exact violation string produced by validator.js::validatePhysics
 // to a tally category. Hardcoded (not parsed/split) on purpose: if
@@ -75,16 +76,30 @@ function tallyViolationsByMetric(window) {
  *   rows in `window` — an exact count now that gap-filling really happens,
  *   not an estimate.
  */
-export function computeQuality({ window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount, physicsImputedCount = 0 }) {
+export function computeQuality({
+  window, missingCount, outlierCount, metricCount, evaluatedSampleCount, imputedSampleCount,
+  physicsImputedCount = 0, lateSampleCount = 0, mergedSampleCount = 0, duplicateSampleCount = 0,
+  partiallyImputedCount = 0,
+}) {
   const n = window.length;
   const physicsViolationCount = window.filter((sample) => sample.physicsValid === false).length;
+  const abnormalOperationSampleCount = window.filter((sample) => sample.abnormalOperation === true).length;
   const violationsByMetric = tallyViolationsByMetric(window);
 
-  const missingRate = missingCount / (n + missingCount);
+  // Denominator is the config-derived expected count, not n + missingCount —
+  // n itself can now be inflated by MERGED late/reordered arrivals, so it's
+  // no longer a safe stand-in for "how much of the window's real duration we
+  // actually have."
+  const missingRate = missingCount / EXPECTED_SAMPLE_COUNT;
   const outlierRate = outlierCount / (evaluatedSampleCount * metricCount);
-  const physicsPassRate = 1 - physicsViolationCount / n;
+  // Only SENSOR_FAULT-classified (physicsImputedCount) samples penalize
+  // quality — a genuine abnormal-operation episode (real fault, real
+  // process disturbance) is not a data-quality defect, it's exactly the
+  // signal PdM/fault-diagnosis needs preserved (see faultClassifier.js).
+  const physicsPassRate = 1 - physicsImputedCount / n;
   const imputationRate = imputedSampleCount / n;
   const physicsImputationRate = physicsImputedCount / n;
+  const partiallyImputedRate = partiallyImputedCount / n;
 
   const qualityScore = round2(100 * (
     0.4 * (1 - missingRate) +
@@ -105,6 +120,13 @@ export function computeQuality({ window, missingCount, outlierCount, metricCount
     imputationRate: round2(imputationRate),
     physicsImputedCount,
     physicsImputationRate: round2(physicsImputationRate),
+    // Observational only — never fed into qualityScore.
+    abnormalOperationSampleCount,
+    lateSampleCount,
+    mergedSampleCount,
+    duplicateSampleCount,
+    partiallyImputedCount,
+    partiallyImputedRate: round2(partiallyImputedRate),
     isImputed: imputedSampleCount > 0,
   };
 }

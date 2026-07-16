@@ -34,6 +34,8 @@ function rowToReading(row) {
     provenance: row.provenance,
     physicsValid: !!row.physicsValid,
     physicsViolations: row.physicsViolations ? JSON.parse(row.physicsViolations) : null,
+    unfilledMetrics: row.unfilledMetrics ? JSON.parse(row.unfilledMetrics) : null,
+    abnormalOperation: !!row.abnormalOperation,
   };
 }
 
@@ -66,6 +68,13 @@ export function saveReading(data) {
     physicsViolations: Array.isArray(data.physicsViolations) && data.physicsViolations.length
       ? JSON.stringify(data.physicsViolations)
       : null,
+    // Set by preprocessing/missing.js (per-metric fill ceilings) and
+    // preprocessing/faultClassifier.js (sensor-fault vs. abnormal-operation
+    // classification) respectively — see preprocessing/pipeline.js.
+    unfilledMetrics: Array.isArray(data.unfilledMetrics) && data.unfilledMetrics.length
+      ? JSON.stringify(data.unfilledMetrics)
+      : null,
+    abnormalOperation: data.abnormalOperation === true ? 1 : 0,
   };
 
   const info = model.insertReading(record);

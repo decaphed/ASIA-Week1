@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "IoT Sensor Simulator",
     "disabled": false,
-    "info": "Generates one simulated sensor reading every second and POSTs it straight to the Express backend. No preprocessing happens here — Node-RED's only job is telemetry generation.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST /api/data) -> debug\n\nAll preprocessing (physics validation, buffering, missing-data detection, Hampel-filter outlier capping, one-minute aggregation, data-quality scoring) now runs server-side in server/preprocessing/ (see pipeline.js), triggered by every POST /api/data request.\n\nNOTE on the http request node's URL:\n- Running Node-RED NATIVELY (npx node-red / node-red, no container) -> use http://localhost:3000/...\n- Running Node-RED INSIDE DOCKER (e.g. the official nodered/node-red image) -> 'localhost' means the container itself, not your host machine, so use http://host.docker.internal:3000/... instead (Docker Desktop's special DNS name for reaching the host)."
+    "info": "Generates one simulated sensor reading every second and POSTs it straight to the Express backend. No preprocessing happens here — Node-RED's only job is telemetry generation.\n\nFlow:  inject (1s) -> function (generate) -> http request (POST /api/data) -> debug\n                                                    |-> catch (on failure) -> retry function -> delay -> back to http request\n\nAll preprocessing (physics validation, buffering, missing-data detection, Hampel-filter outlier capping, one-minute aggregation, data-quality scoring) now runs server-side in server/preprocessing/ (see pipeline.js), triggered by every POST /api/data request.\n\nRETRY QUEUE: the http request node used to fail silently (senderr: false, no error handling) — a backend restart or transient network blip would drop that tick's reading with no trace. senderr is now true, routed to a Catch node scoped to this http request node, which feeds a retry function (adds/increments msg.retryCount, gives up after 3 attempts) and a delay node (1s backoff) that re-sends the SAME reading back into the http request node. This does not eliminate gaps entirely (a sustained outage longer than ~3 seconds still drops readings), but it absorbs the transient failures a fire-and-forget POST previously lost outright.\n\nNOTE on the http request node's URL:\n- Running Node-RED NATIVELY (npx node-red / node-red, no container) -> use http://localhost:3000/...\n- Running Node-RED INSIDE DOCKER (e.g. the official nodered/node-red image) -> 'localhost' means the container itself, not your host machine, so use http://host.docker.internal:3000/... instead (Docker Desktop's special DNS name for reaching the host)."
   },
   {
     "id": "inject_1s",
@@ -69,7 +69,7 @@
     "proxy": "",
     "insecureHTTPParser": false,
     "authType": "",
-    "senderr": false,
+    "senderr": true,
     "headers": [],
     "x": 780,
     "y": 140,
@@ -95,5 +95,67 @@
     "x": 1000,
     "y": 220,
     "wires": []
+  },
+  {
+    "id": "catch_post_failure",
+    "type": "catch",
+    "z": "iot_sim_tab",
+    "name": "catch POST /api/data failure",
+    "scope": [
+      "post_api_data"
+    ],
+    "uncaught": false,
+    "x": 400,
+    "y": 300,
+    "wires": [
+      [
+        "retry_fn"
+      ]
+    ]
+  },
+  {
+    "id": "retry_fn",
+    "type": "function",
+    "z": "iot_sim_tab",
+    "name": "retry with backoff (max 3)",
+    "func": "// The message a Catch node receives is the ORIGINAL message that entered\n// the failing node — msg.payload is still the reading object built by\n// gen_reading, not a response body, since the request never succeeded.\nconst MAX_RETRIES = 3;\nmsg.retryCount = (msg.retryCount || 0) + 1;\n\nif (msg.retryCount > MAX_RETRIES) {\n    node.warn(`POST /api/data failed after ${MAX_RETRIES} retries -- dropping reading for ${msg.payload && msg.payload.timestamp}`);\n    return null; // give up; this tick's reading is genuinely lost, same as before the retry queue existed\n}\n\nnode.warn(`POST /api/data failed (attempt ${msg.retryCount}/${MAX_RETRIES}) -- retrying in 1s for ${msg.payload && msg.payload.timestamp}`);\nmsg.headers = { \"Content-Type\": \"application/json\" };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 650,
+    "y": 300,
+    "wires": [
+      [
+        "retry_delay"
+      ]
+    ]
+  },
+  {
+    "id": "retry_delay",
+    "type": "delay",
+    "z": "iot_sim_tab",
+    "name": "wait 1s before retry",
+    "pauseType": "delay",
+    "timeout": "1",
+    "timeoutUnits": "seconds",
+    "rate": "1",
+    "nbRateUnits": "1",
+    "rateUnits": "second",
+    "randomFirst": "1",
+    "randomLast": "5",
+    "randomUnits": "seconds",
+    "drop": false,
+    "allowrate": false,
+    "outputs": 1,
+    "x": 900,
+    "y": 300,
+    "wires": [
+      [
+        "post_api_data"
+      ]
+    ]
   }
 ]

@@ -43,20 +43,49 @@ export function aggregateWindow(window, statsWindow, cappedByMetric) {
   for (const metric of METRICS) {
     const raw = statsWindow.map((sample) => sample[metric]);
     const capped = cappedByMetric[metric];
-    const n = capped.length;
 
-    const meanVal = capped.reduce((a, b) => a + b, 0) / n;
-    const sortedCapped = capped.slice().sort((a, b) => a - b);
+    // A null capped value means that sample's fill row couldn't confidently
+    // reconstruct this specific metric (see missing.js's per-metric
+    // ceilings/unfilledMetrics) — excluding it from arithmetic is required
+    // because null coerces to 0 in a numeric reduce/min/max, which would
+    // silently corrupt the whole window's stat rather than just skip one
+    // sample.
+    const nonNullCapped = capped.filter((v) => v != null && Number.isFinite(v));
+    if (nonNullCapped.length === 0) {
+      // Provably unreachable given the ceiling design (a metric can only be
+      // null on a fill/abnormal-operation sample, never on every sample in a
+      // 60-sample window — pipeline.js already skips a window entirely if
+      // every sample fails physics validation before this ever runs) — but
+      // if the upstream invariant ever breaks, fail loudly via the caller's
+      // existing try/catch rather than silently fabricating a value.
+      throw new Error(`aggregateWindow: metric "${metric}" has no non-null values in this window`);
+    }
+    const n = nonNullCapped.length;
+
+    const meanVal = nonNullCapped.reduce((a, b) => a + b, 0) / n;
+    const sortedCapped = nonNullCapped.slice().sort((a, b) => a - b);
     const medianVal = sortedCapped[Math.floor(n / 2)];
-    const variance = capped.reduce((a, b) => a + (b - meanVal) ** 2, 0) / n;
+    const variance = nonNullCapped.reduce((a, b) => a + (b - meanVal) ** 2, 0) / n;
+
+    // "last" is the most recent NON-null raw value for this specific metric
+    // — a plain raw[raw.length - 1] would go null if the window's final
+    // sample happened to be a partial-fill row that left this metric unfilled.
+    let lastVal = null;
+    for (let idx = raw.length - 1; idx >= 0; idx--) {
+      if (raw[idx] != null) {
+        lastVal = raw[idx];
+        break;
+      }
+    }
 
     stats[metric] = {
       mean: round2(meanVal),
       median: round2(medianVal),
-      min: Math.min(...capped),
-      max: Math.max(...capped),
+      min: Math.min(...nonNullCapped),
+      max: Math.max(...nonNullCapped),
       stdDev: round2(Math.sqrt(variance)),
-      last: raw[raw.length - 1],
+      last: lastVal,
+      count: n,
     };
   }
 

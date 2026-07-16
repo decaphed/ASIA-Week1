@@ -18,6 +18,7 @@ const insertStmt = db.prepare(`
      dominantStatus, runningSeconds, faultSeconds, stoppedSeconds,
      sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric, historicalFeaturesByMetric,
      missingRate, imputationRate, outlierRate, physicsPassRate, physicsImputationRate,
+     lateSampleCount, mergedSampleCount, duplicateSampleCount, partiallyImputedCount, partiallyImputedRate, abnormalOperationSampleCount,
      qualityScore, qualityLabel, isImputed,
      preprocessingVersion, preprocessingTimestamp)
   VALUES
@@ -26,6 +27,7 @@ const insertStmt = db.prepare(`
      @dominantStatus, @runningSeconds, @faultSeconds, @stoppedSeconds,
      @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric, @historicalFeaturesByMetric,
      @missingRate, @imputationRate, @outlierRate, @physicsPassRate, @physicsImputationRate,
+     @lateSampleCount, @mergedSampleCount, @duplicateSampleCount, @partiallyImputedCount, @partiallyImputedRate, @abnormalOperationSampleCount,
      @qualityScore, @qualityLabel, @isImputed,
      @preprocessingVersion, @preprocessingTimestamp)
 `);

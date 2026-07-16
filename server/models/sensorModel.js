@@ -19,10 +19,10 @@ import db from '../database/db.js';
 const insertStmt = db.prepare(`
   INSERT INTO raw_telemetry
     (flowRate, rpm, vibration, suctionPressure, dischargePressure, motorTemp, status, faultType, timestamp,
-     provenance, physicsValid, physicsViolations)
+     provenance, physicsValid, physicsViolations, unfilledMetrics, abnormalOperation)
   VALUES
     (@flowRate, @rpm, @vibration, @suctionPressure, @dischargePressure, @motorTemp, @status, @faultType, @timestamp,
-     @provenance, @physicsValid, @physicsViolations)
+     @provenance, @physicsValid, @physicsViolations, @unfilledMetrics, @abnormalOperation)
 `);
 
 // The single newest row. ORDER BY id DESC LIMIT 1 = "highest id" = latest
