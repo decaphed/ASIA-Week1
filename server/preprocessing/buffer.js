@@ -139,8 +139,14 @@ export function commit(sample, classification) {
   if (classification === 'MERGED') w.mergedSampleCount++;
 
   updateRecentTail(sample);
-  lastSample = sample;
+  // The gap-fill anchor must only ever move FORWARD in time — a MERGED
+  // (late/out-of-order) sample is, by definition, earlier than the current
+  // forward edge, so treating it as "the last sample" would move the anchor
+  // backward and corrupt the next real gap-fill calculation (it would
+  // measure the gap from the wrong point). Only ACCEPTED samples, which are
+  // by construction always chronologically newest, ever advance it.
   if (classification === 'ACCEPTED') {
+    lastSample = sample;
     lastAcceptedTimestampMs = tsMs;
 
     // Moving forward into a new/later window slot closes every still-open
