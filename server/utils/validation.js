@@ -145,6 +145,11 @@ export function validateProcessedRecord(body) {
     errors.push(`dominantStatus must be one of: ${VALID_STATUSES.join(', ')}`);
   }
 
+  // dominantFaultType is optional (null when the window had no FAULT samples).
+  if (body.dominantFaultType !== undefined && body.dominantFaultType !== null && !VALID_FAULT_TYPES.includes(body.dominantFaultType)) {
+    errors.push(`dominantFaultType must be one of: ${VALID_FAULT_TYPES.join(', ')}`);
+  }
+
   for (const field of ['windowStart', 'windowEnd', 'timestamp']) {
     if (typeof body[field] !== 'string' || Number.isNaN(Date.parse(body[field]))) {
       errors.push(`${field} must be a valid ISO date string`);

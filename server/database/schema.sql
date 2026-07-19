@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS processed_telemetry (
 
   -- Operating-status breakdown across the window (seconds, sums to ~sampleCount).
   dominantStatus          TEXT NOT NULL,
+  -- Dominant failure signature (THERMAL | CAVITATION | BEARING) among this
+  -- window's FAULT samples, or NULL if none — mirrors raw_telemetry.faultType,
+  -- rolled up the same way dominantStatus is (see preprocessing/aggregation.js).
+  dominantFaultType       TEXT,
   runningSeconds          INTEGER NOT NULL DEFAULT 0,
   faultSeconds            INTEGER NOT NULL DEFAULT 0,
   stoppedSeconds          INTEGER NOT NULL DEFAULT 0,

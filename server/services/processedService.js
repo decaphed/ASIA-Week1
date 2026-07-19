@@ -40,6 +40,7 @@ function rowToProcessed(row) {
     timestamp: row.timestamp,
     metrics,
     dominantStatus: row.dominantStatus,
+    dominantFaultType: row.dominantFaultType,
     runningSeconds: row.runningSeconds,
     faultSeconds: row.faultSeconds,
     stoppedSeconds: row.stoppedSeconds,

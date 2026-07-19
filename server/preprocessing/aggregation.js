@@ -97,9 +97,27 @@ export function aggregateWindow(window, statsWindow, cappedByMetric) {
   }
   const dominantStatus = Object.keys(statusCounts).sort((a, b) => statusCounts[b] - statusCounts[a])[0];
 
+  // Dominant fault signature (THERMAL/CAVITATION/BEARING), same tally/tie-break
+  // pattern as dominantStatus above, but counted only over FAULT samples that
+  // actually carry a faultType — the Node-RED simulator (node-red/flow.json)
+  // assigns one at FAULT onset and holds it for the whole episode, so this is
+  // almost always unanimous within a window; null means no FAULT sample fell
+  // in this window (or none carried a faultType).
+  const faultTypeCounts = {};
+  for (const sample of window) {
+    if (sample.status === 'FAULT' && sample.faultType) {
+      faultTypeCounts[sample.faultType] = (faultTypeCounts[sample.faultType] || 0) + 1;
+    }
+  }
+  const faultTypeKeys = Object.keys(faultTypeCounts);
+  const dominantFaultType = faultTypeKeys.length === 0
+    ? null
+    : faultTypeKeys.sort((a, b) => faultTypeCounts[b] - faultTypeCounts[a])[0];
+
   return {
     stats,
     dominantStatus,
+    dominantFaultType,
     runningSeconds: statusCounts.RUNNING,
     faultSeconds: statusCounts.FAULT,
     stoppedSeconds: statusCounts.STOPPED,

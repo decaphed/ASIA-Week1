@@ -15,7 +15,7 @@ const insertStmt = db.prepare(`
   INSERT INTO processed_telemetry
     (windowStart, windowEnd, timestamp,
      ${METRIC_COLUMNS.join(', ')},
-     dominantStatus, runningSeconds, faultSeconds, stoppedSeconds,
+     dominantStatus, dominantFaultType, runningSeconds, faultSeconds, stoppedSeconds,
      sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric, historicalFeaturesByMetric,
      missingRate, imputationRate, outlierRate, physicsPassRate, physicsImputationRate,
      lateSampleCount, mergedSampleCount, duplicateSampleCount, partiallyImputedCount, partiallyImputedRate, abnormalOperationSampleCount,
@@ -24,7 +24,7 @@ const insertStmt = db.prepare(`
   VALUES
     (@windowStart, @windowEnd, @timestamp,
      ${METRIC_COLUMNS.map((c) => `@${c}`).join(', ')},
-     @dominantStatus, @runningSeconds, @faultSeconds, @stoppedSeconds,
+     @dominantStatus, @dominantFaultType, @runningSeconds, @faultSeconds, @stoppedSeconds,
      @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric, @historicalFeaturesByMetric,
      @missingRate, @imputationRate, @outlierRate, @physicsPassRate, @physicsImputationRate,
      @lateSampleCount, @mergedSampleCount, @duplicateSampleCount, @partiallyImputedCount, @partiallyImputedRate, @abnormalOperationSampleCount,

@@ -117,6 +117,12 @@ if (!processedTelemetryColumns.includes('abnormalOperationSampleCount')) {
   db.exec('ALTER TABLE processed_telemetry ADD COLUMN abnormalOperationSampleCount INTEGER NOT NULL DEFAULT 0');
 }
 
+// Same idempotent-migration need, for a data.db created before per-window
+// fault-signature rollup existed (see preprocessing/aggregation.js).
+if (!processedTelemetryColumns.includes('dominantFaultType')) {
+  db.exec('ALTER TABLE processed_telemetry ADD COLUMN dominantFaultType TEXT');
+}
+
 if (!rawTelemetryColumns.includes('unfilledMetrics')) {
   db.exec('ALTER TABLE raw_telemetry ADD COLUMN unfilledMetrics TEXT');
 }

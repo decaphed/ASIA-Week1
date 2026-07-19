@@ -113,6 +113,7 @@ function processClosedWindow(win) {
       windowEnd: agg.windowEnd,
       timestamp: agg.windowEnd, // canonical timestamp = end of window
       dominantStatus: agg.dominantStatus,
+      dominantFaultType: agg.dominantFaultType,
       runningSeconds: agg.runningSeconds,
       faultSeconds: agg.faultSeconds,
       stoppedSeconds: agg.stoppedSeconds,
