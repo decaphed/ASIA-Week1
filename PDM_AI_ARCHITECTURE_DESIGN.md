@@ -286,36 +286,36 @@ good.
                                             v
         ┌───────────────────────────────────────────────────────────────┐
         │ [6] MODEL MONITORING (always-on, alert-only)                  │
-        │  data drift (input distributions) + concept drift (input→     │
-        │  outcome relationship) + live performance vs. baseline         │
+        │  watches for drift in sensor behavior and drops in model      │
+        │  performance; flags when retraining may be needed              │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                             v
         ┌───────────────────────────────────────────────────────────────┐
         │ [7] RETRAINING                                                │
-        │  periodic / triggered; trained on ALL verified examples so    │
-        │  far (old fault types + new), not only the newest ones        │
+        │  periodically rebuilds the model using all verified examples   │
+        │  so far, old fault types and new ones together                 │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                             v
         ┌───────────────────────────────────────────────────────────────┐
-        │ [8] VALIDATION GATE                                           │
-        │  walk-forward evaluation; regression check across EVERY       │
-        │  prior class; must beat the model currently in use             │
+        │ [8] VALIDATION                                                │
+        │  checks the candidate against every previously known fault     │
+        │  type before it may replace the model currently in use         │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                             v
         ┌───────────────────────────────────────────────────────────────┐
         │ [9] VERSION HISTORY                                           │
-        │  every validated version kept, with its training data and     │
-        │  evaluation results, so any past version can be restored       │
+        │  keeps past validated models on hand so the system can be      │
+        │  restored to an earlier version if needed                     │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                             v
         ┌───────────────────────────────────────────────────────────────┐
-        │ [10] STAGED ROLLOUT & ROLLBACK                                │
-        │  new model tested on live data before it takes over; instant  │
-        │  revert to the previous version if something looks wrong      │
+        │ [10] DEPLOYMENT & ROLLBACK                                    │
+        │  a candidate replaces the model in use only after passing      │
+        │  validation; quick reversion if a problem shows up later       │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                 (feeds back into [3a]/[3b] serving)
@@ -338,11 +338,11 @@ good.
 | **Known-Fault Classification** | For segments already flagged abnormal, identify which known fault type is present, with a class-conditional confidence | Supervised — trained only on verified fault exemplars, incrementally | Grows with verified exemplar count; explicitly gated on a minimum episode count per class |
 | **Confidence Estimation & Arbitration** | Combine the two upstream signals into one calibrated decision: normal / known fault (with confidence) / unknown anomaly; sets the operating threshold as a cost trade-off, not an arbitrary probability cutoff | Calibration only, not a predictive model of its own | As soon as the two upstream components exist |
 | **Human Verification & Labeling Workbench** | Surface flagged segments to engineers/technicians tied to a work order; capture confirm / reject / relabel / new-class decisions | N/A — the mechanism by which humans supply new ground truth | Continuous, throughout the platform's life |
-| **Model Monitoring** | Continuously track input-distribution drift, concept drift, and live precision/recall/calibration against the standing rule-based baseline; raise retraining triggers | Statistical monitoring, not predictive | Continuous, always-on |
-| **Retraining** | Build the next candidate model from all verified examples collected so far — old fault types and new ones together — so new knowledge doesn't crowd out old | Batch, periodic/triggered, never continuous in-place updates | Triggered by schedule or accumulated verified examples |
-| **Validation** | Walk-forward (chronological) evaluation of every candidate model against every known class, old and new, plus false-positive rate on confirmed-normal holdout | N/A — evaluation, not learning | Every retraining run, before promotion |
-| **Version History** | Keep every validated model version, its training data, and its evaluation results, so a specific past version can always be identified and restored | N/A | Every validated version |
-| **Deployment / Rollout** | Test a new model on live data before it takes over any real alert; switch over only once its live behavior matches what validation predicted; revert instantly to the previous version if it doesn't | N/A | Every promotion event |
+| **Model Monitoring** | Continuously watch for drift in sensor behavior and drops in model performance; flag when retraining may be needed | Statistical monitoring, not predictive | Continuous, always-on |
+| **Retraining** | Rebuild the model periodically using all verified examples collected so far — old fault types and new ones together — so new knowledge doesn't crowd out old | Batch, periodic, never continuous in-place updates | Triggered by schedule or accumulated verified examples |
+| **Validation** | Check every candidate model against every previously known fault type, plus normal operation, before it may replace the model currently in use | N/A — evaluation, not learning | Every retraining run, before promotion |
+| **Version History** | Keep previous validated model versions on hand so a specific past version can always be identified and restored | N/A | Every validated version |
+| **Deployment** | Replace the model in production only after a candidate has passed validation | N/A | Every promotion event |
 
 ---
 
@@ -371,16 +371,15 @@ good.
 5. **Monitoring.** Independently of any retraining, drift and live-performance monitoring
    run continuously and only ever raise a signal — they never change the deployed model
    themselves.
-6. **Retraining.** On a schedule or trigger (section 9), a candidate model is retrained using
+6. **Retraining.** On a schedule or trigger (section 9), a candidate model is rebuilt using
    the full accumulated set of verified examples — old fault types and new ones together —
    so it does not lose what it already knew while learning something new.
-7. **Validation.** The candidate is evaluated walk-forward against every class the model
-   currently in use knows, plus any new class, and against confirmed-normal holdout for false
-   positives. It must clear the bar on all of them, not just the new class.
-8. **Versioning and deployment.** A model that passes validation is recorded as a new
-   version and tested on live data alongside the model currently in use before it is allowed
-   to drive any real alert; it only takes over once its live performance is confirmed to
-   match what validation predicted.
+7. **Validation.** The candidate is checked against every fault type the model currently in
+   use already recognizes, plus any new type, and against confirmed-normal data, to make sure
+   it hasn't lost accuracy anywhere.
+8. **Versioning and deployment.** A model that passes validation replaces the model
+   currently in use; the previous version is kept so the system can revert to it quickly if
+   needed.
 9. **Continuous improvement.** The loop returns to step 2 with a (possibly) updated model,
    and the exemplar store keeps growing from step 3 onward — this is how the platform
    improves over its lifetime without ever bypassing steps 5-8.
@@ -523,9 +522,9 @@ An engineer reviewing a flagged segment has three possible verdicts:
   classifier can learn to recognize it reliably — the workbench records it immediately,
   training catches up on the next retraining cycle once enough exemplars exist.)
 - **False alarm** — the segment is confirmed as within-normal variation the detector
-  mis-flagged; it becomes a hard-negative example that improves the anomaly detector's
-  precision on the next retraining cycle, directly counteracting the alert-fatigue risk the
-  platform document already identifies as a threat to adoption (Feature 5).
+  mis-flagged; it helps the anomaly detector avoid similar false alarms in the future,
+  directly counteracting the alert-fatigue risk the platform document already identifies as
+  a threat to adoption (Feature 5).
 
 Every verdict is captured with the underlying raw and prepared segment data, not just a
 label, so the exemplar store used for retraining always contains full, physically-grounded
@@ -533,193 +532,121 @@ evidence rather than a bare tag.
 
 ## 9. How the System Safely Incorporates New Knowledge
 
-**Rejected approach: continuous/online learning** (updating the deployed model in place, on
-every new verified example, as it arrives). This is unsafe for this deployment for three
-concrete reasons: (1) there is no natural point at which to evaluate a continuously-changing
-model before it affects live alerts — validation would have to happen *after* the model has
-already changed behavior in production; (2) a single ambiguous or mislabeled engineer
-verification could silently degrade the live model with no gate to catch it; (3) reverting a
-model whose parameters are constantly being updated is operationally undefined — there is no
-discrete "version" to return to. Industrial practice supports treating model updates as
-planned, evaluated events instead: IBM's own documented experience shows drift (from a plant
-process change) being handled through a deliberate, planned retraining and threshold
-adjustment, not an automatic in-place update — "model drift is inevitable and retraining is a
-planned activity, not a crisis."
+New verified examples should not change the deployed model immediately. Instead, the system
+retrains periodically — on a schedule, or once enough new verified examples have
+accumulated — rather than updating continuously in place.
 
-**Recommended approach: periodic, gated retraining that includes everything learned so
-far.** Retraining runs on a schedule (e.g. monthly, or whatever cadence matches how quickly
-the exemplar store meaningfully grows) or is triggered early by monitoring (section 11) or by
-a fault class crossing its minimum-exemplar threshold. Each run:
+**Why periodic retraining, not continuous online learning.** Continuously updating a live
+model on every new example gives no natural point at which to check the model before it
+starts affecting real alerts, no way to know which past version to return to if a mistaken or
+ambiguous engineer verification degrades it, and no defined way to undo a bad update.
+Industrial practice instead treats model updates as planned, evaluated events: IBM's own
+documented experience with Maximo Predict describes handling drift through a deliberate,
+planned retraining rather than an automatic in-place update — "model drift is inevitable and
+retraining is a planned activity, not a crisis." Periodic retraining also fits this project's
+data volume at both ends of its lifecycle: early on, only a handful of new verified examples
+accumulate between engineer verifications, so there is little reason to react to each one
+individually; later, as the verified fault record grows over years, the same scheduled process
+continues to scale without needing to change.
 
-- Trains on the **full curated exemplar store** — every previously confirmed example of
-  every class, plus new ones — not just data collected since the last run. Rehearsing old
-  examples alongside new ones like this (sometimes called replay-based or rehearsal-based
-  learning) is one of the standard, well-validated ways to keep a model from losing older
-  knowledge while it learns something new, and it is the simplest of the common approaches to
-  validate and explain to a non-ML stakeholder — "the model is always trained on everything
-  it has ever been shown to be true" is an easy invariant to audit.
-- Where the specific model chosen for a component has a structure that supports it (for
-  instance, a shared representation with separate, addable decision logic per class), a new
-  fault class can also be added in a way that structurally isolates it from what was already
-  learned — touching only that class's own piece rather than the whole model. This is
-  optional and depends on which model implements the component (section 2.5); the mandatory
-  safeguard, independent of that choice, is the regression check in section 10.
-- The candidate is never deployed directly; it goes through the validation gate (section 12)
-  and staged rollout (section 13) before it can affect a live alert.
+**How new knowledge is folded in without losing old knowledge.** Each retraining run should
+use the full, growing record of verified examples — every previously confirmed fault case,
+together with newly verified ones — not only the data collected since the last retrain.
+Historical verified fault data should be retained and reused during future retraining
+specifically so that previously learned fault types are not crowded out by newer ones. Before
+a newly retrained model can replace the model in use, it is checked against all previously
+known fault types, not just the newest one (section 10).
 
-**Why this fits both ends of the project's lifecycle:** early on, while the verified-exemplar
-store is still small, this kind of batch retraining is cheap and simple to run occasionally,
-rather than needing an always-on training process reacting to every single new label —
-appropriate when only a handful of new examples arrive between engineer verifications. Later,
-once the store has grown across years of verified operation, the same scheduled, gated
-process scales by retraining on the accumulated store rather than by changing the underlying
-approach. Continuous online learning, by contrast, would need to solve the hard version of
-the evaluation-and-rollback problem (sections 12-13) from day one, for a benefit — instant
-reaction to a single new example — this deployment does not need enough to accept that risk.
-
-This satisfies the explicit requirement that "introducing new knowledge must not reduce
-performance on previously learned operating conditions" by making that check a mandatory,
-mechanical gate (section 12), rather than a hope.
+This satisfies the requirement that "introducing new knowledge must not reduce performance on
+previously learned operating conditions" by making that check mandatory before any new model
+is deployed, rather than relying on hope.
 
 ## 10. Preventing Catastrophic Forgetting
 
-Catastrophic forgetting — a model's performance on previously learned cases collapsing once
-it is sequentially trained on new ones — is the central, well-documented failure mode of
-naive sequential learning, and it is the single biggest risk in a system expected to add new
-fault classes for years. Three complementary safeguards are recommended, matched to what this
-deployment can practically operate:
+Catastrophic forgetting is the tendency of a model to lose what it has already learned once
+it is retrained on new information — a system that gets better at recognizing a newly
+confirmed fault type but worse at recognizing one it already knew is not safe to deploy. This
+is one of the biggest long-term risks for a system expected to keep adding fault classes for
+years, and the project explicitly requires that new knowledge never come at the expense of
+old knowledge.
 
-1. **Rehearsal via the curated exemplar store (primary mechanism).** As above — every
-   retraining run mixes old and new verified exemplars. This requires nothing beyond the
-   human verification workbench already producing labeled examples with their underlying
-   data retained, which this architecture already needs for other reasons (section 8).
-2. **Structural isolation for new classes, where the chosen model supports it (secondary).**
-   Keeping a new class's own parameters separate from previously-learned classes, when the
-   underlying model's structure allows it, bounds the effect of adding a class to that
-   class's own piece.
-3. **A mandatory check across every class — the actual enforcement mechanism.** Rehearsal
-   and structural isolation reduce the *likelihood* of forgetting; they do not by themselves
-   guarantee it didn't happen. The validation gate (section 12) is what actually enforces the
-   requirement: every candidate model is evaluated on held-out examples of **every**
-   previously known fault class, not only the new one, and any regression below the model
-   currently in use blocks promotion outright. This is the difference between "we used a
-   technique believed to reduce forgetting" and "we verified, for this specific model, that
-   forgetting did not occur" — only the latter is a claim this design is willing to make about
-   a system whose mistakes carry real maintenance cost.
+Two design-level safeguards address this:
 
-This is a deliberately conservative choice, and it fits both ends of the project's lifecycle:
-early on, with only a handful of verified examples per class, rehearsing the whole exemplar
-store is cheap because the store itself is small. Later, once years of verified operation have
-built up a much larger store, retraining can draw on a representative, curated selection from
-it rather than everything ever collected, keeping the computational and storage cost bounded
-as the platform matures — the discipline scales without needing to change. More elaborate
-continual-learning techniques exist in the research literature (e.g. for federated or
-streaming settings with storage or privacy constraints), but an industrial deployment with a
-governed retraining cadence and a maintainable exemplar store can afford this simpler,
-easier-to-verify combination of rehearsal plus a mandatory regression check over schemes
-whose forgetting-prevention guarantees are harder to demonstrate to a plant engineering
-stakeholder.
+- **Retain and reuse historical verified data.** Every retraining run draws on the full
+  record of previously verified fault examples, not only the newest ones, so the model
+  continues to see evidence of every fault type it has already learned each time it is
+  updated (section 9).
+- **Check every candidate model against everything it should already know.** Before a newly
+  retrained model can replace the model in use, it is checked against every previously known
+  fault type as well as the new one. If it performs worse on any fault type it already knew,
+  it does not replace the current model. This is the difference between assuming a technique
+  prevents forgetting and actually confirming, for that specific model, that it did not
+  happen — which matters for a system whose mistakes carry real maintenance cost.
+
+This deliberately favors a simple, verifiable combination — keep old evidence around, and
+check before replacing — over more elaborate techniques from the research literature, because
+it is easier to explain and audit for a plant engineering audience, and it fits comfortably
+within a periodic, gated retraining process rather than requiring specialized training
+infrastructure.
 
 ## 11. Monitoring and Managing Model Drift
 
-Two distinct phenomena are monitored, because they call for different responses:
+Two related but distinct problems are monitored, because they call for different responses:
 
-- **Data drift** — the distribution of incoming sensor readings shifts (a recalibrated
-  sensor, a new ambient condition, a process change) even though the fault-relevant
-  relationships haven't changed. This project already has a working building block for this:
-  `driftService.js`'s reference-vs-recent statistical comparison. Generalizing this
-  per-channel-role check to run continuously against every deployed model's expected input
-  distribution is the natural extension.
-- **Concept drift** — the relationship between inputs and true outcomes changes (the same
+- **Data drift** — the sensor readings a model sees in production start to look different
+  from what it was trained on (a recalibrated sensor, a new ambient condition, a process
+  change), even though the fault-relevant relationships haven't changed.
+- **Concept drift** — the relationship between readings and true outcomes changes (the same
   vibration signature now means something different because, say, a plant changed its
   cooling-water treatment — IBM's own documented example of exactly this happening to a
-  deployed pump bearing model). This is detected by tracking live precision/recall/
-  calibration against confirmed outcomes over time, using the same metrics this project's
-  existing evaluation harness (`server/preprocessing/evaluation/metrics.js`) already computes
-  offline — applied continuously, in production, against the model currently in use.
+  deployed pump bearing model).
 
-Early in the platform's life, with only three months of history, the baseline this
-comparison runs against is itself thin — drift thresholds should start wide and tolerant, and
-tighten as more operating history (ideally spanning multiple seasons and production cycles)
-accumulates. This is a deliberate, temporary looseness, not a gap in the design: a system that
-overreacts to drift signals when it barely has a baseline to compare against would generate
-exactly the false-alarm noise Feature 5 is designed to prevent. Over years of operation, as
-the baseline grows and comes to reflect genuine seasonal and operational variation, the same
-monitoring becomes more precise without needing to be redesigned.
+Both are tracked continuously by comparing live conditions and live model performance against
+what the model was validated on. Early in the platform's life, with only three months of
+history to compare against, this comparison should stay tolerant of ordinary variation and
+tighten only as more operating history — ideally spanning multiple seasons and production
+cycles — accumulates; reacting too eagerly to a thin baseline would create exactly the kind of
+false-alarm noise the platform's alert-prioritization feature is designed to avoid.
 
-Critically, **monitoring only ever raises a signal; it never changes the deployed model
-itself.** This mirrors the separation already argued in section 9 between detecting a
-problem and acting on it: drift detection should be cheap, continuous, and always-on;
-correcting for drift (retraining, revalidating, redeploying) should be deliberate and gated.
-Collapsing the two — auto-retraining the instant drift crosses a threshold — reintroduces
-exactly the "no evaluation gate before it affects production" risk section 9 rejects for
-online learning.
+Monitoring itself should only ever raise a signal that retraining may be worth considering —
+it should never change the deployed model directly. Detecting a problem and deciding to act on
+it are kept separate, for the same reason argued in section 9: an automatic response with no
+evaluation step in between reintroduces the risk of an unverified change reaching production.
 
 ## 12. Model Validation Before Deployment
 
-Every candidate model, whatever produced it, must clear the same validation gate before it
-can be deployed:
+Every candidate model must be checked before it is allowed to replace the model currently in
+use. Validation confirms two things: that the candidate performs at least as well as the model
+in use on every previously known fault type, not just a new one it was retrained to learn, and
+that it does not raise false alarms on confirmed-normal data more often than the model it
+would replace. A candidate that improves on a new fault type but does worse on an older one,
+or that becomes noisier on normal operation, is not promoted.
 
-- **Chronological (walk-forward) evaluation only — never random or k-fold splitting.** This
-  project has already established, with data (motorTemp lag-1 autocorrelation ~0.9), why a
-  random split leaks: adjacent readings are highly autocorrelated, so a random split lets a
-  model "cheat" by interpolating between near-duplicate neighboring samples, producing a
-  reported accuracy that does not reflect real predictive skill. That finding is not specific
-  to the current phase of this project — it is a structural property of time-series sensor
-  data, and this architecture makes chronological, episode-boundary splitting a standing rule
-  for every future model, not a one-off fix. It also matters for the small-dataset
-  constraint: with only three months of data to spare, this discipline is what makes sure
-  every available example is used for either training or evaluation, never silently both,
-  which is the only way to get a trustworthy read on a model's real skill when data is this
-  limited.
-- **Evaluated against every known fault class, old and new — never against the new class
-  alone.** This is the mechanical enforcement of the no-regression requirement (sections 9
-  and 10): a candidate that improves on a new fault type but degrades recall on a
-  previously-learned one fails validation, full stop.
-- **Evaluated against confirmed-normal holdout for false-positive rate**, not only true
-  positive rate on faults — a model that becomes more sensitive at the cost of flooding
-  operators with false alarms fails on the platform's own stated concern about alert fatigue
-  undermining adoption (Feature 5).
-- **The bar is relative, not absolute.** A candidate must beat the model *currently in use*
-  (and, where relevant, the standing rule-based baseline this project's evaluation harness
-  already computes) at the same operating lead-time and cost point — never an arbitrary fixed
-  accuracy number, and never a bare probability cutoff. This follows the same cost-based
-  reasoning this project's own plan already applies to alerting (its plan to alert on
-  expected-cost comparison rather than a 0.5 probability cutoff): the model that should ship
-  is the one that demonstrably reduces expected cost/risk compared to what's running today,
-  not the one with the highest raw score on an arbitrary metric.
+Validation is also always checked against data the model has not already seen, using data
+recorded after the training period rather than mixed in with it — sensor readings recorded
+close together in time tend to look very similar, so evaluating on data too close to what a
+model was trained on can make a model look more accurate than it really is.
+
+The bar for promotion is relative, not fixed: a new model is judged against the model it would
+replace, at the cost/urgency point the system actually operates at, rather than against an
+arbitrary accuracy target. This mirrors the same cost-based reasoning already used elsewhere
+in this module for deciding when an alert is worth raising at all.
 
 ## 13. Managing Model Versions and Recovering from a Bad Update
 
-Every model that passes validation is kept, not just deployed — each version is stored
-together with the exact data it was trained on and the evaluation results that justified
-promoting it. This means an engineer can always answer "what model made this call, on what
-evidence" with an exact record rather than a best guess, months later — something that
-matters for a system whose calls carry real maintenance cost and, over time, audit scrutiny.
+Previous, validated model versions should be retained, not discarded, so that a specific past
+version can always be identified and restored if necessary. If a newly deployed model is later
+found to perform worse than expected, the system should be able to switch back to the previous
+version quickly, rather than needing an emergency fix under pressure.
 
-Deployment is staged, not an instant swap. A newly validated model is first run alongside the
-model currently in use, scoring the same live data, without yet being allowed to drive real
-alerts or maintenance recommendations. Only once its behavior on live data is confirmed to
-match what validation predicted does it take over (this staged-testing-then-switchover
-pattern is often called champion/challenger deployment in industry practice). If a model that
-has already taken over is later found to behave worse than expected, the system does not need
-an emergency fix under pressure — it simply switches back to the previous version, because
-that version was never deleted or overwritten.
-
-Early in the platform's life, when only one or two model versions exist, this discipline
-costs almost nothing to maintain. Its value compounds over years of operation: once dozens of
-retraining cycles have occurred, the ability to pinpoint exactly which version was live at
-any point in the past, and to recover instantly from a bad one, is no longer optional.
-
-**Why this is necessary, and what it prevents:** without kept versions and a staged rollout,
-the only way to recover from a bad retrain is an emergency effort performed under pressure
-once operators notice something is wrong — precisely the "crisis response" pattern this
-platform is explicitly designed to eliminate at the maintenance-action level (Feature 1
-justifies planned maintenance over crisis response in exactly these terms). There is no
-principled reason to tolerate that failure mode at the model level while eliminating it at
-the maintenance level. Keeping every past version and testing new ones before they take over
-is standard industrial practice for exactly this reason — it turns "the new model made things
-worse" into a one-step, low-drama recovery instead of an incident.
+This matters because, without kept versions, the only way to recover from a bad update is an
+emergency effort performed once operators notice something is wrong — precisely the "crisis
+response" pattern this platform is already designed to eliminate at the maintenance-action
+level (Feature 1 justifies planned maintenance over crisis response for the same reason).
+There is no reason to accept that failure mode at the model level while eliminating it at the
+maintenance level. Retaining past versions turns "the new model made things worse" into a
+quick recovery instead of an incident, and its value only grows the longer the platform runs
+and the more retraining cycles accumulate.
 
 ## 14. Generic, Asset-Agnostic Design and Platform Integration
 
@@ -767,8 +694,9 @@ rather than aspirational:
   anomaly detector cannot silently break the classifier's behavior, and vice versa.
 - Genuinely new fault types are a first-class, detectable outcome ("unknown anomaly"), not
   a silent misclassification.
-- Growth is safe by construction: the validation gate mechanically enforces "no regression
-  on prior classes" rather than relying on best-effort technique alone.
+- Growth is safe by construction: new models are checked against every previously known
+  fault type before they can replace the model in use, rather than relying on best-effort
+  technique alone.
 - The same anomaly-detection component is reused by Module 4, and the same lifecycle
   governance is reusable by every other module — lower total platform maintenance burden
   than five independently-designed ML systems.
@@ -786,8 +714,9 @@ rather than aspirational:
 - Periodic batch retraining means the system's reaction to a genuinely new, fast-emerging
   condition lags by up to one retraining cycle, rather than updating instantly — a
   deliberate safety trade-off (section 9), not an oversight.
-- The exemplar store, validation gate, and version history all require someone to operate
-  and audit them — this is a standing operational responsibility, not a one-time build cost.
+- The growing record of verified fault data, the validation step, and the record of past
+  model versions all require someone to operate and audit them — this is a standing
+  operational responsibility, not a one-time build cost.
 
 **Assumptions**
 - Engineers/technicians are available and willing to verify flagged segments through the
@@ -890,11 +819,11 @@ considered, so the trade-offs behind the final design are visible rather than im
 | Anomaly detection combined with fault classification (hybrid) | Anomaly detection alone, with no fault-type classification | Anomaly-only detection cannot deliver the specific maintenance recommendation, urgency, cost comparison, or priority ranking the platform's other features already promise, and treats well-understood recurring faults the same as genuinely novel ones, wasting verified fault history and reintroducing alert fatigue |
 | Anomaly detector trained only on normal data, gating the classifier | Anomaly signal derived from low classifier confidence | Closed-set classifier confidence is a documented poor proxy for novelty/out-of-distribution detection; an explicit component trained on the data regime this project actually has in abundance (normal operation) is more reliable and available sooner |
 | Traditional/classical ML for each component's initial implementation | Deep learning models as the initial implementation | Deep models need far more data than three months (with only a handful of confirmed episodes per fault type) can provide to generalize rather than memorize, and are harder to validate and explain to non-ML stakeholders whose trust the platform depends on early on; the architecture allows moving individual components to deep learning later (section 2.5) once data justifies it |
-| Periodic, gated batch retraining | Continuous/online learning on every new verified label | Online learning has no natural pre-deployment evaluation point, no defined version to revert to, and risks silent degradation from a single ambiguous label; industrial practice (IBM's documented experience) treats retraining as a planned, evaluated event |
-| Retraining on the full accumulated set of verified examples, old and new | Training only on data collected since the last retraining run | Rehearsing old exemplars alongside new ones is a standard, verifiable way to avoid losing prior knowledge; it requires no new infrastructure beyond the human-verification exemplar store this design already needs |
-| Mandatory all-classes regression check in the validation gate | Validating only the new/updated class before promotion | Only a mechanical, mandatory check against every previously known class actually *guarantees* "no regression on prior knowledge" — technique alone reduces risk but doesn't prove absence of forgetting for a specific candidate |
-| Chronological / walk-forward evaluation only | Random or k-fold cross-validation split | This project's own data shows strong lag-1 autocorrelation (~0.9); a random split leaks via near-duplicate neighboring samples and produces fictitious accuracy — a structural property of the data, not a one-off fix |
-| Keeping every validated model version, staged testing before switchover, easy reversion | Direct in-place model replacement on retraining | Without kept versions and a staged rollout, recovering from a bad model requires an emergency retrain under pressure — exactly the "crisis response" pattern this platform is designed to eliminate at the maintenance level; it shouldn't be tolerated at the model level either |
+| Periodic, checked retraining | Continuous/online learning on every new verified label | Online learning has no natural pre-deployment check, no defined version to revert to, and risks silent degradation from a single ambiguous label; industrial practice (IBM's documented experience) treats retraining as a planned, evaluated event |
+| Retraining on the full record of verified examples, old and new | Training only on data collected since the last retraining run | Keeping old verified examples in every retraining run prevents new knowledge from crowding out old knowledge, without needing new infrastructure beyond the verification process this design already includes |
+| Checking every candidate model against all previously known fault types before deployment | Validating only against the new/updated fault type | Only checking every fault type actually confirms old knowledge wasn't lost — assuming a technique prevents forgetting is not the same as verifying it for a specific model |
+| Validating on data recorded after the training period, not mixed in with it | Testing on a random split of all available data | Sensor readings recorded close together in time look very similar, so a random split can make a model appear more accurate than it really is |
+| Retaining previous validated model versions and allowing quick reversion | Replacing the deployed model directly on every retrain | Without kept versions, recovering from a bad model requires an emergency fix under pressure — exactly the "crisis response" pattern this platform is designed to eliminate at the maintenance level; it shouldn't be tolerated at the model level either |
 | Generic channel-role schema instead of pump-specific fields | Asset-specific pipeline per equipment type | Required by the explicit constraint that the design not depend on one asset type; also the concrete mechanism that lets Module 4 reuse the same anomaly-detection component across assets rather than reimplementing it |
 | Cost-based / relative bar for promoting a new model | Fixed absolute accuracy threshold | Matches this project's own existing plan to threshold alerts on expected cost rather than an arbitrary probability cutoff; ties model promotion to demonstrated reduction in expected operational cost, not an abstract metric |
 
@@ -928,8 +857,8 @@ Standards:
 
 Academic literature:
 
-- Continual learning / catastrophic forgetting survey — stability-plasticity dilemma;
-  replay-based, regularization-based, and architecture-based mitigation taxonomy:
+- Continual learning / catastrophic forgetting survey — the general challenge of a model
+  losing previously learned knowledge as it learns something new:
   ["A Continual Learning Survey: Defying Forgetting in Classification Tasks", IEEE
   TPAMI](https://ieeexplore.ieee.org/iel7/34/4359286/09349197.pdf)
 - Continual learning applied to non-stationary condition-monitoring data streams:
@@ -948,14 +877,11 @@ Academic literature:
   scarce, imbalanced industrial fault samples:
   ["A Few-Shot Learning Based Fault Diagnosis Model Using Sensors Data from Industrial
   Machineries"](https://www.mdpi.com/2571-631X/6/4/59)
-- MLOps staged-rollout, model-history, and automated-rollback practice: [Introducing MLOps
-  Champion/Challenger Models, DataRobot](https://www.datarobot.com/blog/introducing-mlops-champion-challenger-models/),
-  [Automated Model Retraining & Deployment, Snowflake](https://www.snowflake.com/en/developers/guides/ml-champion-challenger-model-deployment/)
 
 Existing project documentation this design builds on directly:
 
-- `FAULT_PREDICTION_PLAN.md` — data-leakage rationale (autocorrelation), episode-count
-  gating, walk-forward evaluation harness, cost-based alert-threshold plan.
+- `FAULT_PREDICTION_PLAN.md` — data-leakage rationale, episode-count gating, walk-forward
+  evaluation harness, cost-based alert-threshold plan.
 - `docs/plan/2026-07-16-pipeline-review-response.md` — physics-validation and
   sensor-fault-vs-process-anomaly routing principles reused in section 6/14.
 - `server/services/driftService.js`, `server/services/forecastService.js` — the existing
