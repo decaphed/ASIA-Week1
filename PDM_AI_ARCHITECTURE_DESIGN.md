@@ -23,15 +23,6 @@ eventually follow, and Module 1's outputs (fault type, confidence, cost impact) 
 to Module 6 (Unified Plant Decision Support). Section 14 makes these integration points
 explicit.
 
-**Relationship to this project's existing code:** this is not a greenfield proposal. Parts
-of this architecture are already implemented — a rule-based degradation/drift signal
-(`server/services/driftService.js`, `forecastService.js`), physics-aware data preparation
-that separates sensor faults from genuine process anomalies (`server/preprocessing/
-faultClassifier.js`), and a walk-forward evaluation harness with an explicit promotion bar
-(`server/preprocessing/evaluation/`, documented in `FAULT_PREDICTION_PLAN.md`). Where that
-is true, this document says so and explains how the existing piece maps onto the
-architecture, rather than proposing to replace it.
-
 ---
 
 ## 1. Overview of the Recommended Architecture
@@ -48,12 +39,12 @@ Concretely, the architecture has three groups of components:
 
 1. **Detection core** — data preparation, feature engineering, an anomaly-detection
    component (semi-supervised, trained on normal operation), a known-fault classification
-   component (supervised, trained only on verified fault exemplars), and a confidence
+   component (supervised, trained only on verified fault examples), and a confidence
    estimation / arbitration layer that reconciles the two into one of three outcomes:
    *normal*, *known fault (type, confidence)*, or *unknown anomaly*.
 2. **Human-in-the-loop learning loop** — a verification workbench where engineers confirm,
    reject, or relabel flagged segments, turning "unknown anomaly" into either a new
-   confirmed exemplar of an existing fault type or the seed of a new fault class.
+   confirmed example of an existing fault type or the seed of a new fault class.
 3. **Lifecycle governance** — continuous monitoring for drift and performance drop, a
    controlled retraining process that folds newly verified examples in without discarding
    what was already learned, a validation step every candidate model must pass before it can
@@ -103,11 +94,10 @@ classes already have solid historical coverage.
   existing classes. Given new operating conditions or degradation modes that were not in the
   original training data (an explicit requirement here), this means a closed-set classifier
   will confidently mislabel a novel condition as the nearest known class rather than flag it
-  as novel. This is the exact failure mode the open-set recognition and hybrid
-  anomaly-detection literature exists to address (e.g. DenseHybrid, arXiv:2207.02606; Qsco,
-  arXiv:2405.16368) — plain classifier confidence is a documented poor proxy for detecting
-  that something is out of distribution, so lowering a confidence threshold is not a
-  substitute for an explicit "is this normal at all" signal.
+  as novel. This is the exact failure mode the open-set recognition literature exists to
+  address (references) — plain classifier confidence is a documented poor proxy for
+  detecting that something is out of distribution, so lowering a confidence threshold is not
+  a substitute for an explicit "is this normal at all" signal.
 
 **Conclusion:** a single supervised classifier is rejected not because it is a bad model, but
 because no closed-set classifier — however accurate on its trained classes — can satisfy the
@@ -168,19 +158,13 @@ not reuse it, and the platform would end up maintaining two divergent anomaly-de
 implementations. Making it an explicit, shared component means Module 1 and Module 4 share
 one methodology at different scopes.
 
-It is also not a novel proposal for this project to invent: Siemens' published Senseye
-architecture separates anomaly detection, pattern matching/classification, degradation
-forecasting, and advisory generation as distinct stages rather than one model call; IBM
-Maximo Predict documents deployment, monitoring, and retraining as decoupled lifecycle
-phases with technician feedback built in as a first-class mechanism. This project's own
-codebase has already converged on the same boundary independently:
-`driftService.js`/`forecastService.js` already provide a no-training-required, rule-based
-degradation signal (Feature 1) that is completely independent of the not-yet-built supervised
-classifier reserved for a later phase (Feature 3), and the evaluation harness in
-`FAULT_PREDICTION_PLAN.md` already requires any future classifier to beat that independent
-baseline — a pattern that only makes sense if "detect something is wrong" and "say what it
-is" are already being treated as separate, separately-evaluated concerns. This document
-formalizes that existing boundary rather than introducing a new one.
+It is also not a novel proposal for this project to invent. Separating detection from
+classification is a common pattern in industrial condition-monitoring platforms: Siemens'
+Senseye architecture separates anomaly detection, pattern matching/classification,
+degradation forecasting, and advisory generation as distinct stages rather than one model
+call, and IBM Maximo Predict documents deployment, monitoring, and retraining as decoupled
+lifecycle phases with technician feedback built in as a first-class mechanism. This design
+follows that same established boundary rather than introducing a new one.
 
 ### 2.4 Why traditional machine learning, not deep learning, is the right starting point
 
@@ -261,7 +245,7 @@ good.
     │      DETECTION                │             │      CLASSIFICATION           │
     │  semi-supervised, trained on   │  gates -->  │  supervised, multi-class,     │
     │  normal operation only         │             │  trained only on verified     │
-    │  (asset-agnostic, per class)   │             │  fault exemplars               │
+    │  (asset-agnostic, per class)   │             │  fault examples                │
     └───────────────────────────────┘             └───────────────────────────────┘
                     └───────────────────────┬───────────────────────┘
                                             v
@@ -280,7 +264,7 @@ good.
         ┌───────────────────────────────────────────────────────────────┐
         │ [5] HUMAN VERIFICATION & LABELING WORKBENCH                   │
         │  engineer confirms / rejects / relabels via work order;       │
-        │  verified segment → exemplar store (new label or new class)  │
+        │  verified segment → fault record (new label or new class)     │
         └───────────────────────────────────────────────────────────────┘
                                             |
                                             v
@@ -335,7 +319,7 @@ good.
 | **Data Preparation** | Ingest raw sensor streams; validate against physical plausibility; distinguish sensor/instrumentation faults from genuine abnormal process behavior; impute only where physically justified; preserve raw signal alongside any smoothed copy | No learning — deterministic, physics-informed rules | Any volume, day one |
 | **Feature Engineering** | Convert prepared readings into a generic, asset-agnostic feature set per "channel role" (e.g. primary vibration, process temperature, flow, discharge/suction pressure, rotational speed) plus derived trend/drift features | No learning — deterministic transforms, some per-asset baselining | Any volume, day one |
 | **Anomaly / Novelty Detection** | Score how far current behavior deviates from established normal operation; flag whether a deviation resembles any known fault signature or is unlike anything seen | Semi-supervised — trained on normal-operation segments only | Weeks of normal operation per asset/class |
-| **Known-Fault Classification** | For segments already flagged abnormal, identify which known fault type is present, with a class-conditional confidence | Supervised — trained only on verified fault exemplars, incrementally | Grows with verified exemplar count; explicitly gated on a minimum episode count per class |
+| **Known-Fault Classification** | For segments already flagged abnormal, identify which known fault type is present, with a class-conditional confidence | Supervised — trained only on verified fault examples, incrementally | Grows with the number of verified examples; a fault type is only trained once enough confirmed examples of it exist |
 | **Confidence Estimation & Arbitration** | Combine the two upstream signals into one calibrated decision: normal / known fault (with confidence) / unknown anomaly; sets the operating threshold as a cost trade-off, not an arbitrary probability cutoff | Calibration only, not a predictive model of its own | As soon as the two upstream components exist |
 | **Human Verification & Labeling Workbench** | Surface flagged segments to engineers/technicians tied to a work order; capture confirm / reject / relabel / new-class decisions | N/A — the mechanism by which humans supply new ground truth | Continuous, throughout the platform's life |
 | **Model Monitoring** | Continuously watch for drift in sensor behavior and drops in model performance; flag when retraining may be needed | Statistical monitoring, not predictive | Continuous, always-on |
@@ -352,9 +336,8 @@ good.
    and feature-engineered as described in sections 6-7, containing a partial catalog of
    known fault types. This trains the *initial* anomaly detector (on the normal-operation
    majority of the data) and a *first-cut* known-fault classifier for whichever fault types
-   already have enough confirmed episodes (the project's own evaluation harness sets that
-   bar at ~100-200 onset episodes; classes below that threshold are not trained yet, only
-   monitored for accumulation).
+   already have enough confirmed episodes; fault types below that threshold are not trained
+   yet, only monitored for accumulation.
 2. **Live scoring.** New readings flow through Data Preparation → Feature Engineering →
    Anomaly Detection → (if abnormal) Known-Fault Classification → Confidence Estimation,
    producing one of: no alert, a known-fault alert (feeding the existing Features 1-5
@@ -364,10 +347,10 @@ good.
    Predict documents ("technician feedback mechanism directly in work orders"). The
    engineer's verdict — confirmed known fault, confirmed new fault type, or false alarm —
    becomes ground truth.
-4. **Exemplar accumulation.** Verified segments join a curated exemplar store, tagged by
-   fault class (existing or newly created). This store, not just "new data since last
-   training," is what future retraining draws on — this is what makes safe incremental
-   learning possible (sections 9-10).
+4. **Verified fault record.** Verified segments join a growing record of confirmed
+   examples, tagged by fault class (existing or newly created). This record, not just "new
+   data since last training," is what future retraining draws on — this is what makes safe
+   incremental learning possible (sections 9-10).
 5. **Monitoring.** Independently of any retraining, drift and live-performance monitoring
    run continuously and only ever raise a signal — they never change the deployed model
    themselves.
@@ -381,7 +364,7 @@ good.
    currently in use; the previous version is kept so the system can revert to it quickly if
    needed.
 9. **Continuous improvement.** The loop returns to step 2 with a (possibly) updated model,
-   and the exemplar store keeps growing from step 3 onward — this is how the platform
+   and the verified fault record keeps growing from step 3 onward — this is how the platform
    improves over its lifetime without ever bypassing steps 5-8.
 
 ---
@@ -399,21 +382,20 @@ specific to this project: a classifier that must also learn to recognize "normal
 every fault type needs far more data and a harder decision boundary than one that is only
 ever asked to discriminate among a handful of already-abnormal fault types. With three
 months of data and an incomplete fault catalog, that difference is the gap between a
-classifier that is usable now and one that isn't ready for a long time. This mirrors the
-project's own existing design choice: the not-yet-built classifier work in
-`FAULT_PREDICTION_PLAN.md` Phase 4 is explicitly scoped to start once ~100-200 fault onset
-episodes exist — a bar that is achievable much sooner if the classifier only has to
-discriminate among faults, rather than fault-vs-normal-vs-fault simultaneously.
+classifier that is usable now and one that isn't ready for a long time — a fault type is only
+added to the classifier once enough confirmed examples of it exist to distinguish it
+reliably, a bar that is reached sooner if the classifier only has to discriminate among
+faults, rather than fault-vs-normal-vs-fault simultaneously.
 
 The classifier operates over the same generic, channel-role feature set as everything else
 (section 7), so "known fault" here means known fault *signature* — a physically
 characterized pattern across channel roles (e.g. a channel-role combination consistent with
 bearing wear: rising vibration amplitude with a co-trending speed instability) — not a
 hardcoded, asset-specific rule. Adding a new asset type does not require a new classifier
-architecture, only enough verified exemplars of that asset's fault signatures.
+architecture, only enough verified examples of that asset's fault signatures.
 
 This is also why the approach suits long-term deployment: a fault class only has to cross
-its confirmed-exemplar threshold once to become classifiable, and from then on it is simply
+its confirmed-example threshold once to become classifiable, and from then on it is simply
 carried forward and reinforced by the normal retraining cycle (sections 9-10). Classification
 quality improves monotonically as more faults are verified over the platform's life, without
 requiring any change to the pipeline itself.
@@ -464,7 +446,7 @@ scales down to weeks, not months, of examples per asset.
 When the detector flags a segment as abnormal, arbitration (component 4) asks a second
 question: does this abnormality's feature signature sit close to any known fault class's
 learned signature (routed to classification), or is it unlike anything the system has
-confirmed exemplars for (surfaced as an *unknown anomaly*, not forced into the nearest known
+confirmed examples for (surfaced as an *unknown anomaly*, not forced into the nearest known
 label)? This is what prevents the system from quietly mislabeling a genuinely new degradation
 mode as a familiar one.
 
@@ -484,11 +466,11 @@ precision). Section 8 covers this workflow in full.
 
 ### 7.5 How newly verified faults become part of future training data
 
-Every verdict, together with the underlying segment data, joins a curated exemplar store.
-Future retraining draws on that full, growing store — not only on data collected since the
-last retraining run — which is what lets a brand-new class, seeded by a single confirmed
-case, be trained into the classifier once enough further examples of it accumulate. Sections
-9 and 10 cover how this is done without eroding what the model already knows.
+Every verdict, together with the underlying segment data, joins the verified fault record.
+Future retraining draws on that full record — not only on data collected since the last
+retraining run — which is what lets a brand-new class, seeded by a single confirmed case, be
+trained into the classifier once enough further examples of it accumulate. Sections 9 and 10
+cover how this is done without eroding what the model already knows.
 
 ### 7.6 Why this supports continuous improvement without assuming every fault already exists
 
@@ -515,20 +497,20 @@ additional data-labeling chore layered on top.
 An engineer reviewing a flagged segment has three possible verdicts:
 
 - **Confirmed known fault** — the segment is relabeled/confirmed as an existing fault
-  class; it strengthens that class's exemplar count.
+  class; it adds to that class's number of verified examples.
 - **Confirmed new fault type** — the engineer determines this is a genuinely new failure
-  mode; it seeds a brand-new fault class with its first verified exemplar(s). (A single
-  new class needs to accumulate more confirmed examples, via the same route, before a
-  classifier can learn to recognize it reliably — the workbench records it immediately,
-  training catches up on the next retraining cycle once enough exemplars exist.)
+  mode; it seeds a brand-new fault class with its first verified example(s). (A single new
+  class needs to accumulate more confirmed examples, via the same route, before a classifier
+  can learn to recognize it reliably — the workbench records it immediately, training
+  catches up on the next retraining cycle once enough examples exist.)
 - **False alarm** — the segment is confirmed as within-normal variation the detector
   mis-flagged; it helps the anomaly detector avoid similar false alarms in the future,
   directly counteracting the alert-fatigue risk the platform document already identifies as
   a threat to adoption (Feature 5).
 
 Every verdict is captured with the underlying raw and prepared segment data, not just a
-label, so the exemplar store used for retraining always contains full, physically-grounded
-evidence rather than a bare tag.
+label, so the verified fault record used for retraining always contains full,
+physically-grounded evidence rather than a bare tag.
 
 ## 9. How the System Safely Incorporates New Knowledge
 
@@ -654,14 +636,14 @@ The architecture is asset-agnostic by construction, not by omission. Every compo
 downstream of Data Preparation operates on **channel roles** — abstract sensor functions
 such as *primary vibration channel*, *process temperature channel*, *flow channel*,
 *suction/discharge pressure channel*, *rotational speed channel* — rather than pump-specific
-field names. This generalizes a pattern already present in this project's own per-metric
-threshold configuration (`server/config/thresholds.js`) from "one fixed set of six pump
-metrics" to "a configurable channel-role profile per asset class." A motor is described by
-a different subset of channel roles (vibration, winding temperature, current draw) than a
-pump (flow, suction/discharge pressure, vibration, motor temperature); the pipeline,
-feature engineering, anomaly detection, and classification components are unchanged — only
-the channel-role profile and the accumulated exemplar store differ per asset class. This is
-the same principle behind ISO 13374's reference information model and the Industrie 4.0
+field names. This generalizes the common practice of defining fixed per-metric thresholds
+for a single asset type into a configurable channel-role profile that describes any asset
+class. A motor is described by a different subset of channel roles (vibration, winding
+temperature, current draw) than a pump (flow, suction/discharge pressure, vibration, motor
+temperature); the pipeline, feature engineering, anomaly detection, and classification
+components are unchanged — only the channel-role profile and the accumulated verified fault
+record differ per asset class. This is the same principle behind ISO 13374's reference
+information model and the Industrie 4.0
 Asset Administration Shell concept: a self-describing, asset-type-agnostic data and
 processing architecture, rather than one built around a specific machine's field names.
 
@@ -732,8 +714,9 @@ rather than aspirational:
 
 **Limitations**
 - No architecture fixes fundamental data scarcity for very rare fault types — this design
-  manages that scarcity safely (by gating classifier training on a minimum exemplar count,
-  and by not forcing a decision until enough evidence exists) rather than papering over it.
+  manages that scarcity safely (by gating classifier training on a minimum number of
+  verified examples, and by not forcing a decision until enough evidence exists) rather than
+  papering over it.
 - Novelty detection can flag that something is abnormal and unfamiliar; it cannot, by
   itself, name or root-cause a fault type it has never been shown a confirmed example of —
   that remains a human expert judgment until enough verified examples accumulate to train a
@@ -825,66 +808,47 @@ considered, so the trade-offs behind the final design are visible rather than im
 | Validating on data recorded after the training period, not mixed in with it | Testing on a random split of all available data | Sensor readings recorded close together in time look very similar, so a random split can make a model appear more accurate than it really is |
 | Retaining previous validated model versions and allowing quick reversion | Replacing the deployed model directly on every retrain | Without kept versions, recovering from a bad model requires an emergency fix under pressure — exactly the "crisis response" pattern this platform is designed to eliminate at the maintenance level; it shouldn't be tolerated at the model level either |
 | Generic channel-role schema instead of pump-specific fields | Asset-specific pipeline per equipment type | Required by the explicit constraint that the design not depend on one asset type; also the concrete mechanism that lets Module 4 reuse the same anomaly-detection component across assets rather than reimplementing it |
-| Cost-based / relative bar for promoting a new model | Fixed absolute accuracy threshold | Matches this project's own existing plan to threshold alerts on expected cost rather than an arbitrary probability cutoff; ties model promotion to demonstrated reduction in expected operational cost, not an abstract metric |
+| Cost-based / relative bar for promoting a new model | Fixed absolute accuracy threshold | Ties model promotion to a demonstrated reduction in expected operational cost compared to the model in use, matching the cost-based reasoning already used elsewhere in this module for deciding whether an alert is worth raising, rather than judging against an abstract accuracy target |
 
 ---
 
 ## 18. References
 
-Industrial platforms and documented practice:
+Industrial platforms and practice (cited to support specific architectural choices, not as
+product descriptions):
 
-- Siemens Senseye Predictive Maintenance — anomaly detection, AI/ML pattern matching,
-  degradation forecasting, and advisory generation as separate pipeline stages:
-  [Senseye Predictive Maintenance | Siemens](https://www.siemens.com/en-us/products/industrial-digitalization-services/senseye-predictive-maintenance/),
-  [ARC Advisory Group review](https://www.arcweb.com/industry-best-practices/senseye-predictive-maintenance-ai-driven-visibility-insights)
-- IBM Maximo Predict — deployment/monitoring/retraining as decoupled lifecycle phases,
-  technician feedback in work orders, documented drift-and-planned-retraining example:
-  [Deploying and Monitoring IBM Maximo Predict Models](https://themaximoguys.ai/blog/mas-predict-deployment-monitoring),
-  [The Role of AI in Predictive Maintenance | IBM](https://www.ibm.com/think/insights/ai-in-predictive-maintenance)
-- C3 AI Reliability — unified domain data model across sensor/document/process sources for
-  predictive analytics: [C3 AI Reliability](https://c3.ai/products/c3-ai-reliability/)
-- ABB Ability Genix and Schneider Electric EcoStruxure — asset performance management and
-  energy/reliability platforms built on a contextualized, cross-asset data model (market
-  context): [Green Quadrant: Industrial AI Analytics Software (2025), Verdantix](https://www.verdantix.com/venture/report/green-quadrant--industrial-ai-analytics-software-2025)
+- **Siemens Senseye** — separates anomaly detection, pattern matching/classification, and
+  advisory generation into distinct stages rather than one model, supporting the case for a
+  hybrid architecture (section 2.3).
+- **IBM Maximo Predict** — treats deployment, monitoring, and retraining as decoupled,
+  planned lifecycle phases with technician feedback built into the work-order flow,
+  supporting the case for periodic retraining and human verification (sections 8-9, 11).
+- **C3 AI Reliability, ABB Ability Genix, Schneider Electric EcoStruxure** — asset
+  performance management platforms built on a unified, asset-agnostic data model, supporting
+  the case for a generic channel-role schema rather than an asset-specific pipeline (section
+  14).
+- Other major industrial platforms — including Honeywell Forge, AVEVA, and AspenTech — follow
+  broadly comparable patterns of layered detection, human review, and governed model updates
+  in their asset performance and reliability offerings.
 
 Standards:
 
-- ISO 13374 (Parts 1-4) — Condition monitoring and diagnostics of machines: reference
-  information/processing model dividing the pipeline into Data Acquisition, Data
-  Manipulation, State Detection, Health Assessment, Prognostic Assessment, and Advisory
-  Generation: [ISO 13374-4:2015](https://www.iso.org/standard/54933.html)
-- ISO 17359 — General guidelines for condition-monitoring and diagnostics program framework.
+- **ISO 13374** — reference architecture for condition monitoring and diagnostics (data
+  acquisition, data processing, state detection, health assessment, prognostics, advisory
+  generation), the basis for this design's overall layering.
+- **ISO 17359** — general guidelines for condition-monitoring and diagnostics programs.
 
-Academic literature:
+Academic literature (supporting the unknown-fault, catastrophic-forgetting, and
+deep-learning-vs-traditional-ML arguments in sections 2 and 7):
 
-- Continual learning / catastrophic forgetting survey — the general challenge of a model
-  losing previously learned knowledge as it learns something new:
-  ["A Continual Learning Survey: Defying Forgetting in Classification Tasks", IEEE
-  TPAMI](https://ieeexplore.ieee.org/iel7/34/4359286/09349197.pdf)
-- Continual learning applied to non-stationary condition-monitoring data streams:
-  [ScienceDirect, "A continual learning approach for failure prediction under non-stationary
-  conditions"](https://www.sciencedirect.com/science/article/abs/pii/S0360835225001950)
-- Open-set / hybrid anomaly detection — separating novelty detection from closed-set
-  classification: [DenseHybrid: Hybrid Anomaly Detection for Dense Open-set Recognition,
-  arXiv:2207.02606](https://arxiv.org/abs/2207.02606),
-  [Qsco: A Quantum Scoring Module for Open-set Supervised Anomaly Detection,
-  arXiv:2405.16368](https://arxiv.org/pdf/2405.16368)
-- Hybrid unsupervised-anomaly-detection-plus-supervised-classification frameworks for
-  industrial predictive maintenance:
-  ["Hybrid Deep Learning for Predictive Maintenance in Industrial Machinery"](https://www.mdpi.com/2075-1702/14/2/191)
-- Small-data / few-shot industrial fault diagnosis — why normal-condition modeling scales
-  down to far less data than multi-class fault typing, and why deep models struggle with
-  scarce, imbalanced industrial fault samples:
-  ["A Few-Shot Learning Based Fault Diagnosis Model Using Sensors Data from Industrial
-  Machineries"](https://www.mdpi.com/2571-631X/6/4/59)
-
-Existing project documentation this design builds on directly:
-
-- `FAULT_PREDICTION_PLAN.md` — data-leakage rationale, episode-count gating, walk-forward
-  evaluation harness, cost-based alert-threshold plan.
-- `docs/plan/2026-07-16-pipeline-review-response.md` — physics-validation and
-  sensor-fault-vs-process-anomaly routing principles reused in section 6/14.
-- `server/services/driftService.js`, `server/services/forecastService.js` — the existing
-  rule-based degradation/drift signal generalized in sections 6 and 11.
-- `server/preprocessing/faultClassifier.js` — the existing sensor-fault-vs-genuine-anomaly
-  routing principle this design's Data Preparation component extends.
+- Continual learning / catastrophic forgetting — the general challenge of a model losing
+  previously learned knowledge as it learns something new: "A Continual Learning Survey:
+  Defying Forgetting in Classification Tasks," IEEE TPAMI.
+- Open-set recognition and hybrid anomaly detection — why separating "is this abnormal" from
+  "which known type is this" is necessary for recognizing unseen conditions: "DenseHybrid:
+  Hybrid Anomaly Detection for Dense Open-set Recognition"; "Qsco: A Quantum Scoring Module
+  for Open-set Supervised Anomaly Detection."
+- Small-data / few-shot industrial fault diagnosis — why normal-condition modeling needs far
+  less data than multi-class fault typing, and why deep models struggle with scarce,
+  imbalanced industrial fault samples: "A Few-Shot Learning Based Fault Diagnosis Model Using
+  Sensors Data from Industrial Machineries."
