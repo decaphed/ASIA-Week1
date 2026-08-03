@@ -1,0 +1,15 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      DB_PATH: /data/data.db
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
+    volumes:
+      - server_data:/data
+    restart: unless-stopped
+
+volumes:
+  server_data:

@@ -14,6 +14,7 @@ import { onNewProcessedRecord as forecastOnNewRecord } from './forecastService.j
 import { onNewProcessedRecord as driftOnNewRecord } from './driftService.js';
 import { onNewProcessedRecord as trendOnNewRecord } from './trendService.js';
 import { computeFeaturesForNewRow, INGEST_FETCH_ROWS } from '../preprocessing/historicalFeatures.js';
+import { logger } from '../utils/logger.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 
@@ -134,9 +135,21 @@ export function saveProcessedReading(data) {
  */
 export function saveAndTrigger(data) {
   const record = saveProcessedReading(data);
-  forecastOnNewRecord(data);
-  driftOnNewRecord(data);
-  trendOnNewRecord(data);
+  try {
+    forecastOnNewRecord(data);
+  } catch (err) {
+    logger.error(`forecastService.onNewProcessedRecord failed: ${err.stack || err.message}`);
+  }
+  try {
+    driftOnNewRecord(data);
+  } catch (err) {
+    logger.error(`driftService.onNewProcessedRecord failed: ${err.stack || err.message}`);
+  }
+  try {
+    trendOnNewRecord(data);
+  } catch (err) {
+    logger.error(`trendService.onNewProcessedRecord failed: ${err.stack || err.message}`);
+  }
   return record;
 }
 

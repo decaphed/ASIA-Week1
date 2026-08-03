@@ -1,0 +1,9 @@
+services:
+  client:
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: /api
+    ports:
+      - "5173:80"
+    restart: unless-stopped
