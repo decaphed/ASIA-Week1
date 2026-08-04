@@ -234,6 +234,15 @@ sequential case exactly.
 Do not skip this. It is the one part of the migration that can produce silently wrong data
 rather than an obvious error.
 
+**Note for future multi-pump support (not this phase):** the schema currently has no
+`pumpId`/`pumpName` concept — `raw_telemetry` and `processed_telemetry` assume a single
+stream. When multi-pump support is eventually added, that requires its own schema migration
+*and* a change to this mutex: swap the single global lock for one lock per `pumpId`, keyed
+by pump, so different pumps' ingestion can proceed in parallel and only same-pump readings
+are serialised against each other. Do the mutex keying change in the same piece of work as
+the multi-pump schema migration, not now — a single global lock is correct and sufficient
+for the current single-pump setup.
+
 ### 4.6 Docker
 
 - `server/Dockerfile`: drop `apk add --no-cache python3 make g++`. Those exist solely to
