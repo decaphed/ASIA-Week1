@@ -83,13 +83,16 @@ happening first, or at all. See §7 for the one thing to watch if both land clos
 ```
 server/
 ├── database/
-│   ├── schema.sql              # + fault_events table (see §4.2)
-│   └── db.js                   # + one more idempotent ALTER TABLE block, matching existing style
+│   └── schema.sql              # + fault_events table (see §4.2) — a plain CREATE TABLE IF NOT
+│                                #   EXISTS is sufficient; no db.js ALTER TABLE work needed
+│                                #   for a brand-new table (see §4.1 note)
 ├── models/
 │   └── faultEventModel.js      # NEW — mirrors processedModel.js's role for the new table
 ├── services/
 │   ├── processedService.js     # saveAndTrigger() gains a 4th onNewProcessedRecord call
-│   └── pdmService.js           # NEW — onNewProcessedRecord hook, HTTP call to pdm/, persists verdict
+│   ├── pdmService.js           # NEW — onNewProcessedRecord hook, HTTP call to pdm/, persists verdict
+│   └── faultEventService.js    # NEW — sits between pdmController/pdmService and faultEventModel,
+│                                #   matching this repo's controller→service→model layering
 ├── controllers/
 │   └── pdmController.js        # NEW — HITL review endpoints (list flagged, confirm, reject, annotate)
 └── routes/index.js             # + /api/pdm/* routes
@@ -139,6 +142,19 @@ for a non-engineer to tune later), not hardcoded inline in `rules.py`. Each metr
 above, explicitly labeled as "initial values, ported from server/preprocessing/config.js,
 pending domain-expert review."
 
+**Porting `MAX_RAMP_RATE_PER_SECOND` is not a direct copy — the statistics don't match.**
+`MAX_RAMP_RATE_PER_SECOND` is an *instantaneous* per-second ceiling (the largest single-tick
+jump `validator.js` will tolerate before flagging a physics violation). `rawRateOfChange` in
+`precapFeaturesByMetric` is a *mean* of tick-to-tick differences averaged across the entire
+60-sample window. A window's mean rate of change will almost always sit far below the
+instantaneous max — most of a window is quiet, even one carrying a real fault — so seeding
+`rateOfChangeMax` directly from `MAX_RAMP_RATE_PER_SECOND`'s values means the rule will
+rarely if ever fire. `rules.py` must state and apply an explicit derivation (e.g. a
+documented fraction of the instantaneous ceiling, tuned against a few known-fault windows
+from the simulator, not the raw constant itself). `motorTemp` also has no entry in
+`MAX_RAMP_RATE_PER_SECOND` at all — its `rateOfChangeMax` needs its own reasoned starting
+value (temperature moves slowly; a strict ceiling here is appropriate), not a silent gap.
+
 ### 3.2 What a "flag" actually is
 
 A rule violation on a single window is a **candidate**, not a confirmed fault — this mirrors
@@ -164,6 +180,16 @@ A flagged candidate becomes a `fault_events` row with `status = 'PENDING_REVIEW'
 about a Tier 1 flag is presented to an operator as a confirmed fault — HITL review is what
 promotes it.
 
+**Don't surface `confidence` prominently in the eventual review UI.** If a reviewer sees
+Tier 1's own confidence score while labeling an event, they're prone to anchor on it and
+rubber-stamp high-confidence flags rather than independently judging the data — which would
+launder Tier 1's own bias into what's supposed to be ground-truth training data. Keep
+`confidence` available (e.g. in a details panel, not the headline), and separately track how
+often HITL's outcome agrees with Tier 1's confidence level — that agreement rate is a useful
+signal for retuning thresholds later, distinct from the review itself. This only matters once
+the review UI (deferred, per §1) gets built, but the `fault_events` schema already captures
+what's needed for it (`confidence` + `status` on the same row).
+
 ### 3.3 Why `fault_events` is a table, not CSV files
 
 Per the tech lead's original idea, fault buffers were going to be separate CSV files
@@ -174,37 +200,79 @@ metadata; the buffer is reconstructed on demand with a single timestamp query.
 
 ```sql
 CREATE TABLE IF NOT EXISTS fault_events (
-  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  -- FK to the window that triggered this (or, for a periodically-sampled
+  -- negative example — see below — the window it was sampled from). A real
+  -- foreign key, not a timestamp-string match, so a row can never silently
+  -- point at the wrong window if two windows share a timestamp collision.
+  processedTelemetryId INTEGER NOT NULL REFERENCES processed_telemetry(id),
 
   -- What Tier 1 (or a human, for a manually-logged fault) flagged.
-  detectedAt         TEXT NOT NULL,          -- ISO timestamp the flag was raised
-  triggerWindowEnd   TEXT NOT NULL,          -- processed_telemetry.timestamp that triggered this
-  triggeredRules     TEXT,                   -- JSON array, e.g. ["vibration.rateOfChange"]
-  confidence         TEXT,                   -- LOW | MEDIUM | HIGH (Tier 1's own read)
+  -- eventType distinguishes an actual flag from a periodically-sampled
+  -- "normal" window banked as a negative training example (see §3.3.1) —
+  -- without this, Tier 2 would train on flagged windows only and never see
+  -- a confirmed-normal example.
+  eventType             TEXT NOT NULL DEFAULT 'FLAGGED', -- FLAGGED | NEGATIVE_SAMPLE
+  detectedAt            TEXT NOT NULL,          -- ISO timestamp the flag/sample was raised
+  triggerWindowEnd      TEXT NOT NULL,          -- processed_telemetry.timestamp that triggered this
+  triggeredRules        TEXT,                   -- JSON array, e.g. ["vibration.rateOfChange"]; null for NEGATIVE_SAMPLE
+  confidence            TEXT,                   -- LOW | MEDIUM | HIGH (Tier 1's own read); null for NEGATIVE_SAMPLE
+
+  -- Snapshot of exactly what Tier 1 saw at flag time — precapFeaturesByMetric
+  -- + the metric min/max/stdDev Tier 1 actually evaluated. Captured now
+  -- because it CANNOT be reconstructed later: if precapFeatures.js's
+  -- windowing or the thresholds change before Tier 2 is trained, an
+  -- offline recompute from raw_telemetry would silently disagree with what
+  -- the rule engine actually acted on (train/serve skew). This is the
+  -- feature vector Tier 2 trains against, not a raw_telemetry re-derivation.
+  featureSnapshot       TEXT NOT NULL,          -- JSON: the processedRecord's feature fields at flag time
+  thresholdsVersion      TEXT,                   -- identifies which thresholds.yaml revision was active,
+                                                  -- so a later retune doesn't silently invalidate old labels
 
   -- Buffer boundaries — an hour before the fault, the fault period itself, and
-  -- an hour after it's resolved. bufferEnd is only known once resolvedAt is
-  -- set, so it's nullable until HITL closes the event out.
-  faultStart         TEXT NOT NULL,
-  faultEnd           TEXT,
-  bufferStart        TEXT NOT NULL,          -- faultStart minus 1 hour
-  bufferEnd          TEXT,                   -- faultEnd plus 1 hour, once known
+  -- an hour after it's resolved. bufferEnd is only known once the fault is
+  -- resolved, so it's nullable until HITL closes the event out. Null for
+  -- NEGATIVE_SAMPLE rows, which have no fault period to bracket.
+  faultStart            TEXT,
+  faultEnd              TEXT,
+  bufferStart           TEXT,                   -- faultStart minus 1 hour
+  bufferEnd             TEXT,                   -- faultEnd plus 1 hour, once known
 
-  -- HITL fields — null until a human reviews it.
-  status             TEXT NOT NULL DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW | CONFIRMED | REJECTED
-  faultType          TEXT,                   -- THERMAL | CAVITATION | BEARING | OTHER, HITL's call
-  rootCause          TEXT,
-  resolution         TEXT,
-  reviewedBy         TEXT,
-  reviewedAt         TEXT,
-  notes              TEXT,
+  -- HITL fields — null until a human reviews it. Not applicable to
+  -- NEGATIVE_SAMPLE rows, which don't go through review.
+  status                TEXT NOT NULL DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW | CONFIRMED | REJECTED | (N/A for NEGATIVE_SAMPLE)
+  faultType              TEXT,                   -- THERMAL | CAVITATION | BEARING | OTHER, HITL's call
+  rootCause              TEXT,
+  resolution              TEXT,
+  reviewedBy              TEXT,
+  reviewedAt              TEXT,
+  notes                   TEXT,
 
-  createdAt          TEXT NOT NULL DEFAULT (datetime('now'))
+  createdAt               TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_fault_events_status ON fault_events (status);
 CREATE INDEX IF NOT EXISTS idx_fault_events_buffer ON fault_events (bufferStart, bufferEnd);
+CREATE INDEX IF NOT EXISTS idx_fault_events_processed ON fault_events (processedTelemetryId);
 ```
+
+**3.3.1 Negative examples.** A rule engine only ever produces `fault_events` rows for windows
+it flagged — Tier 2 would otherwise train on zero confirmed-normal examples and have no
+actual decision boundary to learn. Add a lightweight periodic sample: on some fraction of
+closed windows with `dominantStatus = 'RUNNING'` and no triggered rules (e.g. 1-in-N, or
+one per hour — exact cadence is an implementation choice, not a design one), `pdmService.js`
+banks a `NEGATIVE_SAMPLE` row with the same `featureSnapshot` capture as a real flag, skipping
+the HITL review fields entirely. This is cheap to add now and, like the feature snapshot
+itself, effectively impossible to backfill later.
+
+**3.3.2 Event coalescing.** Without dedup, a single fault spanning multiple consecutive
+windows (e.g. a 30-minute fault = 30 closed windows) produces 30 separate `PENDING_REVIEW`
+rows instead of one. Before creating a new `fault_events` row, `pdmService.js` should check
+for an existing `PENDING_REVIEW`/open row on the same trigger condition within a short lookback
+(e.g. the immediately preceding window closed with the same or an overlapping `triggeredRules`
+set) and extend that row's `faultEnd`/`triggerWindowEnd` instead of inserting a new one. A new
+row is only created when no such open event exists.
 
 Extracting the actual buffer for training is then just:
 
@@ -220,23 +288,49 @@ query, on demand** — it's a derived artifact, not the source of truth. Add a
 `GET /api/pdm/fault-events/:id/buffer.csv` endpoint for that if/when it's actually needed;
 not included in this phase's scope unless requested.
 
-Add this table in `schema.sql`, following the file's existing style, and add the matching
-idempotent `ALTER TABLE`/creation check in `db.js` if the table needs to be introduced to an
-already-running database without a fresh `data.db` — same pattern every other addition in
-that file already follows.
+Add this table in `schema.sql`, following the file's existing style. **No `db.js` change is
+needed.** `db.js` runs the entire `schema.sql` — including `CREATE TABLE IF NOT EXISTS` — on
+every boot; the `ALTER TABLE` blocks elsewhere in that file exist only to add a *column* to a
+table that already existed before the column did. `fault_events` is an entirely new table, so
+`CREATE TABLE IF NOT EXISTS` alone already handles both a fresh `data.db` and an existing one
+with no further work.
 
 ### 3.4 The Node ↔ Python HTTP boundary
 
-`pdmService.js` mirrors `forecastService.js`/`driftService.js`/`trendService.js`'s
-`onNewProcessedRecord(data)` export, and gets added to `processedService.saveAndTrigger()`
-as a fourth call in the same try/catch-isolated pattern already used for the other three —
-a PdM scoring failure must never block or slow ingestion, exactly like a forecast/drift/trend
-failure doesn't today:
+**Payload shape — this is load-bearing, get it right.** `saveAndTrigger()` calls
+`forecastOnNewRecord(data)`, `driftOnNewRecord(data)`, and `trendOnNewRecord(data)` with
+`data` — the **flat, pre-insert object** (the same shape `pipeline.js` builds and
+`processedController.js`'s manual POST path passes straight through as `req.body`; see that
+controller's own comment: "req.body is already flat... same flat shape forecastService/
+driftService read"). It is *not* the nested `rowToProcessed()` shape (`metrics.flowRate.mean`,
+etc.) — that nested shape only exists on read, built from a DB row, and critically has no
+`id` field, since it's constructed before the insert's `RETURNING`/`lastInsertRowid` exists.
+
+`pdmService.js`'s `onNewProcessedRecord` must follow the same convention as the other three —
+receive the flat `data` — for consistency and because that's what `saveAndTrigger()` actually
+has in hand at that point in the sequence. But `fault_events.processedTelemetryId` needs a
+real row id to reference, which the flat pre-insert object doesn't carry. Two options,
+pick one and apply it consistently:
+  (a) call `pdmOnNewRecord` with the **return value of `saveProcessedReading()`** (which does
+      have `id`, per `rowToProcessed({ id: Number(info.lastInsertRowid), ...record })`)
+      instead of `data`, breaking from the other three's convention specifically for this
+      reason, or
+  (b) keep passing `data` for consistency, and have `pdmService.js` look up the just-inserted
+      row's id via `model.getLatestProcessed()` (it will be the row `saveProcessedReading()`
+      just wrote, since ingestion is already serialised — see the TimescaleDB migration
+      plan's §4.5 on why that serialisation exists).
+Option (a) is simpler and avoids an extra read; note the deliberate deviation from the other
+three services' signature in a comment so a future reader doesn't "fix" it to match.
+
+`pdmService.js` gets added to `processedService.saveAndTrigger()` as a fourth call in the
+same try/catch-isolated pattern already used for the other three — a PdM scoring failure
+must never block or slow ingestion, exactly like a forecast/drift/trend failure doesn't
+today:
 
 ```js
 // processedService.js — saveAndTrigger(), alongside the existing three
 try {
-  pdmOnNewRecord(data);
+  pdmOnNewRecord(record); // the saveProcessedReading() return value — see §3.4 on why
 } catch (err) {
   logger.error(`pdmService.onNewProcessedRecord failed: ${err.stack || err.message}`);
 }
@@ -251,19 +345,27 @@ container/CT later is a config change, not a code change):
 const PDM_SERVICE_URL = process.env.PDM_SERVICE_URL || 'http://localhost:8000';
 ```
 
-with a short timeout (e.g. 2s) and a swallowed failure (logged, not thrown) — a slow or
-down PdM service must never back up ingestion. On a successful response, `pdmService.js`
+with a short timeout (e.g. 2s). **The `try/catch` above only guards a synchronous throw —
+it does not catch a rejected promise from an async fire-and-forget call.** `pdmService.js`'s
+own async POST must attach its own `.catch()` (or the calling function must `await` it inside
+its own try/catch) so a network failure or timeout becomes a logged error, not an unhandled
+promise rejection — this is exactly the failure mode §5.6's "PdM service is fully down" test
+is meant to exercise, and an unhandled rejection would make that test pass for the wrong
+reason (Node not crashing) while masking a real bug. On a successful response, `pdmService.js`
 persists a `fault_events` row itself (Node owns all DB writes; Python never touches SQLite
-directly, per the already-settled boundary) only when the response is `flagged: true`.
+directly, per the already-settled boundary) only when the response is `flagged: true` — see
+§3.3.1 for the separate negative-sampling path, and §3.3.2 for coalescing against an
+already-open event before inserting a new row.
 
 ### 3.5 Python service shape
 
 FastAPI, loaded once at container startup (no per-request import/reload):
 
-- `POST /score` — body: the `processedRecord` JSON shape (mirror
-  `processedService.js`'s `rowToProcessed()` output via a Pydantic model in `schemas.py` —
-  this doubles as a schema contract that will loudly fail validation if Node's shape drifts
-  from what Python expects, rather than silently misreading fields).
+- `POST /score` — body: the **flat pre-insert `processedRecord` shape** (see §3.4 — this is
+  `data`/the object `pipeline.js` builds, e.g. `flowRateMean`, `dominantStatus`, flat fields —
+  not the nested `rowToProcessed()` API-response shape). Mirror it via a Pydantic model in
+  `schemas.py`, which doubles as a schema contract that will loudly fail validation if Node's
+  shape drifts from what Python expects, rather than silently misreading fields.
 - `GET /health` — trivial liveness check, same spirit as the existing `/api/health`.
 - `rules.py` holds the actual threshold logic as pure functions (input: metrics dict +
   thresholds config, output: the flag/confidence/triggeredRules shape from §3.2) — kept
@@ -295,17 +397,24 @@ fault isn't resolved yet.
 ## 4. Work items
 
 ### 4.1 Database
-- Add `fault_events` to `schema.sql` (§3.3).
-- Add the matching idempotent creation check to `db.js`, consistent with the existing
-  pattern for every other schema addition in that file.
-- `faultEventModel.js` — prepared statements: insert, list-by-status, get-by-id, update
-  (HITL patch), and the buffer-range query against `raw_telemetry`.
+- Add `fault_events` to `schema.sql` (§3.3), including the `NEGATIVE_SAMPLE` `eventType`,
+  `featureSnapshot`, `thresholdsVersion`, and `processedTelemetryId` FK. No `db.js` change
+  needed — see §3.3's note.
+- `faultEventModel.js` — prepared statements: insert (flag and negative-sample variants),
+  list-by-status, list-open-by-trigger (for coalescing, §3.3.2), get-by-id, update (HITL
+  patch), and the buffer-range query against `raw_telemetry`.
 
 ### 4.2 Node service layer
-- `pdmService.js`: `onNewProcessedRecord(data)`, the fire-and-forget POST to
-  `PDM_SERVICE_URL`, and `fault_events` row creation on a `flagged: true` response.
+- `faultEventService.js` — sits between `pdmController.js`/`pdmService.js` and
+  `faultEventModel.js`, matching this repo's controller→service→model layering (every other
+  controller calls a service, never a model directly). Owns: creating a flagged event
+  (with coalescing check), creating a negative sample, and applying a HITL review patch.
+- `pdmService.js`: `onNewProcessedRecord(record)` (see §3.4 on why it takes the insert result,
+  not the flat `data` the other three services receive), the fire-and-forget POST with its
+  own `.catch()` (§3.4), the periodic negative-sample trigger (§3.3.1), and calls into
+  `faultEventService.js` rather than `faultEventModel.js` directly.
 - Wire it into `processedService.saveAndTrigger()` (§3.4).
-- `pdmController.js` + routes for the three HITL endpoints (§3.6).
+- `pdmController.js` + routes for the three HITL endpoints (§3.6), calling `faultEventService.js`.
 - `.env.example`: add `PDM_SERVICE_URL=http://localhost:8000`.
 
 ### 4.3 Python service
@@ -334,15 +443,34 @@ fault isn't resolved yet.
 - Update `docker-compose.yml` (the combined local-dev file) to include the `pdm` service
   alongside `server`/`client`, with `PDM_SERVICE_URL=http://pdm:8000` set on the `server`
   service so the two containers can reach each other by Docker network name.
+- `docker-compose.backend.yml` and the root `.env.example` also need `PDM_SERVICE_URL` wired
+  in — that compose file is the actual deployment target once PdM runs on its own CT (per
+  §1's note), so the split-CT case needs this env var set explicitly, not just the combined
+  local-dev file.
 
 ### 4.5 Tests
+
+**No Node test infrastructure exists yet.** `server/scripts/tests/` currently holds exactly
+two files (`aggregation.dominantFaultType.test.mjs` and its integration counterpart), run
+directly via `node --test <file>` — there's no `npm test` script in `package.json`, no test
+runner config, and no HTTP-integration test pattern (spinning up the Express app + hitting
+routes) anywhere in the repo yet. The items below are not "add a test to the existing suite"
+— they require standing up that pattern first (likely `node:test` + `supertest` or a
+lightweight `createApp()` + real HTTP calls, matching the "no framework unless needed" style
+the rest of the backend follows). Scope this explicitly rather than assuming it exists.
+
 - `rules.py` unit tests (Python side, §4.3).
 - A Node integration test: POST a `processedRecord` that should trigger a rule (e.g.
   vibration rate-of-change past threshold), confirm a `fault_events` row is created with
-  `status = PENDING_REVIEW`.
+  `status = PENDING_REVIEW`, `eventType = FLAGGED`, and a non-null `featureSnapshot`.
+- A coalescing test: two consecutive triggering windows for the same rule produce one
+  `fault_events` row with an extended `triggerWindowEnd`, not two rows (§3.3.2).
 - A Node test confirming `saveAndTrigger()` still returns successfully and stores the
-  processed record even when `PDM_SERVICE_URL` is unreachable (the fire-and-forget/timeout
-  contract from §3.4).
+  processed record even when `PDM_SERVICE_URL` is unreachable, and that the rejected fetch
+  promise is caught rather than becoming an unhandled rejection (§3.4).
+- Add an `npm test` script (or equivalent) to `server/package.json` if standing up this
+  infrastructure, so `npm test` becomes the one command that runs everything — currently
+  there is none.
 
 ---
 
@@ -362,7 +490,10 @@ fault isn't resolved yet.
    returns the expected ~2-hour-plus span of `raw_telemetry` rows.
 6. Stop the `pdm` container entirely and confirm ingestion (`POST /api/data`) keeps working
    without delay or error — the fire-and-forget contract must hold under a fully-down
-   dependency, not just a slow one.
+   dependency, not just a slow one. Also confirm no unhandled promise rejection appears in
+   the backend's logs/process during this step (§3.4).
+7. Confirm a periodic `NEGATIVE_SAMPLE` row appears during normal (non-fault) simulator
+   operation, with a populated `featureSnapshot` and no HITL fields set (§3.3.1).
 
 ---
 
@@ -372,10 +503,17 @@ fault isn't resolved yet.
 |---|---|---|
 | PdM scoring call blocks or slows ingestion | High | Fire-and-forget, short timeout, try/catch-isolated (§3.4); verified explicitly in §5.6 |
 | Python service becomes a second DB writer | High | Never given DB credentials; only ever sees HTTP payloads (§3.4, already an existing decision) |
+| Unhandled promise rejection from the async POST crashes/degrades the process | High | `.catch()` on the fire-and-forget call itself, not just the outer sync try/catch (§3.4); explicitly tested (§5.6) |
+| `fault_events` feature vector can't be reconstructed later if `precapFeatures.js` or thresholds change before Tier 2 is trained | High | `featureSnapshot` + `thresholdsVersion` captured at flag time, not derived later (§3.3) |
+| No confirmed-normal examples for future Tier 2 training | High | Periodic `NEGATIVE_SAMPLE` rows banked alongside flags (§3.3.1) |
+| `rateOfChangeMax` seeded from an instantaneous ceiling never fires against a windowed mean | High | Explicit derivation documented and tuned against known-fault windows, not a raw constant copy (§3.1.1) |
+| A single multi-window fault produces one `fault_events` row per window instead of one | Medium | Coalescing check against an already-open event before insert (§3.3.2) |
+| Reviewer anchors on Tier 1's own confidence score, laundering its bias into HITL labels | Medium | Don't surface `confidence` prominently in the future review UI (§3.2) |
 | Thresholds are guesses, not validated against real fault data | Medium — expected at this stage | Explicitly labeled provisional in `thresholds.yaml`; HITL-confirmed/rejected events are the feedback loop that should retune them over time |
 | `processedRecord` shape drifts between Node and Python over time | Medium | Pydantic schema in `schemas.py` fails loudly on a mismatch instead of silently misreading fields |
+| `pdmController.js` calls `faultEventModel.js` directly, breaking this repo's controller→service→model layering | Low | `faultEventService.js` added as the missing layer (§4.2) |
 | CSV buffer files re-proliferate as an ad hoc habit despite the DB-first design | Low | Buffers are DB time-range queries by default; CSV export is an explicit, on-demand endpoint, not the storage mechanism |
-| `fault_events` added to `schema.sql` but `db.js`'s creation check forgotten, breaking existing dev databases | Low | Follow the exact existing pattern in `db.js` for every prior schema addition |
+| No auth on HITL write endpoints, no kill switch on the rule engine | Low — accepted for now | Internal-only tool at this stage; revisit before any external/production exposure |
 
 ---
 
@@ -395,14 +533,24 @@ schema-inclusion note.
 
 ## 8. Definition of done
 
-- [ ] `fault_events` table exists, following the existing schema/migration-check pattern
+- [ ] `fault_events` table exists via `schema.sql` alone (no `db.js` change needed)
+- [ ] `faultEventService.js` exists; `pdmController.js` never calls `faultEventModel.js` directly
 - [ ] `pdmService.js` wired into `saveAndTrigger()`, fire-and-forget, never blocks ingestion
+- [ ] The fire-and-forget POST has its own `.catch()` — no unhandled rejection under a fully-down PdM service (§5.6)
 - [ ] Backend survives the PdM service being fully down (§5.6)
-- [ ] Tier 1 rule engine flags a forced violation with correct `triggeredRules`/`confidence`
+- [ ] Tier 1 rule engine flags a forced violation with correct `triggeredRules`/`confidence`,
+      and the `fault_events` row's `processedTelemetryId` correctly references the triggering window
+- [ ] A `featureSnapshot` and `thresholdsVersion` are captured on every flagged row
+- [ ] Periodic `NEGATIVE_SAMPLE` rows are created during normal operation (§3.3.1, §5.7)
+- [ ] A multi-window fault coalesces into one row, not one per window (§3.3.2)
 - [ ] HITL endpoints: list, get, confirm/reject/annotate all working
 - [ ] Buffer range query returns the correct hour-before/fault/hour-after span
-- [ ] Thresholds live in one configurable file, labeled provisional, sourced from existing
-      Node-side constants
+- [ ] Thresholds live in one configurable file, labeled provisional, with an explicit and
+      documented derivation from the Node-side constants (not a direct copy — §3.1.1)
 - [ ] `pdm/` container builds and runs via `docker-compose.pdm.yml`
+- [ ] `PDM_SERVICE_URL` wired into `docker-compose.backend.yml` and the root `.env.example`,
+      not just the combined local-dev compose file
+- [ ] Node test infrastructure stood up (`npm test` runs something); rule-trigger, coalescing,
+      and PdM-service-down tests all pass
 - [ ] Python unit tests for `rules.py` pass
 - [ ] No PdM code reads or writes SQLite directly from Python
