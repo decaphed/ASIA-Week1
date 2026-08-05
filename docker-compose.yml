@@ -7,9 +7,12 @@ services:
       PORT: 3000
       DB_PATH: /data/data.db
       CLIENT_ORIGIN: http://localhost:5173
+      PDM_SERVICE_URL: http://pdm:8000
     volumes:
       - server_data:/data
     restart: unless-stopped
+    depends_on:
+      - pdm
 
   client:
     build:
@@ -20,6 +23,12 @@ services:
       - "5173:80"
     depends_on:
       - server
+    restart: unless-stopped
+
+  pdm:
+    build: ./pdm
+    ports:
+      - "8000:8000"
     restart: unless-stopped
 
 volumes:
