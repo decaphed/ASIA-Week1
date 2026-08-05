@@ -289,14 +289,29 @@ relying on it.
 **Sampling scheme — ship simple, upgrade later.** V1 is plain time-uniform sampling per the
 cadence above — that alone already solves the "zero negative examples" problem, which is the
 actual blocker for eventually training Tier 2, and is enough to unblock this plan's DoD.
-Pure time-uniform sampling does risk concentrating negatives around whatever steady-state
-operating point the plant spends most of its time at, under-representing legitimate-but-unusual
-RUNNING conditions (startup transients, high/low-flow regimes) — exactly where false positives
-are most likely later. Regime-aware sampling (bucket by `flowRateMean`/`rpmMean` range, cap
-density per bucket) is the right eventual fix, but it's real added complexity (bucket
-boundaries, per-bucket counters) that depends on seeing what regime diversity the real data
-actually has — better tuned once there's real data to look at than guessed upfront. Track this
-as a documented near-term follow-up, not a requirement of this plan's Definition of Done.
+
+**Checked against the actual simulator, not a hypothetical.** `node-red/flow.json`'s
+`gen_reading` function (the only telemetry source this system currently has) drives every
+metric off a single scalar `load`, mean-reverting toward one fixed `loadTarget = 0.5` for the
+entire duration of `RUNNING` — there is no persistent high-flow/low-flow regime split in this
+generator for time-uniform sampling to under-represent; that concern, as originally stated,
+was targeting a distinction this data source doesn't produce. The one real transient regime it
+does have is the ramp-up after a `STOPPED` episode ends (`loadTarget` drops to `0.02` during
+`STOPPED`, then reverts back to `0.5` at `loadSpeed = 0.06`/tick — roughly a one-minute climb
+once `RUNNING` resumes, driven by `state.regimeTicksLeft`/`state.regime` in `gen_reading`).
+Time-uniform sampling does capture this transient, just proportionally to how rarely it
+occurs rather than deliberately oversampled — acceptable for v1, since deliberately
+oversampling it would require tracking "windows since last STOPPED," not a flow/RPM bucket.
+
+**If regime-aware sampling is ever built, key it off "windows since last STOPPED,"** — the
+real transient this generator (and the pipeline's own `dominantStatus` field) already expose
+— **not a static flow/RPM range**, which was the original proposal and would target a
+regime this simulator doesn't have. This is a statement about the current simulator, not a
+permanent claim: real operational data may expose genuinely distinct setpoints (e.g. two
+different demand profiles a real plant runs at different times) that this simulator doesn't
+model, so the bucketing question should be re-asked against real telemetry once it exists,
+not assumed closed. Track this as a documented near-term follow-up, not a requirement of
+this plan's Definition of Done.
 
 `pdmService.js` banks the `NEGATIVE_SAMPLE` row with the same `featureSnapshot` capture as a
 real flag (§3.3's fixed composition — full `precapFeaturesByMetric` + full `metricStats`,
@@ -636,7 +651,7 @@ the rest of the backend follows). Scope this explicitly rather than assuming it 
 | A `NEGATIVE_SAMPLE` row gets banked inside a fault that transiently clears for one window | Medium | Sampling suppressed while any `FLAGGED` event is open (§3.3.1) |
 | `featureSnapshot` composition differs between FLAGGED and NEGATIVE_SAMPLE rows, giving Tier 2 inconsistent feature dimensionality across classes | Medium | Fixed, eventType-independent composition specified explicitly (§3.3) |
 | HITL-agreement tracking (§3.2) stays a stated intention with no endpoint, so it silently never gets built | Medium | `GET /api/pdm/fault-events/stats` added as a concrete deliverable (§3.6, §4.2, DoD) |
-| Negative sampling is time-uniform, under-representing non-steady-state operating conditions | Low — accepted for v1 | Time-uniform sampling ships first (unblocks the actual "zero negatives" problem); regime-bucketed sampling tracked as a documented follow-up once real data is available, not a DoD requirement (§3.3.1) |
+| Negative sampling is time-uniform | None against the current simulator — verified no persistent flow/RPM regime split exists in `gen_reading` to under-sample (§3.3.1); revisit if real operational data exposes distinct setpoints the simulator doesn't model | Time-uniform sampling ships for v1; regime-bucketed sampling (keyed off windows-since-STOPPED, not a static flow/RPM bucket) tracked as a documented follow-up, not a DoD requirement (§3.3.1, §9) |
 | CSV buffer files re-proliferate as an ad hoc habit despite the DB-first design | Low | Buffers are DB time-range queries by default; CSV export is an explicit, on-demand endpoint, not the storage mechanism |
 | No auth on HITL write endpoints, no kill switch on the rule engine | Low — accepted for now | Internal-only tool at this stage; revisit before any external/production exposure |
 
@@ -698,8 +713,11 @@ notes.
 
 ## 9. Deferred: regime-bucketed negative sampling
 
-Once real telemetry (or a richer simulator run) shows what operating-regime diversity actually
-looks like, revisit §3.3.1: bucket negative sampling by `flowRateMean`/`rpmMean` range (e.g.
-3-5 coarse bins) and cap density per bucket per day, so negatives aren't concentrated only
-around the plant's dominant steady-state operating point. Exact bin boundaries are a tuning
-detail to set against real data, not something to guess now. Not required for this plan's DoD.
+Not required against the current simulator — verified against `node-red/flow.json`'s
+`gen_reading`, which drives `RUNNING` telemetry off a single mean-reverting `load` scalar
+with one fixed target, i.e. no persistent high/low-flow regime split exists in this data
+source to under-sample (§3.3.1). If revisited later, key it off "windows since the last
+`STOPPED` episode" (the one real transient this generator has, via `dominantStatus`), not a
+static `flowRateMean`/`rpmMean` bucket. Re-open this question once real operational
+telemetry exists — it may expose genuinely distinct operating setpoints the simulator
+doesn't model. Not required for this plan's Definition of Done.
