@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────
+# thresholds.yaml — Tier 1 rule-engine thresholds (docs/plan/2026-08-05-pdm-
+# implementation.md §3.1.1). Every value here is a PROVISIONAL PLACEHOLDER,
+# not validated against real fault data — retune as HITL confirms/rejects
+# events over time. Bump `version` on every retune; fault_events.thresholds
+# Version (Node-side) is read verbatim from this field.
+#
+# Sourcing, per column:
+#   min / max        — server/utils/validation.js's RANGES (physically-
+#                       possible hard bounds; already labeled provisional
+#                       there too).
+#   stdDevMax         — 15% of the metric's normal *operating* span (from
+#                       server/services/driftService.js's OPERATING_RANGE,
+#                       which is narrower than the hard min/max above) — a
+#                       window whose raw std dev exceeds that is reasoned to
+#                       be unusually noisy for normal operation. No existing
+#                       Node-side constant to port; this is PdM's own
+#                       starting value.
+#   rateOfChangeMax   — NOT a direct copy of server/preprocessing/config.js's
+#                       MAX_RAMP_RATE_PER_SECOND. That constant is an
+#                       INSTANTANEOUS per-tick ceiling; rawRateOfChange here
+#                       is the MEAN tick-to-tick delta averaged across an
+#                       entire 60-sample window, which sits far below the
+#                       instantaneous max even inside a real fault window (most
+#                       of a window is quiet). Seeded at 10% of the
+#                       instantaneous ceiling: a sustained ramp needs only a
+#                       modest fraction of ticks moving near the instantaneous
+#                       max to pull the window mean past this — tune against
+#                       known-fault windows from the simulator once available.
+#                       motorTemp has no MAX_RAMP_RATE_PER_SECOND entry at all
+#                       (thermal mass makes instantaneous ramp rate a poor
+#                       signal) — its value below is reasoned directly instead:
+#                       temperature moves slowly, so even a small sustained
+#                       per-second climb across a whole window is meaningful.
+# ─────────────────────────────────────────────────────────────────────────
+
+version: "1"
+
+metrics:
+  flowRate:
+    min: 0
+    max: 500
+    stdDevMax: 37.5
+    rateOfChangeMax: 10.0     # 10% of MAX_RAMP_RATE_PER_SECOND.flowRate (100)
+
+  rpm:
+    min: 0
+    max: 5000
+    stdDevMax: 390.0
+    rateOfChangeMax: 150.0    # 10% of MAX_RAMP_RATE_PER_SECOND.rpm (1500)
+
+  vibration:
+    min: 0
+    max: 25
+    stdDevMax: 1.725
+    rateOfChangeMax: 0.5      # 10% of MAX_RAMP_RATE_PER_SECOND.vibration (5)
+
+  suctionPressure:
+    min: 0
+    max: 10
+    stdDevMax: 0.375
+    rateOfChangeMax: 0.3      # 10% of MAX_RAMP_RATE_PER_SECOND.suctionPressure (3)
+
+  dischargePressure:
+    min: 0
+    max: 25
+    stdDevMax: 1.5
+    rateOfChangeMax: 0.3      # 10% of MAX_RAMP_RATE_PER_SECOND.dischargePressure (3)
+
+  motorTemp:
+    min: 0
+    max: 150
+    stdDevMax: 10.5
+    rateOfChangeMax: 0.15     # no instantaneous ceiling exists to derive from;
+                               # reasoned directly — motorTemp moves slowly, so
+                               # a sustained ~0.15 degC/s window-mean ramp is
+                               # already an anomalous thermal event.
