@@ -167,9 +167,18 @@ have"). The Tier 1 response shape:
   "confidence": "LOW" | "MEDIUM" | "HIGH",
   "triggeredRules": ["vibration.rateOfChange", "motorTemp.stdDev"],
   "metric": "vibration",
-  "windowEnd": "2026-08-05T10:14:00.000Z"
+  "windowEnd": "2026-08-05T10:14:00.000Z",
+  "thresholdsVersion": "1"
 }
 ```
+
+**`thresholdsVersion` must be in this response.** `fault_events.thresholdsVersion` (§3.3) is
+sourced from `thresholds.yaml`'s `version:` field, which only Python ever reads — Node owns
+the `fault_events` write (§3.4) but has no other way to learn which thresholds revision was
+active for this verdict. `rules.evaluate()` (§3.5) must read the loaded `version:` value and
+include it on every response, flagged or not, and `schemas.py`'s response Pydantic model must
+declare it as a required field — without this, the column in §3.3's schema and the DoD line
+that depends on it are unsatisfiable.
 
 `confidence` is derived from how many independent rules triggered and on how many metrics —
 same reasoning `faultClassifier.js` already uses for its own SENSOR_FAULT vs
@@ -253,8 +262,13 @@ CREATE TABLE IF NOT EXISTS fault_events (
   bufferEnd             TEXT,                   -- faultEnd plus 1 hour, once known
 
   -- HITL fields — null until a human reviews it. Not applicable to
-  -- NEGATIVE_SAMPLE rows, which don't go through review.
-  status                TEXT NOT NULL DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW | CONFIRMED | REJECTED | (N/A for NEGATIVE_SAMPLE)
+  -- NEGATIVE_SAMPLE rows, which don't go through review. The default only
+  -- applies to FLAGGED inserts (§4.1's model insert must explicitly pass
+  -- status = 'N/A' for the negative-sample variant) — a NOT NULL column with
+  -- a PENDING_REVIEW default would otherwise put every negative sample into
+  -- the HITL review queue, since the default fires whenever an insert
+  -- doesn't specify the column, and nothing else prevents that.
+  status                TEXT NOT NULL DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW | CONFIRMED | REJECTED | N/A (NEGATIVE_SAMPLE rows only)
   faultType              TEXT,                   -- THERMAL | CAVITATION | BEARING | OTHER, HITL's call
   rootCause              TEXT,
   resolution              TEXT,
@@ -335,6 +349,13 @@ unrelated flag raised in between.
 "Same trigger condition" means: the new window's `triggeredRules` set and the open row's
 `triggeredRules` set share at least one rule on the same metric — not any-overlap across
 unrelated metrics, which would wrongly merge two independent multi-metric faults into one row.
+
+Because `NEGATIVE_SAMPLE` rows get `status = 'N/A'`, never `'PENDING_REVIEW'` (§3.3's status
+column note), the `<open-row condition>` below — keyed on `status = 'PENDING_REVIEW'` — can
+never match a negative-sample row by construction; no separate `eventType = 'FLAGGED'` filter
+is needed on top of the status check for this to be correct, but write the condition as
+`status = 'PENDING_REVIEW'` explicitly rather than `eventType = 'FLAGGED'`, since status is
+what actually encodes "still open."
 
 **On the "atomic statement" requirement below.** Under the current stack — synchronous
 `better-sqlite3`, single-threaded Node — two overlapping `/score` responses cannot actually
