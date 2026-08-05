@@ -289,14 +289,30 @@ relying on it.
 **Sampling scheme — ship simple, upgrade later.** V1 is plain time-uniform sampling per the
 cadence above — that alone already solves the "zero negative examples" problem, which is the
 actual blocker for eventually training Tier 2, and is enough to unblock this plan's DoD.
-Pure time-uniform sampling does risk concentrating negatives around whatever steady-state
-operating point the plant spends most of its time at, under-representing legitimate-but-unusual
-RUNNING conditions (startup transients, high/low-flow regimes) — exactly where false positives
-are most likely later. Regime-aware sampling (bucket by `flowRateMean`/`rpmMean` range, cap
-density per bucket) is the right eventual fix, but it's real added complexity (bucket
-boundaries, per-bucket counters) that depends on seeing what regime diversity the real data
-actually has — better tuned once there's real data to look at than guessed upfront. Track this
-as a documented near-term follow-up, not a requirement of this plan's Definition of Done.
+
+Checked against what the Node-RED simulator (`node-red/flow.json`'s `gen_reading` function)
+actually generates, since guessing at regime diversity without looking at the source would be
+exactly the mistake this section is trying to avoid: during `RUNNING`, `load` is a single
+mean-reverting random walk toward one fixed target — there isn't a persistent "high-flow" vs
+"low-flow" regime to under-sample in the first place, so bucketing by `flowRateMean`/`rpmMean`
+range wouldn't target a real distinction in this data source. The one genuine transient regime
+in the generator is the ramp-up right after a `STOPPED` episode ends (`load` resumes near-zero
+and climbs back to its RUNNING target over roughly a minute) — a real "startup transient,"
+distinct from steady RUNNING, and time-uniform sampling does capture it, just in proportion to
+how often it naturally occurs (STOPPED episodes are infrequent and short), not deliberately
+oversampled. Whether that natural proportion is enough for Tier 2 to learn the transient's
+signature, or whether it needs deliberate oversampling, isn't answerable without real fault
+data to check against.
+
+Regime-aware sampling is still the right eventual fix if that turns out to matter, but it's
+real added complexity (bucket boundaries, per-bucket counters) that shouldn't be designed
+against the wrong variable — if this gets revisited, key it off something like "windows since
+the last STOPPED episode" (the transient this generator actually has) rather than a static
+flow/RPM range (a regime this generator doesn't). Real operational data may of course expose
+genuinely different steady-state setpoints the simulator doesn't model at all, which would
+change this calculus — this is about what's known now, not a claim that no such regime will
+ever exist. Track this as a documented near-term follow-up, not a requirement of this plan's
+Definition of Done.
 
 `pdmService.js` banks the `NEGATIVE_SAMPLE` row with the same `featureSnapshot` capture as a
 real flag (§3.3's fixed composition — full `precapFeaturesByMetric` + full `metricStats`,
