@@ -216,19 +216,32 @@ CREATE TABLE IF NOT EXISTS fault_events (
   eventType             TEXT NOT NULL DEFAULT 'FLAGGED', -- FLAGGED | NEGATIVE_SAMPLE
   detectedAt            TEXT NOT NULL,          -- ISO timestamp the flag/sample was raised
   triggerWindowEnd      TEXT NOT NULL,          -- processed_telemetry.timestamp that triggered this
+  lastSeenWindowEnd     TEXT,                   -- bumped on every coalescing extension (§3.3.2); an open
+                                                  -- PENDING_REVIEW row is only extendable while this stays
+                                                  -- within the lookback bound of the current window
   triggeredRules        TEXT,                   -- JSON array, e.g. ["vibration.rateOfChange"]; null for NEGATIVE_SAMPLE
   confidence            TEXT,                   -- LOW | MEDIUM | HIGH (Tier 1's own read); null for NEGATIVE_SAMPLE
 
-  -- Snapshot of exactly what Tier 1 saw at flag time — precapFeaturesByMetric
-  -- + the metric min/max/stdDev Tier 1 actually evaluated. Captured now
-  -- because it CANNOT be reconstructed later: if precapFeatures.js's
-  -- windowing or the thresholds change before Tier 2 is trained, an
-  -- offline recompute from raw_telemetry would silently disagree with what
-  -- the rule engine actually acted on (train/serve skew). This is the
-  -- feature vector Tier 2 trains against, not a raw_telemetry re-derivation.
-  featureSnapshot       TEXT NOT NULL,          -- JSON: the processedRecord's feature fields at flag time
-  thresholdsVersion      TEXT,                   -- identifies which thresholds.yaml revision was active,
-                                                  -- so a later retune doesn't silently invalidate old labels
+  -- Snapshot of exactly what Tier 1 saw at flag time. Captured now because
+  -- it CANNOT be reconstructed later: if precapFeatures.js's windowing or
+  -- the thresholds change before Tier 2 is trained, an offline recompute
+  -- from raw_telemetry would silently disagree with what the rule engine
+  -- actually acted on (train/serve skew). This is the feature vector Tier 2
+  -- trains against, not a raw_telemetry re-derivation.
+  --
+  -- Composition is fixed and identical for BOTH eventTypes — this is not
+  -- "the metric(s) that triggered," it's every metric, every time, so
+  -- FLAGGED and NEGATIVE_SAMPLE rows produce the same feature dimensionality
+  -- for Tier 2 training. Exactly:
+  --   { precapFeaturesByMetric,   // verbatim, all six metrics
+  --     metricStats: { <metric>: { mean, median, min, max, stdDev, last } for all six metrics } }
+  -- i.e. the full precapFeaturesByMetric object plus the full per-metric
+  -- stats block off processedRecord — never a per-metric subset, even
+  -- though only one or two metrics triggered a rule on a FLAGGED row.
+  featureSnapshot       TEXT NOT NULL,          -- JSON, fixed shape above, captured identically for FLAGGED and NEGATIVE_SAMPLE
+  thresholdsVersion      TEXT,                   -- the `version:` string read from thresholds.yaml itself (see §3.1.1) —
+                                                  -- not a git SHA or file mtime, so it's stable across deploys and doesn't
+                                                  -- require git at runtime; bumped manually by whoever retunes the file
 
   -- Buffer boundaries — an hour before the fault, the fault period itself, and
   -- an hour after it's resolved. bufferEnd is only known once the fault is
@@ -259,20 +272,74 @@ CREATE INDEX IF NOT EXISTS idx_fault_events_processed ON fault_events (processed
 
 **3.3.1 Negative examples.** A rule engine only ever produces `fault_events` rows for windows
 it flagged — Tier 2 would otherwise train on zero confirmed-normal examples and have no
-actual decision boundary to learn. Add a lightweight periodic sample: on some fraction of
-closed windows with `dominantStatus = 'RUNNING'` and no triggered rules (e.g. 1-in-N, or
-one per hour — exact cadence is an implementation choice, not a design one), `pdmService.js`
-banks a `NEGATIVE_SAMPLE` row with the same `featureSnapshot` capture as a real flag, skipping
-the HITL review fields entirely. This is cheap to add now and, like the feature snapshot
-itself, effectively impossible to backfill later.
+actual decision boundary to learn. Add a periodic sample, gated by two required conditions:
+  1. `dominantStatus = 'RUNNING'` and no triggered rules on the current window (unchanged), AND
+  2. **no open `FLAGGED` event exists at sample time** (see §3.3.2 for "open") — a fault that
+     transiently clears for one window is still inside its fault period, and banking a
+     `NEGATIVE_SAMPLE` there would plant a mislabeled row inside real fault data. This check
+     runs in the response handler, after Tier 1's verdict is known, not at ingest time.
+
+Cadence: env-configurable (`PDM_NEGATIVE_SAMPLE_RATE`, default 1-in-60, i.e. roughly one
+per hour at the 60-second window cadence) rather than hardcoded, so §5.7's verification step
+and any future tuning don't require a code change. The counter is in-process (reset on
+restart) — acceptable for this phase since under-sampling by a few windows after a restart
+has no correctness impact, only a minor density one; note this explicitly rather than silently
+relying on it.
+
+**Sampling scheme — ship simple, upgrade later.** V1 is plain time-uniform sampling per the
+cadence above — that alone already solves the "zero negative examples" problem, which is the
+actual blocker for eventually training Tier 2, and is enough to unblock this plan's DoD.
+Pure time-uniform sampling does risk concentrating negatives around whatever steady-state
+operating point the plant spends most of its time at, under-representing legitimate-but-unusual
+RUNNING conditions (startup transients, high/low-flow regimes) — exactly where false positives
+are most likely later. Regime-aware sampling (bucket by `flowRateMean`/`rpmMean` range, cap
+density per bucket) is the right eventual fix, but it's real added complexity (bucket
+boundaries, per-bucket counters) that depends on seeing what regime diversity the real data
+actually has — better tuned once there's real data to look at than guessed upfront. Track this
+as a documented near-term follow-up, not a requirement of this plan's Definition of Done.
+
+`pdmService.js` banks the `NEGATIVE_SAMPLE` row with the same `featureSnapshot` capture as a
+real flag (§3.3's fixed composition — full `precapFeaturesByMetric` + full `metricStats`,
+not conditioned on `eventType`), skipping the HITL review fields entirely. This is cheap to
+add now and, like the feature snapshot itself, effectively impossible to backfill later.
+
+A negative-sample DB write failure must be caught inside `faultEventService.js`'s
+negative-sample path the same way the scoring POST's rejection is caught (§3.4) — it must
+never propagate up and affect ingestion.
 
 **3.3.2 Event coalescing.** Without dedup, a single fault spanning multiple consecutive
 windows (e.g. a 30-minute fault = 30 closed windows) produces 30 separate `PENDING_REVIEW`
-rows instead of one. Before creating a new `fault_events` row, `pdmService.js` should check
-for an existing `PENDING_REVIEW`/open row on the same trigger condition within a short lookback
-(e.g. the immediately preceding window closed with the same or an overlapping `triggeredRules`
-set) and extend that row's `faultEnd`/`triggerWindowEnd` instead of inserting a new one. A new
-row is only created when no such open event exists.
+rows instead of one. "Open" is defined precisely, not just as `status = 'PENDING_REVIEW'`:
+a `PENDING_REVIEW` row is only eligible to extend if its `lastSeenWindowEnd` (bumped on every
+extension) is within a bounded lookback of the current window (e.g. 3 consecutive windows / 3
+minutes at the 60-second cadence — a fault that clears for longer than this is treated as
+resolved, and a later re-trigger opens a *new* row, even if the old one is still sitting
+unreviewed). Without this bound, a fault reviewed a week late would silently absorb every
+unrelated flag raised in between.
+
+"Same trigger condition" means: the new window's `triggeredRules` set and the open row's
+`triggeredRules` set share at least one rule on the same metric — not any-overlap across
+unrelated metrics, which would wrongly merge two independent multi-metric faults into one row.
+
+**On the "atomic statement" requirement below.** Under the current stack — synchronous
+`better-sqlite3`, single-threaded Node — two overlapping `/score` responses cannot actually
+interleave mid-check as long as the "find an open row, then extend-or-insert" logic runs as
+one function with no `await` between the read and the write; JS does not preempt a synchronous
+block. So the specific race this section guards against isn't live today in quite the way
+"responses can return out of order and race" implies on its own. The real exposure is
+narrower but still worth closing: (a) it's an easy, easy-to-miss mistake to later add an
+innocuous `await` between the check and the write (e.g. for logging, or a follow-up query)
+and silently reintroduce the race, and (b) if the TimescaleDB migration (see §7) lands and
+this table's queries become async, the exact same interleaving hazard the ingestion mutex was
+built to prevent (see that plan's §4.5) applies here too. Using a single atomic
+`UPDATE ... WHERE <open-row condition> RETURNING id`-then-`INSERT`-if-zero-rows statement
+costs nothing extra today and removes the failure mode in both cases — keep it as the
+implementation, just understand it as future-proofing plus defense against an accidental
+future `await`, not a fix for an active race in the current synchronous setup.
+
+Before creating a new `fault_events` row, `pdmService.js`/`faultEventService.js` extend the
+matching open row's `faultEnd`/`triggerWindowEnd`/`lastSeenWindowEnd` instead of inserting a
+new one. A new row is only created when no such open event exists per the definition above.
 
 Extracting the actual buffer for training is then just:
 
@@ -288,12 +355,27 @@ query, on demand** — it's a derived artifact, not the source of truth. Add a
 `GET /api/pdm/fault-events/:id/buffer.csv` endpoint for that if/when it's actually needed;
 not included in this phase's scope unless requested.
 
-Add this table in `schema.sql`, following the file's existing style. **No `db.js` change is
-needed.** `db.js` runs the entire `schema.sql` — including `CREATE TABLE IF NOT EXISTS` — on
-every boot; the `ALTER TABLE` blocks elsewhere in that file exist only to add a *column* to a
-table that already existed before the column did. `fault_events` is an entirely new table, so
-`CREATE TABLE IF NOT EXISTS` alone already handles both a fresh `data.db` and an existing one
-with no further work.
+Add this table in `schema.sql`, following the file's existing style. **No `db.js` ALTER TABLE
+work is needed for `fault_events` itself.** `db.js` runs the entire `schema.sql` — including
+`CREATE TABLE IF NOT EXISTS` — on every boot; the great majority of the `ALTER TABLE` blocks
+elsewhere in that file exist only to add a *column* to a table that already existed before the
+column did (one block does a full table rebuild for a NOT-NULL-drop case, `db.js:141-175`, but
+that's a different, unrelated migration and not a pattern `fault_events` needs). `fault_events`
+is an entirely new table, so `CREATE TABLE IF NOT EXISTS` alone already handles both a fresh
+`data.db` and an existing one with no further work.
+
+**One real `db.js` change IS needed: FK enforcement.** `processedTelemetryId REFERENCES
+processed_telemetry(id)` is the first foreign key in this schema — `processed_telemetry` and
+`raw_telemetry` are deliberately joined by time-range today, not FK, per that table's own
+comment in `schema.sql`. better-sqlite3 does not enable FK enforcement by default, and `db.js`
+never runs `PRAGMA foreign_keys = ON` — so as written, the `REFERENCES` clause is
+**documentation only**; nothing stops a bug from inserting an orphaned `processedTelemetryId`.
+Add `db.pragma('foreign_keys = ON')` in `db.js` alongside the existing `journal_mode = WAL`
+pragma (§4.1 work item), and confirm during implementation that no existing code path deletes
+or renumbers `processed_telemetry` rows in a way this would newly reject. If enabling it turns
+out to be riskier than expected once other tables are considered, the fallback is to state
+explicitly in this section that the FK is advisory/documentation-only — but default to turning
+it on rather than leaving the claim in §3.3's comment silently false.
 
 ### 3.4 The Node ↔ Python HTTP boundary
 
@@ -306,21 +388,21 @@ driftService read"). It is *not* the nested `rowToProcessed()` shape (`metrics.f
 etc.) — that nested shape only exists on read, built from a DB row, and critically has no
 `id` field, since it's constructed before the insert's `RETURNING`/`lastInsertRowid` exists.
 
-`pdmService.js`'s `onNewProcessedRecord` must follow the same convention as the other three —
-receive the flat `data` — for consistency and because that's what `saveAndTrigger()` actually
-has in hand at that point in the sequence. But `fault_events.processedTelemetryId` needs a
-real row id to reference, which the flat pre-insert object doesn't carry. Two options,
-pick one and apply it consistently:
-  (a) call `pdmOnNewRecord` with the **return value of `saveProcessedReading()`** (which does
-      have `id`, per `rowToProcessed({ id: Number(info.lastInsertRowid), ...record })`)
-      instead of `data`, breaking from the other three's convention specifically for this
-      reason, or
-  (b) keep passing `data` for consistency, and have `pdmService.js` look up the just-inserted
-      row's id via `model.getLatestProcessed()` (it will be the row `saveProcessedReading()`
-      just wrote, since ingestion is already serialised — see the TimescaleDB migration
-      plan's §4.5 on why that serialisation exists).
-Option (a) is simpler and avoids an extra read; note the deliberate deviation from the other
-three services' signature in a comment so a future reader doesn't "fix" it to match.
+`fault_events.processedTelemetryId` needs a real row id, which the flat pre-insert `data`
+object doesn't carry (it's built before the insert's `lastInsertRowid` exists) — but the
+`/score` POST body (§3.5) must stay the **flat** shape, same as forecast/drift/trend's `data`.
+`saveProcessedReading()`'s return value (`record`, the `rowToProcessed()` **nested** shape) has
+`id` but not the flat fields — passing `record` alone to `pdmOnNewRecord` and then trying to
+build the flat POST body from it doesn't work; the nested and flat shapes aren't
+interconvertible without re-flattening logic this plan doesn't otherwise need.
+
+Resolution: `pdmOnNewRecord` receives **both** pieces explicitly, not one object doing double
+duty — `pdmOnNewRecord(data, record.id)`. `data` is exactly what forecast/drift/trend already
+receive (flat, used verbatim as the `/score` POST body — no shape drift from the other three
+services' contract), and `record.id` is the one extra piece of information PdM alone needs, for
+`processedTelemetryId`. This keeps "what gets POSTed to Python" and "what gets written to
+`fault_events`" each sourced from an unambiguous single place, rather than one nested object
+that has to be partially read one way and partially another.
 
 `pdmService.js` gets added to `processedService.saveAndTrigger()` as a fourth call in the
 same try/catch-isolated pattern already used for the other three — a PdM scoring failure
@@ -330,7 +412,8 @@ today:
 ```js
 // processedService.js — saveAndTrigger(), alongside the existing three
 try {
-  pdmOnNewRecord(record); // the saveProcessedReading() return value — see §3.4 on why
+  pdmOnNewRecord(data, record.id); // data: flat, same shape the other three get; record.id: the
+                                    // one extra value PdM needs, for fault_events.processedTelemetryId
 } catch (err) {
   logger.error(`pdmService.onNewProcessedRecord failed: ${err.stack || err.message}`);
 }
@@ -386,7 +469,15 @@ PATCH /api/pdm/fault-events/:id                       # HITL confirms/rejects/an
                                                         #   { status, faultType, rootCause,
                                                         #     resolution, reviewedBy, notes,
                                                         #     faultEnd }
+GET  /api/pdm/fault-events/stats                      # confidence/status agreement breakdown (below)
 ```
+
+**`GET /api/pdm/fault-events/stats`.** §3.2 says HITL-outcome agreement with Tier 1's own
+`confidence` should be tracked as a retuning signal — without a concrete endpoint that intent
+doesn't happen. This is a trivial `GROUP BY confidence, status` over `eventType = 'FLAGGED'`
+rows (e.g. `{ confidence: "HIGH", CONFIRMED: 12, REJECTED: 1 }` per confidence level), owned by
+`faultEventService.js`/`faultEventModel.js` like the other HITL endpoints. Not a dashboard —
+just the raw counts; a UI on top of it is out of scope per §1.
 
 `PATCH` with `status: 'CONFIRMED'` and a `faultEnd` is what finalizes `bufferEnd` (=
 `faultEnd` + 1 hour) — until then the buffer's trailing edge is genuinely unknown, since the
@@ -398,29 +489,42 @@ fault isn't resolved yet.
 
 ### 4.1 Database
 - Add `fault_events` to `schema.sql` (§3.3), including the `NEGATIVE_SAMPLE` `eventType`,
-  `featureSnapshot`, `thresholdsVersion`, and `processedTelemetryId` FK. No `db.js` change
-  needed — see §3.3's note.
-- `faultEventModel.js` — prepared statements: insert (flag and negative-sample variants),
-  list-by-status, list-open-by-trigger (for coalescing, §3.3.2), get-by-id, update (HITL
-  patch), and the buffer-range query against `raw_telemetry`.
+  `featureSnapshot` (fixed composition, §3.3), `thresholdsVersion`, `lastSeenWindowEnd`
+  (§3.3.2), and `processedTelemetryId` FK.
+- `db.js`: add `db.pragma('foreign_keys = ON')` so the FK is actually enforced, not just
+  documentation (§3.3's note) — verify no existing delete/renumber path breaks under it.
+- `faultEventModel.js` — prepared statements: insert (flag and negative-sample variants), an
+  **atomic** find-open-and-extend-or-none statement for coalescing (§3.3.2 — single statement,
+  not select-then-branch, per that section's note on why this is future-proofing rather than
+  fixing an active race today), list-by-status, get-by-id, update (HITL patch), the
+  confidence/status aggregate query (§3.6's `/stats`), and the buffer-range query against
+  `raw_telemetry`.
 
 ### 4.2 Node service layer
 - `faultEventService.js` — sits between `pdmController.js`/`pdmService.js` and
   `faultEventModel.js`, matching this repo's controller→service→model layering (every other
-  controller calls a service, never a model directly). Owns: creating a flagged event
-  (with coalescing check), creating a negative sample, and applying a HITL review patch.
-- `pdmService.js`: `onNewProcessedRecord(record)` (see §3.4 on why it takes the insert result,
-  not the flat `data` the other three services receive), the fire-and-forget POST with its
-  own `.catch()` (§3.4), the periodic negative-sample trigger (§3.3.1), and calls into
-  `faultEventService.js` rather than `faultEventModel.js` directly.
+  controller calls a service, never a model directly). Owns: creating a flagged event (calling
+  the model's atomic coalescing statement), creating a negative sample (gated by the two
+  conditions in §3.3.1, including "no open FLAGGED event"), applying a HITL review patch, and
+  the `/stats` aggregate.
+- `pdmService.js`: `onNewProcessedRecord(data, processedTelemetryId)` (§3.4 — takes the flat
+  `data` used verbatim as the `/score` POST body, plus the insert's `id` separately, not one
+  object serving both purposes), the fire-and-forget POST via global `fetch` with
+  `AbortSignal.timeout(2000)` (Node ≥18 required — record this in `server/package.json`'s
+  `engines` field) and its own `.catch()` (§3.4), the periodic negative-sample trigger
+  (§3.3.1, cadence from `PDM_NEGATIVE_SAMPLE_RATE`), and calls into `faultEventService.js`
+  rather than `faultEventModel.js` directly.
 - Wire it into `processedService.saveAndTrigger()` (§3.4).
-- `pdmController.js` + routes for the three HITL endpoints (§3.6), calling `faultEventService.js`.
-- `.env.example`: add `PDM_SERVICE_URL=http://localhost:8000`.
+- `pdmController.js` + routes for the four HITL endpoints (§3.6, including `/stats`), calling
+  `faultEventService.js`.
+- `.env.example`: add `PDM_SERVICE_URL=http://localhost:8000` and
+  `PDM_NEGATIVE_SAMPLE_RATE=60`.
 
 ### 4.3 Python service
 - `pdm/app/schemas.py` — Pydantic models mirroring `processedRecord`.
 - `pdm/app/thresholds.yaml` — initial values ported from `config.js`/`validation.js`,
-  labeled as provisional.
+  labeled as provisional, plus a top-level `version:` string (e.g. `"1"`) bumped manually on
+  every retune — this is what `thresholdsVersion` on `fault_events` rows is read from (§3.3).
 - `pdm/app/rules.py` — pure threshold-evaluation functions + the confidence heuristic.
 - `pdm/app/model.py` — stub only.
 - `pdm/app/main.py` — FastAPI app, `/score`, `/health`.
@@ -462,12 +566,20 @@ the rest of the backend follows). Scope this explicitly rather than assuming it 
 - `rules.py` unit tests (Python side, §4.3).
 - A Node integration test: POST a `processedRecord` that should trigger a rule (e.g.
   vibration rate-of-change past threshold), confirm a `fault_events` row is created with
-  `status = PENDING_REVIEW`, `eventType = FLAGGED`, and a non-null `featureSnapshot`.
+  `status = PENDING_REVIEW`, `eventType = FLAGGED`, a non-null `featureSnapshot` matching the
+  fixed composition in §3.3, and the correct `processedTelemetryId`.
 - A coalescing test: two consecutive triggering windows for the same rule produce one
-  `fault_events` row with an extended `triggerWindowEnd`, not two rows (§3.3.2).
+  `fault_events` row with an extended `triggerWindowEnd`/`lastSeenWindowEnd`, not two rows
+  (§3.3.2); a third triggering window arriving *after* the lookback bound opens a new row
+  instead of extending the stale one.
+- A negative-sample suppression test: force a rule violation, then force a window that would
+  otherwise qualify as a negative sample while the event is still open (§3.3.1) — confirm no
+  `NEGATIVE_SAMPLE` row is created until the event closes.
 - A Node test confirming `saveAndTrigger()` still returns successfully and stores the
   processed record even when `PDM_SERVICE_URL` is unreachable, and that the rejected fetch
   promise is caught rather than becoming an unhandled rejection (§3.4).
+- A `/stats` test: seed a few CONFIRMED/REJECTED rows at different `confidence` levels,
+  confirm the aggregate counts match (§3.6).
 - Add an `npm test` script (or equivalent) to `server/package.json` if standing up this
   infrastructure, so `npm test` becomes the one command that runs everything — currently
   there is none.
@@ -493,7 +605,13 @@ the rest of the backend follows). Scope this explicitly rather than assuming it 
    dependency, not just a slow one. Also confirm no unhandled promise rejection appears in
    the backend's logs/process during this step (§3.4).
 7. Confirm a periodic `NEGATIVE_SAMPLE` row appears during normal (non-fault) simulator
-   operation, with a populated `featureSnapshot` and no HITL fields set (§3.3.1).
+   operation, with a populated `featureSnapshot` and no HITL fields set (§3.3.1). Confirm no
+   `NEGATIVE_SAMPLE` row appears while a `fault_events` row is open (§3.3.1's suppression rule).
+8. Force two triggering windows in a row and confirm one `fault_events` row, not two
+   (§3.3.2); wait past the coalescing lookback bound and force a third — confirm it opens a
+   new row rather than extending the stale one.
+9. `PATCH` several events to CONFIRMED/REJECTED at different `confidence` levels, then
+   `GET /api/pdm/fault-events/stats` and confirm the counts match (§3.6).
 
 ---
 
@@ -512,6 +630,13 @@ the rest of the backend follows). Scope this explicitly rather than assuming it 
 | Thresholds are guesses, not validated against real fault data | Medium — expected at this stage | Explicitly labeled provisional in `thresholds.yaml`; HITL-confirmed/rejected events are the feedback loop that should retune them over time |
 | `processedRecord` shape drifts between Node and Python over time | Medium | Pydantic schema in `schemas.py` fails loudly on a mismatch instead of silently misreading fields |
 | `pdmController.js` calls `faultEventModel.js` directly, breaking this repo's controller→service→model layering | Low | `faultEventService.js` added as the missing layer (§4.2) |
+| `processedTelemetryId` FK is unenforced (better-sqlite3 defaults FK checks off, `db.js` never turns them on) | Medium | `db.pragma('foreign_keys = ON')` added explicitly (§4.1) |
+| An accidental future `await` between coalescing's read and write reintroduces a race; the same interleaving hazard applies if the TimescaleDB migration lands and this table's queries become async | Low today, Medium if the DB later goes async | Atomic find-open-and-extend-or-insert statement written from the start, not select-then-branch (§3.3.2) |
+| Coalescing has no staleness bound; a fault left unreviewed absorbs unrelated later flags | Medium | Bounded lookback (e.g. 3 windows) before treating a fault as resolved (§3.3.2) |
+| A `NEGATIVE_SAMPLE` row gets banked inside a fault that transiently clears for one window | Medium | Sampling suppressed while any `FLAGGED` event is open (§3.3.1) |
+| `featureSnapshot` composition differs between FLAGGED and NEGATIVE_SAMPLE rows, giving Tier 2 inconsistent feature dimensionality across classes | Medium | Fixed, eventType-independent composition specified explicitly (§3.3) |
+| HITL-agreement tracking (§3.2) stays a stated intention with no endpoint, so it silently never gets built | Medium | `GET /api/pdm/fault-events/stats` added as a concrete deliverable (§3.6, §4.2, DoD) |
+| Negative sampling is time-uniform, under-representing non-steady-state operating conditions | Low — accepted for v1 | Time-uniform sampling ships first (unblocks the actual "zero negatives" problem); regime-bucketed sampling tracked as a documented follow-up once real data is available, not a DoD requirement (§3.3.1) |
 | CSV buffer files re-proliferate as an ad hoc habit despite the DB-first design | Low | Buffers are DB time-range queries by default; CSV export is an explicit, on-demand endpoint, not the storage mechanism |
 | No auth on HITL write endpoints, no kill switch on the rule engine | Low — accepted for now | Internal-only tool at this stage; revisit before any external/production exposure |
 
@@ -524,33 +649,57 @@ migration happens afterward: `fault_events` needs to be included in the Postgres
 `001_init.sql` port (`docs/plan/2026-08-04-timescaledb-migration.md` §4.2), since it will
 exist in SQLite by then and that migration's stated scope was "only the two existing
 tables" at the time it was written — that scope note should be revisited to include
-`fault_events` if this plan has already merged. No other interaction — `pdmService.js`'s
+`fault_events` if this plan has already merged. Also revisit §3.3.2's coalescing statement at
+that point — its atomicity guarantee currently rests on synchronous `better-sqlite3` plus
+single-threaded Node (see that section's note); an async Postgres driver reintroduces the same
+class of interleaving hazard the TimescaleDB plan's §4.5 ingestion mutex already exists to
+prevent, and the coalescing statement should be re-verified against that migration's async
+rewrite rather than assumed to still be safe unchanged. No other interaction — `pdmService.js`'s
 Node-side queries go through the same models/services layer the Postgres migration already
-rewrites, so nothing PdM-specific needs special handling in that plan beyond this
-schema-inclusion note.
+rewrites, so nothing else PdM-specific needs special handling in that plan beyond these two
+notes.
 
 ---
 
 ## 8. Definition of done
 
-- [ ] `fault_events` table exists via `schema.sql` alone (no `db.js` change needed)
+- [ ] `fault_events` table exists via `schema.sql` alone (no `db.js` ALTER TABLE work needed for the table itself)
+- [ ] `db.js` runs `PRAGMA foreign_keys = ON`; `processedTelemetryId` is actually enforced, not just documentation (§3.3, §4.1)
 - [ ] `faultEventService.js` exists; `pdmController.js` never calls `faultEventModel.js` directly
+- [ ] `pdmService.js` receives `(data, processedTelemetryId)` — flat POST body and the FK id sourced unambiguously, not one nested object read two ways (§3.4)
 - [ ] `pdmService.js` wired into `saveAndTrigger()`, fire-and-forget, never blocks ingestion
 - [ ] The fire-and-forget POST has its own `.catch()` — no unhandled rejection under a fully-down PdM service (§5.6)
 - [ ] Backend survives the PdM service being fully down (§5.6)
 - [ ] Tier 1 rule engine flags a forced violation with correct `triggeredRules`/`confidence`,
       and the `fault_events` row's `processedTelemetryId` correctly references the triggering window
-- [ ] A `featureSnapshot` and `thresholdsVersion` are captured on every flagged row
-- [ ] Periodic `NEGATIVE_SAMPLE` rows are created during normal operation (§3.3.1, §5.7)
-- [ ] A multi-window fault coalesces into one row, not one per window (§3.3.2)
+- [ ] `featureSnapshot` (fixed composition, identical across eventTypes) and `thresholdsVersion`
+      (read from `thresholds.yaml`'s `version:` field) are captured on every flagged and negative-sample row
+- [ ] Periodic `NEGATIVE_SAMPLE` rows are created during normal operation (time-uniform for v1)
+      and suppressed while any event is open (§3.3.1, §5.7)
+- [ ] A multi-window fault coalesces into one row via an atomic statement, not a racy
+      select-then-branch, and a stale fault beyond the lookback bound opens a new row instead
+      of extending it (§3.3.2)
+- [ ] `GET /api/pdm/fault-events/stats` returns confidence/status agreement counts (§3.6)
 - [ ] HITL endpoints: list, get, confirm/reject/annotate all working
 - [ ] Buffer range query returns the correct hour-before/fault/hour-after span
 - [ ] Thresholds live in one configurable file, labeled provisional, with an explicit and
-      documented derivation from the Node-side constants (not a direct copy — §3.1.1)
+      documented derivation from the Node-side constants (not a direct copy — §3.1.1), and a
+      `version:` field for `thresholdsVersion` to reference
 - [ ] `pdm/` container builds and runs via `docker-compose.pdm.yml`
-- [ ] `PDM_SERVICE_URL` wired into `docker-compose.backend.yml` and the root `.env.example`,
-      not just the combined local-dev compose file
-- [ ] Node test infrastructure stood up (`npm test` runs something); rule-trigger, coalescing,
-      and PdM-service-down tests all pass
+- [ ] `PDM_SERVICE_URL` and `PDM_NEGATIVE_SAMPLE_RATE` wired into `docker-compose.backend.yml`
+      and the root `.env.example`, not just the combined local-dev compose file
+- [ ] Node test infrastructure stood up (`npm test` runs something); rule-trigger, coalescing
+      (including the stale-fault/new-row case), negative-sample suppression, PdM-service-down,
+      and `/stats` tests all pass
 - [ ] Python unit tests for `rules.py` pass
 - [ ] No PdM code reads or writes SQLite directly from Python
+
+---
+
+## 9. Deferred: regime-bucketed negative sampling
+
+Once real telemetry (or a richer simulator run) shows what operating-regime diversity actually
+looks like, revisit §3.3.1: bucket negative sampling by `flowRateMean`/`rpmMean` range (e.g.
+3-5 coarse bins) and cap density per bucket per day, so negatives aren't concentrated only
+around the plant's dominant steady-state operating point. Exact bin boundaries are a tuning
+detail to set against real data, not something to guess now. Not required for this plan's DoD.
