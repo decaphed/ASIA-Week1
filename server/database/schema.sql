@@ -151,3 +151,66 @@ CREATE INDEX IF NOT EXISTS idx_processed_telemetry_timestamp
   ON processed_telemetry (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_processed_telemetry_window
   ON processed_telemetry (windowStart, windowEnd);
+
+-- fault_events: the HITL record. Tier 1 (Python, pdm/) flags a window over
+-- HTTP; Node (pdmService.js) is the only writer of this table — Python never
+-- touches SQLite directly. Buffer content itself (hour-before/fault/hour-
+-- after) is NOT duplicated here — it's reconstructed on demand from
+-- raw_telemetry via bufferStart/bufferEnd (see docs/plan/2026-08-05-pdm-
+-- implementation.md §3.3 for why a table beats standalone CSV files).
+CREATE TABLE IF NOT EXISTS fault_events (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  -- Real FK (not a timestamp-string match) to the window that triggered
+  -- this, or — for a periodically-sampled negative example — the window it
+  -- was sampled from. Enforced via db.js's PRAGMA foreign_keys = ON.
+  processedTelemetryId INTEGER NOT NULL REFERENCES processed_telemetry(id),
+
+  -- eventType distinguishes an actual Tier 1 flag from a periodically-
+  -- sampled confirmed-normal window banked as a negative training example
+  -- (see §3.3.1) — without this, Tier 2 would train on flagged windows only.
+  eventType             TEXT NOT NULL DEFAULT 'FLAGGED', -- FLAGGED | NEGATIVE_SAMPLE
+  detectedAt            TEXT NOT NULL,          -- ISO timestamp the flag/sample was raised
+  triggerWindowEnd      TEXT NOT NULL,          -- processed_telemetry.timestamp that triggered this
+  lastSeenWindowEnd     TEXT,                   -- bumped on every coalescing extension (§3.3.2)
+  triggeredRules        TEXT,                   -- JSON array, e.g. ["vibration.rateOfChange"]; null for NEGATIVE_SAMPLE
+  confidence            TEXT,                   -- LOW | MEDIUM | HIGH (Tier 1's own read); null for NEGATIVE_SAMPLE
+
+  -- Snapshot of exactly what Tier 1 saw at flag time — captured now because
+  -- it cannot be reconstructed later if precapFeatures.js's windowing or the
+  -- thresholds change before Tier 2 is trained (train/serve skew). Fixed
+  -- composition, identical for BOTH eventTypes: the full
+  -- precapFeaturesByMetric object (all six metrics) plus a full per-metric
+  -- metricStats block (mean/median/min/max/stdDev/last for all six metrics)
+  -- — never a per-metric subset, even though only one or two metrics
+  -- triggered a rule on a FLAGGED row.
+  featureSnapshot       TEXT NOT NULL,          -- JSON, fixed shape above
+  thresholdsVersion     TEXT,                   -- the `version:` string read from thresholds.yaml (see §3.1.1)
+
+  -- Buffer boundaries — an hour before the fault, the fault period itself,
+  -- and an hour after it's resolved. bufferEnd is only known once the fault
+  -- is resolved (HITL confirms with a faultEnd), so it's nullable until
+  -- then. Null for NEGATIVE_SAMPLE rows, which have no fault period.
+  faultStart            TEXT,
+  faultEnd              TEXT,
+  bufferStart           TEXT,                   -- faultStart minus 1 hour
+  bufferEnd             TEXT,                   -- faultEnd plus 1 hour, once known
+
+  -- HITL fields — null until a human reviews it. Not applicable to
+  -- NEGATIVE_SAMPLE rows, which don't go through review — inserts for those
+  -- must explicitly pass status = 'N/A' rather than relying on the default,
+  -- or every negative sample would land in the PENDING_REVIEW queue.
+  status                TEXT NOT NULL DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW | CONFIRMED | REJECTED | N/A
+  faultType             TEXT,                   -- THERMAL | CAVITATION | BEARING | OTHER, HITL's call
+  rootCause             TEXT,
+  resolution            TEXT,
+  reviewedBy            TEXT,
+  reviewedAt            TEXT,
+  notes                 TEXT,
+
+  createdAt             TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_fault_events_status ON fault_events (status);
+CREATE INDEX IF NOT EXISTS idx_fault_events_buffer ON fault_events (bufferStart, bufferEnd);
+CREATE INDEX IF NOT EXISTS idx_fault_events_processed ON fault_events (processedTelemetryId);

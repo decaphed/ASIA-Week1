@@ -38,6 +38,14 @@ const db = new Database(DB_PATH);
 // constantly reading" dashboard.
 db.pragma('journal_mode = WAL');
 
+// better-sqlite3 does not enforce FOREIGN KEY constraints by default. This
+// only matters starting with fault_events.processedTelemetryId (the first
+// real FK in this schema — processed_telemetry/raw_telemetry are joined by
+// time range, not FK, per that table's own comment above). No existing code
+// path deletes or renumbers processed_telemetry rows, so turning this on
+// carries no migration risk for data already in the database.
+db.pragma('foreign_keys = ON');
+
 // Run the schema file to guarantee the SensorData table + index exist.
 const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
 db.exec(schema);
