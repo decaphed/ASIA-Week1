@@ -49,9 +49,12 @@ happening first, or at all. See §7 for the one thing to watch if both land clos
 - **No TimescaleDB / Postgres.** Everything here runs against the current SQLite database.
 - **No multi-pump support.** Same single-stream assumption the rest of the codebase makes
   today (see `docs/plan/2026-08-04-timescaledb-migration.md` §4.5's note on this).
-- **No new Proxmox CT.** Ships as a container in the existing `docker-compose` setup;
-  standing up a dedicated `pdm-python` CT (per the earlier discussion) is a deployment
-  decision for later, not part of this repo work.
+- **No Proxmox CT provisioning.** A dedicated `pdm-python` CT running this container is
+  still the intended deployment target (consistent with the frontend/backend/node-red CT
+  split), and `docker-compose.pdm.yml` is written as its own file specifically so it can be
+  deployed there independently. Standing up that CT is manual operator work, not something
+  Claude Code does — same split used in the TimescaleDB plan, where CT creation was never
+  part of the repo-work scope either. See the session notes for the CT creation steps.
 - **No dashboard UI changes beyond what's needed to review flagged faults.** A full HITL
   review UI is a separate, larger frontend task — this plan adds the API endpoints it would
   call, not the screens themselves.
