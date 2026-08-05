@@ -3,11 +3,13 @@ services:
     build: ./server
     ports:
       - "3000:3000"
+    extra_hosts:
+      - "pdm:10.10.10.14"
     environment:
       PORT: 3000
       DB_PATH: /data/data.db
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
-      PDM_SERVICE_URL: ${PDM_SERVICE_URL:-http://localhost:8000}
+      PDM_SERVICE_URL: ${PDM_SERVICE_URL:-http://pdm:8000}
     volumes:
       - server_data:/data
     restart: unless-stopped
