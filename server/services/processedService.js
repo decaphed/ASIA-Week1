@@ -13,6 +13,7 @@ import * as model from '../models/processedModel.js';
 import { onNewProcessedRecord as forecastOnNewRecord } from './forecastService.js';
 import { onNewProcessedRecord as driftOnNewRecord } from './driftService.js';
 import { onNewProcessedRecord as trendOnNewRecord } from './trendService.js';
+import { onNewProcessedRecord as pdmOnNewRecord } from './pdmService.js';
 import { computeFeaturesForNewRow, INGEST_FETCH_ROWS } from '../preprocessing/historicalFeatures.js';
 import { logger } from '../utils/logger.js';
 
@@ -149,6 +150,15 @@ export function saveAndTrigger(data) {
     trendOnNewRecord(data);
   } catch (err) {
     logger.error(`trendService.onNewProcessedRecord failed: ${err.stack || err.message}`);
+  }
+  try {
+    // data: flat, same shape the other three get; record.id: the one extra
+    // value PdM needs, for fault_events.processedTelemetryId (§3.4). This
+    // try/catch only guards a synchronous throw — pdmService.js's own
+    // fire-and-forget POST attaches its own .catch() for the async path.
+    pdmOnNewRecord(data, record.id);
+  } catch (err) {
+    logger.error(`pdmService.onNewProcessedRecord failed: ${err.stack || err.message}`);
   }
   return record;
 }
