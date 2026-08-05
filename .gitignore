@@ -5,6 +5,7 @@ dist/
 .env
 !.env.example
 
+docs/
 # SQLite database files (auto-created at runtime)
 *.db
 *.db-wal
