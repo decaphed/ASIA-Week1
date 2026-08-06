@@ -172,9 +172,28 @@ export default function FaultQueueTable({ events }) {
               </tr>
             ) : (
               pageRows.map(({ event, rules, durationSeconds, isOngoing }) => (
-                <tr key={event.id}>
+                <tr
+                  key={event.id}
+                  className="review-table__row"
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`Review event #${event.id}`}
+                  onClick={() => { window.location.hash = `#/review/${event.id}`; }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    window.location.hash = `#/review/${event.id}`;
+                  }}
+                >
                   <td>
-                    <a href={`#/review/${event.id}`} style={{ fontFamily: 'var(--mono)' }}>
+                    <a
+                      href={`#/review/${event.id}`}
+                      style={{ fontFamily: 'var(--mono)' }}
+                      // Row already navigates on click — this anchor exists so the
+                      // event # is a real, keyboard/screen-reader-discoverable link
+                      // and Ctrl/Cmd-click or "open in new tab" still works.
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       #{event.id}
                     </a>
                   </td>

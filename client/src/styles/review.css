@@ -60,6 +60,15 @@
 
 .review-table td.review-table__tripped { white-space: normal; }
 
+/* The whole row navigates to the detail view, not just the #id link — give
+   it an obvious clickable affordance so that's discoverable. */
+.review-table__row { cursor: pointer; }
+.review-table__row:hover { background: var(--panel-2); }
+.review-table__row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* Sortable-column headers in FaultQueueTable render a real <button> instead
    of an onClick <th> (unlike HistoryTable's th, which isn't keyboard-
    operable) — style it to look identical to a plain header. */
