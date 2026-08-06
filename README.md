@@ -224,7 +224,14 @@ cd ../client
 npm install
 cp .env.example .env
 
-# 3. Node-RED (no local install needed — see "Running Node-RED" below)
+# 3. PdM service (Python) — required for the Fault Review queue to receive
+#    any events at all; see "Running the PdM Service" below.
+cd ../pdm
+python -m venv .venv && source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+cp .env.example .env
+
+# 4. Node-RED (no local install needed — see "Running Node-RED" below)
 ```
 
 ## Running the Backend
@@ -261,6 +268,31 @@ show `--` and the history table shows "No readings yet" — this is expected,
 graceful behaviour, not a bug.
 
 To build a production bundle: `npm run build` (outputs to `client/dist/`).
+
+## Running the PdM Service
+
+The **Fault Review** page (`#/review`) is driven entirely by `fault_events` rows,
+and those rows only get created when the backend's `pdmService.js` successfully
+POSTs each closed one-minute window to the Python Tier 1 rule-engine service in
+`pdm/` and gets back a verdict. **If this service isn't running, the review
+queue stays empty forever** — the backend fails the `/score` call silently
+(logged, not fatal — see `server/services/pdmService.js`) and neither
+`FLAGGED` nor `NEGATIVE_SAMPLE` rows ever get written.
+
+```bash
+cd pdm
+source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+uvicorn app.main:app --reload --port 8000
+```
+
+Verify it's alive:
+
+```bash
+curl http://localhost:8000/docs
+```
+
+`server/.env`'s `PDM_SERVICE_URL` (default `http://localhost:8000`) must point
+here. Thresholds live in `pdm/app/thresholds.yaml`, not in an env var.
 
 ## Running Node-RED
 
