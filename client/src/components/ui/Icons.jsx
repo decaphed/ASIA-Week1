@@ -9,7 +9,7 @@
 import {
   Activity, Waves, RotateCw, Gauge, Thermometer, Power, Bell,
   AlertTriangle, XCircle, CheckCircle2, Info, BarChart2, History,
-  Settings, Sun, Moon, FileText, BrainCircuit, Radio,
+  Settings, Sun, Moon, FileText, BrainCircuit, Radio, ClipboardCheck,
 } from 'lucide-react';
 
 const defaults = { size: 16, strokeWidth: 1.75 };
@@ -43,6 +43,7 @@ export const AnalyticsNavIcon = makeIcon(BarChart2, 'AnalyticsNavIcon');
 export const SettingsNavIcon = makeIcon(Settings, 'SettingsNavIcon');
 export const ReportsNavIcon = makeIcon(FileText, 'ReportsNavIcon');
 export const PredictNavIcon = makeIcon(BrainCircuit, 'PredictNavIcon');
+export const ReviewNavIcon = makeIcon(ClipboardCheck, 'ReviewNavIcon');
 
 // ── Theme toggle icons ───────────────────────────────────────────────────────
 export const SunIcon = makeIcon(Sun, 'SunIcon');

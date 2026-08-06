@@ -96,4 +96,36 @@ export async function postReading(reading) {
   return res.data;
 }
 
+/** GET /pdm/fault-events?status → array of fault_events rows (all rows, including NEGATIVE_SAMPLE, when status is omitted). */
+export async function getFaultEvents(status) {
+  const res = await client.get('/pdm/fault-events', { params: status ? { status } : undefined });
+  return res.data.data;
+}
+
+/** GET /pdm/fault-events/:id → one fault_events row + a computed bufferSampleCount. */
+export async function getFaultEvent(id) {
+  const res = await client.get(`/pdm/fault-events/${id}`);
+  return res.data.data;
+}
+
+/**
+ * PATCH /pdm/fault-events/:id → apply a HITL review decision. Returns the
+ * fully updated row (server computes bufferEnd/reviewedAt).
+ * IMPORTANT: the backend merges each field via `patch.x ?? existing.x` —
+ * `undefined` PRESERVES the existing value, but `''` OVERWRITES it with an
+ * empty string. Callers must omit untouched/empty optional fields from
+ * `patch` entirely rather than sending `null`/`''`, or a prior decision's
+ * field gets silently blanked. Unused until Phase 2's review form.
+ */
+export async function reviewFaultEvent(id, patch) {
+  const res = await client.patch(`/pdm/fault-events/${id}`, patch);
+  return res.data.data;
+}
+
+/** GET /pdm/fault-events/stats → confidence×status breakdown. Unused until the Phase 4 analytics view. */
+export async function getFaultEventStats() {
+  const res = await client.get('/pdm/fault-events/stats');
+  return res.data.data;
+}
+
 export default client;

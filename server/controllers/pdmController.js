@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as service from '../services/faultEventService.js';
+import { validateReviewPatch } from '../utils/pdmReviewValidation.js';
 
 export function listFaultEvents(req, res, next) {
   try {
@@ -27,9 +28,29 @@ export function getFaultEvent(req, res, next) {
 
 export function reviewFaultEvent(req, res, next) {
   try {
+    const body = req.body ?? {};
+    const errors = validateReviewPatch(body);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, error: 'Invalid fault event review', details: errors });
+    }
+
     const id = parseInt(req.params.id, 10);
-    const { status, faultType, rootCause, resolution, reviewedBy, notes, faultEnd } = req.body;
-    const updated = service.reviewFaultEvent(id, { status, faultType, rootCause, resolution, reviewedBy, notes, faultEnd });
+    const { status, faultType, rootCause, resolution, reviewedBy, notes, faultEnd } = body;
+
+    // Blank optional strings must become undefined, not '' — the service
+    // does `patch.x ?? existing.x`, so an explicit '' would overwrite an
+    // existing value where undefined preserves it.
+    const patch = {
+      status,
+      faultType,
+      rootCause: typeof rootCause === 'string' ? rootCause.trim() : rootCause,
+      resolution: typeof resolution === 'string' && resolution.trim() === '' ? undefined : resolution,
+      reviewedBy: typeof reviewedBy === 'string' ? reviewedBy.trim() : reviewedBy,
+      notes: typeof notes === 'string' && notes.trim() === '' ? undefined : notes,
+      faultEnd,
+    };
+
+    const updated = service.reviewFaultEvent(id, patch);
     if (!updated) return res.status(404).json({ success: false, error: 'fault event not found' });
     res.json({ success: true, data: updated });
   } catch (err) {

@@ -152,6 +152,175 @@ test('PATCH /api/pdm/fault-events/:id confirms an event and finalizes bufferEnd 
   assert.ok(!pendingBody.data.some((e) => e.id === id));
 });
 
+test('PATCH .../:id rejects CONFIRMED with no fields, naming all 4 missing fields, and leaves the event untouched', async () => {
+  const data = makeProcessedRecord('2026-08-05T11:00:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'CONFIRMED' }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 400);
+  assert.equal(body.success, false);
+  assert.equal(body.error, 'Invalid fault event review');
+  assert.ok(body.details.some((d) => d.includes('rootCause')));
+  assert.ok(body.details.some((d) => d.includes('reviewedBy')));
+  assert.ok(body.details.some((d) => d.includes('resolution')));
+  assert.ok(body.details.some((d) => d.includes('faultType')));
+
+  const getRes = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`);
+  const getBody = await getRes.json();
+  assert.equal(getBody.data.status, 'PENDING_REVIEW');
+});
+
+test('PATCH .../:id rejects CONFIRMED with whitespace-only required fields', async () => {
+  const data = makeProcessedRecord('2026-08-05T11:15:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      status: 'CONFIRMED',
+      rootCause: '   ',
+      resolution: '   ',
+      reviewedBy: '   ',
+      faultType: 'BEARING',
+    }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 400);
+  assert.ok(body.details.some((d) => d.includes('rootCause')));
+  assert.ok(body.details.some((d) => d.includes('resolution')));
+  assert.ok(body.details.some((d) => d.includes('reviewedBy')));
+});
+
+test('PATCH .../:id rejects an unknown status value with a single error', async () => {
+  const data = makeProcessedRecord('2026-08-05T11:30:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'BOGUS' }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 400);
+  assert.equal(body.details.length, 1);
+  assert.ok(body.details[0].includes('status must be one of'));
+});
+
+test('PATCH .../:id rejects an unknown faultType on CONFIRMED', async () => {
+  const data = makeProcessedRecord('2026-08-05T11:45:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      status: 'CONFIRMED',
+      rootCause: 'worn bearing',
+      resolution: 'replaced',
+      reviewedBy: 'tester',
+      faultType: 'ELECTRICAL',
+    }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 400);
+  assert.ok(body.details.some((d) => d.includes('faultType must be one of')));
+});
+
+test('PATCH .../:id accepts REJECTED without resolution or faultType', async () => {
+  const data = makeProcessedRecord('2026-08-05T12:00:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      status: 'REJECTED',
+      rootCause: 'false positive',
+      reviewedBy: 'tester',
+    }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.equal(body.data.status, 'REJECTED');
+});
+
+test('PATCH .../:id rejects REJECTED missing rootCause', async () => {
+  const data = makeProcessedRecord('2026-08-05T12:15:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'REJECTED', reviewedBy: 'tester' }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 400);
+  assert.ok(body.details.some((d) => d.includes('rootCause')));
+});
+
+test('PATCH .../:id accepts a notes-only patch with no status and leaves status unchanged (regression guard)', async () => {
+  const data = makeProcessedRecord('2026-08-05T12:30:00.000Z');
+  const stored = saveProcessedReading(data);
+  const { id } = faultEventService.recordFlaggedEvent(data, stored.id, {
+    confidence: 'LOW',
+    triggeredRules: ['rpm.stdDev'],
+    thresholdsVersion: '1',
+  });
+
+  const res = await fetch(`${baseUrl}/api/pdm/fault-events/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes: 'still investigating' }),
+  });
+  const body = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.equal(body.data.status, 'PENDING_REVIEW');
+  assert.equal(body.data.notes, 'still investigating');
+});
+
 test('GET /api/pdm/fault-events/stats returns confidence/status counts', async () => {
   const res = await fetch(`${baseUrl}/api/pdm/fault-events/stats`);
   const body = await res.json();

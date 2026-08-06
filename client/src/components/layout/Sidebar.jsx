@@ -6,7 +6,7 @@
 
 import { Signal, Server, Database } from 'lucide-react';
 import {
-  DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReportsNavIcon,
+  DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReviewNavIcon, ReportsNavIcon,
 } from '../ui/Icons.jsx';
 import { PUMP_ID } from '../../utils/constants.js';
 import { computeServiceStatus } from '../../utils/health.js';
@@ -17,10 +17,11 @@ import { computeServiceStatus } from '../../utils/health.js';
 // fourth mode — "what's coming" — and the future home of the AI/ML
 // failure-prediction model.
 const NAV_ITEMS = [
-  { label: 'Overview',    Icon: DashboardNavIcon, route: 'overview' },
-  { label: 'Analytics',   Icon: AnalyticsNavIcon, route: 'analytics' },
-  { label: 'Predictions', Icon: PredictNavIcon,   route: 'predict' },
-  { label: 'Reports',     Icon: ReportsNavIcon,   route: 'reports' },
+  { label: 'Overview',     Icon: DashboardNavIcon, route: 'overview' },
+  { label: 'Analytics',    Icon: AnalyticsNavIcon, route: 'analytics' },
+  { label: 'Predictions',  Icon: PredictNavIcon,   route: 'predict' },
+  { label: 'Fault Review', Icon: ReviewNavIcon,    route: 'review' },
+  { label: 'Reports',      Icon: ReportsNavIcon,   route: 'reports' },
 ];
 
 const STATUS_ITEMS = [

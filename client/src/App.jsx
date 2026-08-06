@@ -16,6 +16,7 @@ import Topbar from './components/layout/Topbar.jsx';
 import OverviewPage from './pages/OverviewPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
 import PredictPage from './pages/PredictPage.jsx';
+import FaultReviewPage from './pages/FaultReviewPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import ErrorBanner from './components/ui/ErrorBanner.jsx';
 import { useHealth, useLiveData } from './hooks/useSensorData.js';
@@ -29,11 +30,12 @@ const PAGES = {
   overview:  OverviewPage,
   analytics: AnalyticsPage,
   predict:   PredictPage,
+  review:    FaultReviewPage,
   reports:   ReportsPage,
 };
 
 export default function App() {
-  const route = useHashRoute();
+  const { route, param } = useHashRoute();
   const { theme, toggle: toggleTheme } = useTheme();
   const { data: health, error: healthError } = useHealth(5000);
   const { data: reading, error: liveError, loading: liveLoading, refresh } = useLiveData(1000);
@@ -93,6 +95,7 @@ export default function App() {
             refresh={refresh}
             health={health}
             healthError={healthError}
+            param={param}
           />
         </main>
       </div>

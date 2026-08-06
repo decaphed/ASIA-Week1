@@ -62,10 +62,45 @@ export function describeBucket(seconds) {
   return `Each point is a ${label} average`;
 }
 
+/** ISO timestamp → local-time value for a <input type="datetime-local">,
+ *  e.g. "2026-08-06T12:34". Built from Date's local getters, NOT string
+ *  slicing — slicing an ISO (UTC) string yields UTC wall-clock time, which
+ *  datetime-local silently reinterprets as local time, skewing the value by
+ *  the browser's UTC offset on every round-trip through the input. */
+export function toLocalDatetimeInputValue(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
 /** Seconds elapsed since an ISO timestamp (Infinity if missing/invalid). */
 export function secondsSince(iso) {
   if (!iso) return Infinity;
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return Infinity;
   return (Date.now() - t) / 1000;
+}
+
+/** Compact duration from a total-seconds count, e.g. "6m", "1h 12m", "--". */
+export function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds)) || seconds < 0) return '--';
+  const totalMin = Math.round(seconds / 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+/** "23 min ago" / "just now" / "2h ago" / "3d ago" style relative label. */
+export function formatRelativeTime(iso) {
+  const s = secondsSince(iso);
+  if (!Number.isFinite(s)) return '--';
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
 }

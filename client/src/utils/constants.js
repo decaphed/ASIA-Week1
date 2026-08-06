@@ -13,7 +13,15 @@ export const POLL_INTERVALS = {
   processed: 15000,
   series:    60000,
   summary:   60000,
+  pdm:       30000,
 };
+
+// 180 = COALESCE_LOOKBACK_WINDOWS (3) × WINDOW_SECONDS (60), hand-copied
+// from server/services/faultEventService.js:20-21. This is a duplicate,
+// not derived — the API doesn't expose the lookback bound anywhere, so if
+// either server constant ever changes this will silently drift and the
+// ONGOING pill will quietly stop matching the server's coalescing window.
+export const ONGOING_WINDOW_SECONDS = 180;
 
 // Above this fraction of a window's samples being reconstructed (not
 // measured), SystemHealthPanel's "Data Reliability" row switches from a
@@ -111,6 +119,18 @@ export const SENSORS = [
     desc:      'Motor winding temperature',
   },
 ];
+
+// ── PdM Fault Review ────────────────────────────────────────────────────
+// Glyph + plain-English label per triggeredRules rule type. Metric label
+// and accent color always come from SENSORS — never re-declared here.
+export const FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING', 'OTHER'];
+
+export const RULE_TYPE_META = {
+  min:          { glyph: '▼', label: 'below minimum' },
+  max:          { glyph: '▲', label: 'above maximum' },
+  stdDev:       { glyph: '∿', label: 'unstable (std dev)' },
+  rateOfChange: { glyph: '⇗', label: 'rapid rate of change' },
+};
 
 // ── Alarm evaluation helper ───────────────────────────────────────────────
 // Returns 'alarm' | 'warn' | 'normal' | 'nodata'
