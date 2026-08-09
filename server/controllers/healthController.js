@@ -14,9 +14,9 @@ import * as service from '../services/sensorService.js';
 
 const startedAt = Date.now();
 
-export function getHealth(req, res) {
-  const dbOk = isDatabaseHealthy();
-  const latest = dbOk ? service.getLatestReading() : null;
+export async function getHealth(req, res) {
+  const dbOk = await isDatabaseHealthy();
+  const latest = dbOk ? await service.getLatestReading() : null;
 
   res.status(dbOk ? 200 : 503).json({
     success: dbOk,

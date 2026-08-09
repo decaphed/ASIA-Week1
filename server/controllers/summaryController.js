@@ -9,7 +9,7 @@
 
 import * as service from '../services/summaryService.js';
 
-export function getSummary(req, res, next) {
+export async function getSummary(req, res, next) {
   try {
     const range = req.query.range ?? service.DEFAULT_SUMMARY_RANGE;
     if (!service.isValidSummaryRange(range)) {
@@ -19,7 +19,7 @@ export function getSummary(req, res, next) {
       });
     }
 
-    const data = service.getSummary(range);
+    const data = await service.getSummary(range);
     res.json({ success: true, data });
   } catch (err) {
     next(err);

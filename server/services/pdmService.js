@@ -45,9 +45,16 @@ export function onNewProcessedRecord(data, processedTelemetryId) {
       const verdict = await res.json();
 
       if (verdict.flagged) {
-        faultEventService.recordFlaggedEvent(data, processedTelemetryId, verdict);
+        // recordNegativeSample already catches its own errors internally
+        // (§3.3.1: must never affect ingestion); recordFlaggedEvent does
+        // not, so an await + catch here is required to avoid an unhandled
+        // promise rejection (fault_events doesn't exist until PdM's own
+        // migration — every call rejects until then).
+        await faultEventService.recordFlaggedEvent(data, processedTelemetryId, verdict).catch((err) => {
+          logger.error(`faultEventService.recordFlaggedEvent failed: ${err.stack || err.message}`);
+        });
       } else if (shouldTryNegativeSample) {
-        faultEventService.recordNegativeSample(data, processedTelemetryId, verdict.thresholdsVersion);
+        await faultEventService.recordNegativeSample(data, processedTelemetryId, verdict.thresholdsVersion);
       }
     })
     // The outer try/catch in saveAndTrigger only guards a synchronous

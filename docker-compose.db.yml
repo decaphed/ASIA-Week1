@@ -1,0 +1,36 @@
+services:
+  pdm-db:
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      PDM_APP_PASSWORD: ${PDM_APP_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pdm_db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    # NOTE on remote access: the official postgres/timescaledb image
+    # already configures listen_addresses = '*' and appends
+    # `host all all all scram-sha-256` (password auth from any host) to
+    # pg_hba.conf during first-time initialization — this is documented,
+    # intentional upstream behavior, not something this compose file needs
+    # to add. The backend CT (10.10.10.12) reaching pdm-db (10.10.10.15)
+    # over the network works out of the box with just the port mapping
+    # above. That default is deliberately broad (any host + password),
+    # which is acceptable for this homelab-scale, network-isolated
+    # deployment but is a genuine hardening gap if this CT is ever exposed
+    # beyond a trusted LAN — scoping pg_hba.conf to the backend CT's
+    # subnet is a reasonable follow-up, not something to add speculatively
+    # now (matches this migration's decision to defer compression/
+    # retention until real usage is known).
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pdm_db_data:

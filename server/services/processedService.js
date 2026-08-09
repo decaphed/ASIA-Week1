@@ -19,7 +19,13 @@ import { logger } from '../utils/logger.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 
-/** Convert a raw DB row into the nested object the API exposes. */
+/**
+ * Convert a raw DB row into the nested object the API exposes.
+ *
+ * outliersByMetric/violationsByMetric/precapFeaturesByMetric/
+ * historicalFeaturesByMetric are already parsed objects (Postgres JSONB) —
+ * no JSON.parse step needed. isImputed is already a real boolean.
+ */
 function rowToProcessed(row) {
   if (!row) return null;
 
@@ -49,36 +55,16 @@ function rowToProcessed(row) {
     sampleCount: row.sampleCount,
     // How many of sampleCount were genuine measurements, not derived from an
     // interpolated physics-invalid run — derived, not a stored column.
-    // Physics-invalid runs are now interpolated INTO the aggregate stats
-    // (see preprocessing/missing.js::imputeInvalidRuns) rather than excluded,
-    // so sampleCount itself already reflects the full window; this just makes
-    // visible how many of those samples were reconstructed rather than
-    // measured. A window where every sample fails validation is skipped
-    // entirely (no row is ever stored for it), so this is always accurate —
-    // never the "all samples invalid" edge case.
     validSampleCount: row.sampleCount - row.physicsViolationCount,
     expectedSampleCount: row.expectedSampleCount,
     missingSampleCount: row.missingSampleCount,
     imputedSampleCount: row.imputedSampleCount,
     outlierCount: row.outlierCount,
-    // Per-metric Hampel-capped outlier count (see preprocessing/pipeline.js).
-    // Can be null for rows written before this column existed.
-    outliersByMetric: row.outliersByMetric ? JSON.parse(row.outliersByMetric) : null,
-    // Per-metric rawStdDev/rawRateOfChange/rawMaxExcursion computed BEFORE
-    // Hampel capping (see preprocessing/precapFeatures.js). Can be null for
-    // rows written before this column existed.
-    precapFeaturesByMetric: row.precapFeaturesByMetric ? JSON.parse(row.precapFeaturesByMetric) : null,
-    // Per-metric rollingMean/rollingStd/rollingSlope + driftZ/driftDirection,
-    // computed causally as of this row (see
-    // preprocessing/historicalFeatures.js). Can be null for rows written
-    // before this column existed and not yet backfilled.
-    historicalFeaturesByMetric: row.historicalFeaturesByMetric ? JSON.parse(row.historicalFeaturesByMetric) : null,
+    outliersByMetric: row.outliersByMetric ?? null,
+    precapFeaturesByMetric: row.precapFeaturesByMetric ?? null,
+    historicalFeaturesByMetric: row.historicalFeaturesByMetric ?? null,
     physicsViolationCount: row.physicsViolationCount,
-    // Per-metric + cross-variable tally (see preprocessing/quality.js). Can
-    // be null for rows written before this column existed.
-    violationsByMetric: row.violationsByMetric ? JSON.parse(row.violationsByMetric) : null,
-    // Physics-invalid samples that were interpolated into the stats window
-    // (see preprocessing/missing.js::imputeInvalidRuns) rather than dropped.
+    violationsByMetric: row.violationsByMetric ?? null,
     physicsImputedCount: row.physicsImputedCount,
     missingRate: row.missingRate,
     imputationRate: row.imputationRate,
@@ -87,10 +73,7 @@ function rowToProcessed(row) {
     physicsImputationRate: row.physicsImputationRate,
     qualityScore: row.qualityScore,
     qualityLabel: row.qualityLabel,
-    isImputed: !!row.isImputed,
-    // Event-time windowing / classifier counters (observational, not part of
-    // qualityScore — see preprocessing/quality.js). Can be undefined for
-    // rows written before these columns existed.
+    isImputed: row.isImputed,
     lateSampleCount: row.lateSampleCount,
     mergedSampleCount: row.mergedSampleCount,
     duplicateSampleCount: row.duplicateSampleCount,
@@ -103,27 +86,27 @@ function rowToProcessed(row) {
 }
 
 /** Persist one incoming one-minute aggregate. `data` was already validated. */
-export function saveProcessedReading(data) {
+export async function saveProcessedReading(data) {
   // Computed here, before insert, from data's own (not-yet-stored) metric
   // means/dominantStatus plus recent prior rows — see
   // preprocessing/historicalFeatures.js for why this can't be derived later
   // from forecastService/driftService, which only hold live in-memory state.
-  const recentRows = model.getRecentProcessed(INGEST_FETCH_ROWS);
+  const recentRows = await model.getRecentProcessed(INGEST_FETCH_ROWS);
   const historicalFeaturesByMetric = computeFeaturesForNewRow(recentRows, data);
 
   const record = {
     ...data,
-    isImputed: data.isImputed ? 1 : 0,
+    isImputed: !!data.isImputed,
     // ?? {} guards the manual POST /api/processed path, which doesn't
-    // require these fields — stringifying undefined would otherwise store
-    // the literal string "undefined" instead of a valid JSON object.
-    outliersByMetric: JSON.stringify(data.outliersByMetric ?? {}),
-    violationsByMetric: JSON.stringify(data.violationsByMetric ?? {}),
-    precapFeaturesByMetric: JSON.stringify(data.precapFeaturesByMetric ?? {}),
-    historicalFeaturesByMetric: JSON.stringify(historicalFeaturesByMetric),
+    // require these fields. Pass plain objects — pg serialises to jsonb
+    // directly, no JSON.stringify needed (double-encoding bug otherwise).
+    outliersByMetric: data.outliersByMetric ?? {},
+    violationsByMetric: data.violationsByMetric ?? {},
+    precapFeaturesByMetric: data.precapFeaturesByMetric ?? {},
+    historicalFeaturesByMetric,
   };
-  const info = model.insertProcessed(record);
-  return rowToProcessed({ id: Number(info.lastInsertRowid), ...record });
+  const info = await model.insertProcessed(record);
+  return rowToProcessed({ id: info.lastInsertRowid, ...record });
 }
 
 /**
@@ -134,20 +117,20 @@ export function saveProcessedReading(data) {
  * four-step "save, forecast, drift, trend" sequence exists in exactly one
  * place.
  */
-export function saveAndTrigger(data) {
-  const record = saveProcessedReading(data);
+export async function saveAndTrigger(data) {
+  const record = await saveProcessedReading(data);
   try {
-    forecastOnNewRecord(data);
+    await forecastOnNewRecord(data);
   } catch (err) {
     logger.error(`forecastService.onNewProcessedRecord failed: ${err.stack || err.message}`);
   }
   try {
-    driftOnNewRecord(data);
+    await driftOnNewRecord(data);
   } catch (err) {
     logger.error(`driftService.onNewProcessedRecord failed: ${err.stack || err.message}`);
   }
   try {
-    trendOnNewRecord(data);
+    await trendOnNewRecord(data);
   } catch (err) {
     logger.error(`trendService.onNewProcessedRecord failed: ${err.stack || err.message}`);
   }
@@ -164,15 +147,17 @@ export function saveAndTrigger(data) {
 }
 
 /** The most recent processed record, or null if none stored yet. */
-export function getLatestProcessedReading() {
-  return rowToProcessed(model.getLatestProcessed());
+export async function getLatestProcessedReading() {
+  return rowToProcessed(await model.getLatestProcessed());
 }
 
 /** A page of processed history plus pagination metadata (mirrors sensorService). */
-export function getProcessedHistoryPage({ page, limit, sort }) {
+export async function getProcessedHistoryPage({ page, limit, sort }) {
   const offset = (page - 1) * limit;
-  const rows = model.getProcessedHistory({ limit, offset, sort });
-  const total = model.getProcessedCount();
+  const [rows, total] = await Promise.all([
+    model.getProcessedHistory({ limit, offset, sort }),
+    model.getProcessedCount(),
+  ]);
 
   return {
     page,

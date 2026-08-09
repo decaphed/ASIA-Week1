@@ -250,8 +250,8 @@ function computeForecastEntry(metricState) {
 }
 
 /** Full re-fit: grid search + re-initialisation from the last 200 rows. */
-function refitAll() {
-  const rows = model.getRecentReadings(REFIT_WINDOW);
+async function refitAll() {
+  const rows = await model.getRecentReadings(REFIT_WINDOW);
 
   if (rows.length < MIN_READINGS) {
     for (const metric of METRICS) {
@@ -319,7 +319,7 @@ function refitAll() {
  *      it just means "I'm less sure right now", without letting one
  *      suspicious point drag the central forecast around.
  */
-export function onNewProcessedRecord(row) {
+export async function onNewProcessedRecord(row) {
   if (!row) return;
 
   // Bootstrap: if nothing has been fit yet (fresh database, or fewer than
@@ -332,7 +332,7 @@ export function onNewProcessedRecord(row) {
   // REFIT_WINDOW) and refitAll() itself is the source of truth for "do we
   // have enough data" (MIN_READINGS), so this can't produce a bad fit.
   if (Object.keys(state).length === 0) {
-    refitAll();
+    await refitAll();
     return;
   }
 
@@ -422,8 +422,12 @@ export function getForecast() {
 }
 
 /** Starts the 15-minute re-fit timer. Per-record updates are event-driven — see onNewProcessedRecord. */
-export function startForecastLoop() {
-  refitAll();
-  setInterval(refitAll, REFIT_INTERVAL_MS);
+export async function startForecastLoop() {
+  await refitAll();
+  // setInterval's callback isn't awaited by the runtime, so a rejection
+  // inside refitAll() would otherwise become an unhandled promise rejection.
+  setInterval(() => {
+    refitAll().catch((err) => logger.error(`Forecast refit failed: ${err.stack || err.message}`));
+  }, REFIT_INTERVAL_MS);
   logger.info('Forecast loop started: re-fit every 15m; forward slide runs on each new processed record');
 }

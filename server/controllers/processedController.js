@@ -11,20 +11,20 @@
 
 import * as service from '../services/processedService.js';
 
-export function createProcessedReading(req, res, next) {
+export async function createProcessedReading(req, res, next) {
   try {
     // req.body is already flat and validated — the same flat shape
     // forecastService/driftService read (row.flowRateMean, row.dominantStatus).
-    const record = service.saveAndTrigger(req.body);
+    const record = await service.saveAndTrigger(req.body);
     res.status(201).json({ success: true, data: record });
   } catch (err) {
     next(err);
   }
 }
 
-export function getProcessedLive(req, res, next) {
+export async function getProcessedLive(req, res, next) {
   try {
-    const record = service.getLatestProcessedReading();
+    const record = await service.getLatestProcessedReading();
     if (!record) {
       return res.json({ success: true, data: null, message: 'No processed records yet' });
     }
@@ -37,13 +37,13 @@ export function getProcessedLive(req, res, next) {
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 
-export function getProcessedHistory(req, res, next) {
+export async function getProcessedHistory(req, res, next) {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_LIMIT));
     const sort = req.query.sort === 'asc' ? 'asc' : 'desc';
 
-    const result = service.getProcessedHistoryPage({ page, limit, sort });
+    const result = await service.getProcessedHistoryPage({ page, limit, sort });
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);

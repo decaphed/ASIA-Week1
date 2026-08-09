@@ -13,10 +13,10 @@
 
 import { processSample } from '../preprocessing/index.js';
 
-export function createReading(req, res, next) {
+export async function createReading(req, res, next) {
   try {
     // Body was already validated by validateReadingMiddleware.
-    const reading = processSample(req.body);
+    const reading = await processSample(req.body);
     res.status(201).json({ success: true, data: reading });
   } catch (err) {
     next(err);

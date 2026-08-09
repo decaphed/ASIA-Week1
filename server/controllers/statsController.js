@@ -8,9 +8,9 @@
 import * as service from '../services/sensorService.js';
 import { getLastLatencyMs } from '../middleware/requestTimer.js';
 
-export function getStats(req, res, next) {
+export async function getStats(req, res, next) {
   try {
-    const stats = service.getStatistics();
+    const stats = await service.getStatistics();
     res.json({
       success: true,
       data: {

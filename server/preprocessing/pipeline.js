@@ -19,6 +19,17 @@
 // A background sweep (see runBackgroundSweep(), wired into server.js) force-
 // closes any window whose event-time boundary has passed even with no new
 // sample arriving, since ingestion is otherwise entirely push-driven.
+//
+// CONCURRENCY: DB calls are async now (Postgres, not synchronous SQLite),
+// so processSample()/runBackgroundSweep() are wrapped in withLock()
+// (ingestLock.js) — a single global mutex that serializes every call to
+// either entry point. Without it, two concurrent POST /api/data requests
+// (or a request racing a background sweep) could interleave
+// getLastSample()/commit() calls and corrupt the in-memory window buffer.
+// The lock wraps ONLY the two exported entry points — ingestSample() and
+// processClosedWindow() are private and only ever run from inside an
+// already-locked call, so they must never call withLock() themselves
+// (that would deadlock against the outer call still holding the lock).
 // ─────────────────────────────────────────────────────────────────────────
 
 import { validatePhysics } from './validator.js';
@@ -34,6 +45,7 @@ import * as sensorService from '../services/sensorService.js';
 import * as processedService from '../services/processedService.js';
 import { logger } from '../utils/logger.js';
 import { validateFillRow } from '../utils/validation.js';
+import { withLock } from './ingestLock.js';
 
 /**
  * Fully process one closed window: missing-data detection, classifier-gated
@@ -46,7 +58,7 @@ import { validateFillRow } from '../utils/validation.js';
  * downstream DB error, or the aggregation invariant-violation throw) must
  * not lose the raw audit trail — it's logged and the window is skipped.
  */
-function processClosedWindow(win) {
+async function processClosedWindow(win) {
   const window = win.samples;
   if (window.length === 0) return;
 
@@ -154,7 +166,7 @@ function processClosedWindow(win) {
       processedRecord[`${metric}Last`] = agg.stats[metric].last;
     }
 
-    processedService.saveAndTrigger(processedRecord);
+    await processedService.saveAndTrigger(processedRecord);
   } catch (err) {
     logger.error(`Preprocessing: failed to aggregate/store processed window (window ${win.windowStart} - ${win.windowEnd}): ${err.message}`);
   }
@@ -169,7 +181,7 @@ function processClosedWindow(win) {
  * @param {'ACCEPTED'|'DUPLICATE'|'MERGED'|'REJECTED_STALE'} classification
  * @returns the saved reading (API shape).
  */
-function ingestSample(rawSample, provenance, classification) {
+async function ingestSample(rawSample, provenance, classification) {
   const prevSample = getLastSample();
   const dtSec = prevSample ? (Date.parse(rawSample.timestamp) - Date.parse(prevSample.timestamp)) / 1000 : null;
 
@@ -186,7 +198,7 @@ function ingestSample(rawSample, provenance, classification) {
   // Store every sample, unconditionally, real or reconstructed — including
   // DUPLICATE/REJECTED_STALE, so raw_telemetry keeps a complete audit trail
   // even for samples that never enter a window.
-  const savedReading = sensorService.saveReading(annotated);
+  const savedReading = await sensorService.saveReading(annotated);
 
   if (classification === 'DUPLICATE' || classification === 'REJECTED_STALE') {
     return savedReading;
@@ -194,9 +206,32 @@ function ingestSample(rawSample, provenance, classification) {
 
   const closedWindows = commit(savedReading, classification);
   for (const win of closedWindows) {
-    processClosedWindow(win);
+    await processClosedWindow(win);
   }
   return savedReading;
+}
+
+async function processSampleLocked(sample) {
+  const tsMs = Date.parse(sample.timestamp);
+  const classification = classify(tsMs);
+
+  if (classification === 'REJECTED_STALE') {
+    const savedReading = await ingestSample(sample, 'MEASURED', classification);
+    return { ...savedReading, accepted: false, reason: 'STALE' };
+  }
+  if (classification === 'DUPLICATE') {
+    const savedReading = await ingestSample(sample, 'MEASURED', classification);
+    return { ...savedReading, accepted: true, duplicate: true };
+  }
+
+  // ACCEPTED / MERGED: gap-fill against the true last accepted/merged
+  // sample, then store the real sample itself.
+  const fillSamples = generateFillSamples(getLastSample(), sample, METRICS);
+  for (const fill of fillSamples) {
+    const fillClassification = classify(Date.parse(fill.timestamp));
+    await ingestSample(fill, 'IMPUTED', fillClassification);
+  }
+  return ingestSample(sample, 'MEASURED', classification);
 }
 
 /**
@@ -212,27 +247,15 @@ function ingestSample(rawSample, provenance, classification) {
  *   ("received and understood, but not used"), not protocol errors, so they
  *   no longer throw an HTTP 400 the way a reordered timestamp used to.
  */
-export function processSample(sample) {
-  const tsMs = Date.parse(sample.timestamp);
-  const classification = classify(tsMs);
+export async function processSample(sample) {
+  return withLock(() => processSampleLocked(sample));
+}
 
-  if (classification === 'REJECTED_STALE') {
-    const savedReading = ingestSample(sample, 'MEASURED', classification);
-    return { ...savedReading, accepted: false, reason: 'STALE' };
+async function runBackgroundSweepLocked() {
+  const closedWindows = closeExpiredWindows(Date.now());
+  for (const win of closedWindows) {
+    await processClosedWindow(win);
   }
-  if (classification === 'DUPLICATE') {
-    const savedReading = ingestSample(sample, 'MEASURED', classification);
-    return { ...savedReading, accepted: true, duplicate: true };
-  }
-
-  // ACCEPTED / MERGED: gap-fill against the true last accepted/merged
-  // sample, then store the real sample itself.
-  const fillSamples = generateFillSamples(getLastSample(), sample, METRICS);
-  for (const fill of fillSamples) {
-    const fillClassification = classify(Date.parse(fill.timestamp));
-    ingestSample(fill, 'IMPUTED', fillClassification);
-  }
-  return ingestSample(sample, 'MEASURED', classification);
 }
 
 /**
@@ -241,9 +264,6 @@ export function processSample(sample) {
  * server.js, since ingestion is otherwise entirely push-driven and a fully
  * silent stream would otherwise never close its last window.
  */
-export function runBackgroundSweep() {
-  const closedWindows = closeExpiredWindows(Date.now());
-  for (const win of closedWindows) {
-    processClosedWindow(win);
-  }
+export async function runBackgroundSweep() {
+  return withLock(() => runBackgroundSweepLocked());
 }

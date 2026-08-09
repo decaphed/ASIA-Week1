@@ -4,4 +4,4 @@
 // exactly one public entry point.
 // ─────────────────────────────────────────────────────────────────────────
 
-export { processSample } from './pipeline.js';
+export { processSample, runBackgroundSweep } from './pipeline.js';

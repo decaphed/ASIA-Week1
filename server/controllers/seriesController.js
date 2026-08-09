@@ -8,7 +8,7 @@
 
 import * as service from '../services/summaryService.js';
 
-export function getSeries(req, res, next) {
+export async function getSeries(req, res, next) {
   try {
     const range = req.query.range ?? service.DEFAULT_SERIES_RANGE;
     if (!service.isValidSeriesRange(range)) {
@@ -18,7 +18,7 @@ export function getSeries(req, res, next) {
       });
     }
 
-    const data = service.getSeries(range);
+    const data = await service.getSeries(range);
     res.json({ success: true, data });
   } catch (err) {
     next(err);

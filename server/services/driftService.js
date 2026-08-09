@@ -155,8 +155,8 @@ export function classify(metric, series) {
 }
 
 /** Pull the latest window, re-check every metric, refresh the cache. */
-function runDriftCheck() {
-  const rows = model.getRecentReadings((RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS) * ROW_FETCH_MULTIPLIER);
+async function runDriftCheck() {
+  const rows = await model.getRecentReadings((RECENT_WINDOW_ROWS + REFERENCE_WINDOW_ROWS) * ROW_FETCH_MULTIPLIER);
 
   // rows are newest-first (id DESC); put them in chronological order, then
   // drop anything that wasn't a normal RUNNING minute. A FAULT/STOPPED
@@ -190,12 +190,12 @@ export function getDrift() {
  * incrementally update the reference/recent means, keeping the statistics
  * identical to a from-scratch computation.
  */
-export function onNewProcessedRecord() {
-  runDriftCheck();
+export async function onNewProcessedRecord() {
+  await runDriftCheck();
 }
 
 /** Runs an initial check on startup to pick up any history already stored. */
-export function startDriftLoop() {
-  runDriftCheck();
+export async function startDriftLoop() {
+  await runDriftCheck();
   logger.info('Drift detection loop started: initial check run; subsequent checks are event-driven (see onNewProcessedRecord)');
 }
