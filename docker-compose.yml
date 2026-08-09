@@ -2,14 +2,12 @@ services:
   server:
     build: ./server
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       PORT: 3000
-      DB_PATH: /data/data.db
+      DATABASE_URL: ${DATABASE_URL}
       CLIENT_ORIGIN: http://localhost:5173
       PDM_SERVICE_URL: http://pdm:8000
-    volumes:
-      - server_data:/data
     restart: unless-stopped
     depends_on:
       - pdm
@@ -20,7 +18,7 @@ services:
       args:
         VITE_API_URL: /api
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
     depends_on:
       - server
     restart: unless-stopped
@@ -30,6 +28,3 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
-
-volumes:
-  server_data:

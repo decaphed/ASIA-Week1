@@ -45,9 +45,9 @@ export { DEFAULT_SERIES_RANGE, DEFAULT_SUMMARY_RANGE };
  * @param {string} range one of SERIES_RANGES keys (validated by the caller).
  * @returns { range, bucketSeconds, points: [{ t, ...sixMetrics }] }
  */
-export function getSeries(range) {
+export async function getSeries(range) {
   const { sinceModifier, bucketSeconds } = SERIES_RANGES[range];
-  const rows = model.getSeries({ bucketSeconds, sinceModifier });
+  const rows = await model.getSeries({ bucketSeconds, sinceModifier });
 
   const points = rows.map((row) => ({
     t: row.t,
@@ -110,9 +110,9 @@ function countExcursions(buckets) {
  * min/max/avg, and distinct excursion counts.
  * @param {string} range one of SUMMARY_RANGES keys (validated by the caller).
  */
-export function getSummary(range) {
+export async function getSummary(range) {
   const { sinceModifier, excursionBucketSeconds } = SUMMARY_RANGES[range];
-  const agg = model.getSummaryAggregate({ sinceModifier });
+  const agg = await model.getSummaryAggregate({ sinceModifier });
 
   const sampleCount = agg.sampleCount || 0;
   const runningCount = agg.runningCount || 0;
@@ -144,7 +144,7 @@ export function getSummary(range) {
   }
 
   // Excursions from the fine-bucket downsample (cheap: reuses getSeries SQL).
-  const buckets = model.getSeries({ bucketSeconds: excursionBucketSeconds, sinceModifier });
+  const buckets = await model.getSeries({ bucketSeconds: excursionBucketSeconds, sinceModifier });
   const excursions = countExcursions(buckets);
 
   return {

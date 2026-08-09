@@ -57,12 +57,12 @@ function lookbackBound(windowEndIso) {
  * @param processedTelemetryId the triggering window's processed_telemetry.id
  * @param verdict { confidence, triggeredRules, thresholdsVersion }
  */
-export function recordFlaggedEvent(data, processedTelemetryId, verdict) {
+export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
   const triggerWindowEnd = data.windowEnd;
   const triggeredRulesJson = JSON.stringify(verdict.triggeredRules ?? []);
   const bound = lookbackBound(triggerWindowEnd);
 
-  const extendedId = model.extendOpenEvent({
+  const extendedId = await model.extendOpenEvent({
     triggerWindowEnd,
     triggeredRules: triggeredRulesJson,
     lookbackBound: bound,
@@ -74,7 +74,7 @@ export function recordFlaggedEvent(data, processedTelemetryId, verdict) {
   const faultStart = triggerWindowEnd;
   const bufferStart = new Date(Date.parse(faultStart) - ONE_HOUR_MS).toISOString();
 
-  const info = model.insertFaultEvent({
+  const info = await model.insertFaultEvent({
     processedTelemetryId,
     eventType: 'FLAGGED',
     detectedAt: new Date().toISOString(),
@@ -101,14 +101,14 @@ export function recordFlaggedEvent(data, processedTelemetryId, verdict) {
  *   2. no open FLAGGED event at sample time
  * Returns null (no-op) if either condition fails.
  */
-export function recordNegativeSample(data, processedTelemetryId, thresholdsVersion) {
+export async function recordNegativeSample(data, processedTelemetryId, thresholdsVersion) {
   if (data.dominantStatus !== 'RUNNING') return null;
 
   const bound = lookbackBound(data.windowEnd);
-  if (model.hasOpenEvent(bound)) return null;
+  if (await model.hasOpenEvent(bound)) return null;
 
   try {
-    const info = model.insertFaultEvent({
+    const info = await model.insertFaultEvent({
       processedTelemetryId,
       eventType: 'NEGATIVE_SAMPLE',
       detectedAt: new Date().toISOString(),
@@ -133,23 +133,23 @@ export function recordNegativeSample(data, processedTelemetryId, thresholdsVersi
 }
 
 /** @returns fault_events rows, optionally filtered by status. */
-export function listFaultEvents(status) {
+export async function listFaultEvents(status) {
   return model.listFaultEvents(status);
 }
 
 /** @returns one fault_events row plus its buffer sample count, or null. */
-export function getFaultEvent(id) {
-  const row = model.getFaultEventById(id);
+export async function getFaultEvent(id) {
+  const row = await model.getFaultEventById(id);
   if (!row) return null;
   const bufferCount = row.bufferStart && row.bufferEnd
-    ? model.getBufferRange(row.bufferStart, row.bufferEnd).length
+    ? (await model.getBufferRange(row.bufferStart, row.bufferEnd)).length
     : 0;
   return { ...row, bufferSampleCount: bufferCount };
 }
 
 /** @returns raw_telemetry rows spanning one event's buffer range. */
-export function getFaultEventBuffer(id) {
-  const row = model.getFaultEventById(id);
+export async function getFaultEventBuffer(id) {
+  const row = await model.getFaultEventById(id);
   if (!row || !row.bufferStart || !row.bufferEnd) return [];
   return model.getBufferRange(row.bufferStart, row.bufferEnd);
 }
@@ -159,14 +159,14 @@ export function getFaultEventBuffer(id) {
  * given, bufferEnd (= faultEnd + 1 hour) is finalized here — until then the
  * buffer's trailing edge is genuinely unknown (§3.6).
  */
-export function reviewFaultEvent(id, patch) {
-  const existing = model.getFaultEventById(id);
+export async function reviewFaultEvent(id, patch) {
+  const existing = await model.getFaultEventById(id);
   if (!existing) return null;
 
   const faultEnd = patch.faultEnd ?? existing.faultEnd;
   const bufferEnd = faultEnd ? new Date(Date.parse(faultEnd) + ONE_HOUR_MS).toISOString() : existing.bufferEnd;
 
-  model.updateFaultEventReview({
+  await model.updateFaultEventReview({
     id,
     status: patch.status ?? existing.status,
     faultType: patch.faultType ?? existing.faultType,
@@ -182,8 +182,8 @@ export function reviewFaultEvent(id, patch) {
 }
 
 /** §3.6: confidence/status agreement breakdown for FLAGGED rows. */
-export function getFaultEventStats() {
-  const rows = model.getFaultEventStats();
+export async function getFaultEventStats() {
+  const rows = await model.getFaultEventStats();
   const stats = {};
   for (const { confidence, status, count } of rows) {
     const key = confidence ?? 'UNKNOWN';

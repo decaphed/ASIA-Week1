@@ -1,96 +1,97 @@
 // ─────────────────────────────────────────────────────────────────────────
 // processedModel.js — the ONLY place that contains SQL for processed_telemetry.
 //
-// Same convention as sensorModel.js: one prepared statement per query,
-// compiled once at module load, values bound (never string-concatenated).
+// Same convention as sensorModel.js: every camelCase column name is
+// double-quoted, values are always bound as $1, $2, … (never concatenated).
 // ─────────────────────────────────────────────────────────────────────────
 
-import db from '../database/db.js';
+import pool, { toIso } from '../database/db.js';
 
 const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
 const STATS = ['Mean', 'Median', 'Min', 'Max', 'StdDev', 'Last'];
 const METRIC_COLUMNS = METRICS.flatMap((metric) => STATS.map((stat) => `${metric}${stat}`));
 
-const insertStmt = db.prepare(`
+const INSERT_COLUMNS = [
+  'windowStart', 'windowEnd', 'timestamp',
+  ...METRIC_COLUMNS,
+  'dominantStatus', 'dominantFaultType', 'runningSeconds', 'faultSeconds', 'stoppedSeconds',
+  'sampleCount', 'expectedSampleCount', 'missingSampleCount', 'imputedSampleCount', 'outlierCount', 'outliersByMetric', 'physicsViolationCount', 'violationsByMetric', 'physicsImputedCount', 'precapFeaturesByMetric', 'historicalFeaturesByMetric',
+  'missingRate', 'imputationRate', 'outlierRate', 'physicsPassRate', 'physicsImputationRate',
+  'lateSampleCount', 'mergedSampleCount', 'duplicateSampleCount', 'partiallyImputedCount', 'partiallyImputedRate', 'abnormalOperationSampleCount',
+  'qualityScore', 'qualityLabel', 'isImputed',
+  'preprocessingVersion', 'preprocessingTimestamp',
+];
+
+const INSERT_SQL = `
   INSERT INTO processed_telemetry
-    (windowStart, windowEnd, timestamp,
-     ${METRIC_COLUMNS.join(', ')},
-     dominantStatus, dominantFaultType, runningSeconds, faultSeconds, stoppedSeconds,
-     sampleCount, expectedSampleCount, missingSampleCount, imputedSampleCount, outlierCount, outliersByMetric, physicsViolationCount, violationsByMetric, physicsImputedCount, precapFeaturesByMetric, historicalFeaturesByMetric,
-     missingRate, imputationRate, outlierRate, physicsPassRate, physicsImputationRate,
-     lateSampleCount, mergedSampleCount, duplicateSampleCount, partiallyImputedCount, partiallyImputedRate, abnormalOperationSampleCount,
-     qualityScore, qualityLabel, isImputed,
-     preprocessingVersion, preprocessingTimestamp)
+    (${INSERT_COLUMNS.map((c) => `"${c}"`).join(', ')})
   VALUES
-    (@windowStart, @windowEnd, @timestamp,
-     ${METRIC_COLUMNS.map((c) => `@${c}`).join(', ')},
-     @dominantStatus, @dominantFaultType, @runningSeconds, @faultSeconds, @stoppedSeconds,
-     @sampleCount, @expectedSampleCount, @missingSampleCount, @imputedSampleCount, @outlierCount, @outliersByMetric, @physicsViolationCount, @violationsByMetric, @physicsImputedCount, @precapFeaturesByMetric, @historicalFeaturesByMetric,
-     @missingRate, @imputationRate, @outlierRate, @physicsPassRate, @physicsImputationRate,
-     @lateSampleCount, @mergedSampleCount, @duplicateSampleCount, @partiallyImputedCount, @partiallyImputedRate, @abnormalOperationSampleCount,
-     @qualityScore, @qualityLabel, @isImputed,
-     @preprocessingVersion, @preprocessingTimestamp)
-`);
+    (${INSERT_COLUMNS.map((_, i) => `$${i + 1}`).join(', ')})
+  RETURNING id
+`;
 
-const updateHistoricalFeaturesStmt = db.prepare(`
-  UPDATE processed_telemetry SET historicalFeaturesByMetric = @historicalFeaturesByMetric WHERE id = @id
-`);
+function mapRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    timestamp: toIso(row.timestamp),
+    windowStart: toIso(row.windowStart),
+    windowEnd: toIso(row.windowEnd),
+    preprocessingTimestamp: toIso(row.preprocessingTimestamp),
+  };
+}
 
-// Newest-first. Used both by the dashboard (small n) and by forecasting /
-// drift detection (larger n).
-const recentStmt = db.prepare(`
-  SELECT * FROM processed_telemetry ORDER BY id DESC LIMIT ?
-`);
-
-const latestStmt = db.prepare(`
-  SELECT * FROM processed_telemetry ORDER BY id DESC LIMIT 1
-`);
-
-const historyDescStmt = db.prepare(`
-  SELECT * FROM processed_telemetry ORDER BY id DESC LIMIT ? OFFSET ?
-`);
-const historyAscStmt = db.prepare(`
-  SELECT * FROM processed_telemetry ORDER BY id ASC LIMIT ? OFFSET ?
-`);
-const countStmt = db.prepare(`
-  SELECT COUNT(*) AS count FROM processed_telemetry
-`);
-const allChronologicalStmt = db.prepare(`
-  SELECT * FROM processed_telemetry ORDER BY id ASC
-`);
-
-/** Insert one processed (one-minute aggregate) record. */
-export function insertProcessed(record) {
-  return insertStmt.run(record);
+/** Insert one processed (one-minute aggregate) record. Returns the inserted row's id. */
+export async function insertProcessed(record) {
+  const values = INSERT_COLUMNS.map((c) => record[c]);
+  const result = await pool.query(INSERT_SQL, values);
+  return { lastInsertRowid: result.rows[0].id };
 }
 
 /** @returns up to n most recent rows, newest first (id DESC). */
-export function getRecentProcessed(n) {
-  return recentStmt.all(n);
+export async function getRecentProcessed(n) {
+  const result = await pool.query('SELECT * FROM processed_telemetry ORDER BY id DESC LIMIT $1', [n]);
+  return result.rows.map(mapRow);
 }
 
 /** @returns the single newest row, or undefined if the table is empty. */
-export function getLatestProcessed() {
-  return latestStmt.get();
+export async function getLatestProcessed() {
+  const result = await pool.query('SELECT * FROM processed_telemetry ORDER BY id DESC LIMIT 1');
+  return mapRow(result.rows[0]);
 }
 
-/** @returns an array of raw rows for the requested page. */
-export function getProcessedHistory({ limit, offset, sort }) {
-  const stmt = sort === 'asc' ? historyAscStmt : historyDescStmt;
-  return stmt.all(limit, offset);
+/** @returns an array of rows for the requested page. */
+export async function getProcessedHistory({ limit, offset, sort }) {
+  const order = sort === 'asc' ? 'ASC' : 'DESC';
+  const result = await pool.query(
+    `SELECT * FROM processed_telemetry ORDER BY id ${order} LIMIT $1 OFFSET $2`,
+    [limit, offset],
+  );
+  return result.rows.map(mapRow);
 }
 
 /** @returns total number of processed rows. */
-export function getProcessedCount() {
-  return countStmt.get().count;
+export async function getProcessedCount() {
+  const result = await pool.query('SELECT COUNT(*) AS count FROM processed_telemetry');
+  return Number(result.rows[0].count);
 }
 
 /** @returns every processed row, oldest first (id ASC) — used by the historical-features backfill script. */
-export function getAllProcessedChronological() {
-  return allChronologicalStmt.all();
+export async function getAllProcessedChronological() {
+  const result = await pool.query('SELECT * FROM processed_telemetry ORDER BY id ASC');
+  return result.rows.map(mapRow);
 }
 
-/** Overwrite historicalFeaturesByMetric for one existing row (backfill script only — new rows set it at insert time). */
-export function updateHistoricalFeatures(id, historicalFeaturesByMetricJson) {
-  return updateHistoricalFeaturesStmt.run({ id, historicalFeaturesByMetric: historicalFeaturesByMetricJson });
+/**
+ * Overwrite historicalFeaturesByMetric for one existing row (backfill script
+ * only — new rows set it at insert time). `client` is optional — when
+ * provided (inside a withTransaction() call), the update runs on that
+ * client instead of a fresh pool connection, so it participates in the
+ * caller's transaction.
+ */
+export async function updateHistoricalFeatures(id, historicalFeaturesByMetric, client = pool) {
+  return client.query(
+    'UPDATE processed_telemetry SET "historicalFeaturesByMetric" = $1 WHERE id = $2',
+    [historicalFeaturesByMetric, id],
+  );
 }

@@ -38,7 +38,7 @@ explain and rebuild every part of this project.
 |---|---|---|
 | Data generation | **Node-RED** | Simulates a sensor gateway every second, injecting pump telemetry (6 metrics, 3 fault signatures) and POSTs to the backend |
 | Backend | **Node.js + Express** | Validates, preprocesses (outlier-caps, smooths), stores pump readings, computes trends/forecasts, serves REST API |
-| Storage | **SQLite** (`better-sqlite3`) | A single-file database holding raw telemetry and preprocessed signals; supports fault-prediction feature pipelines |
+| Storage | **PostgreSQL 16 + TimescaleDB** (`pg`) | A networked hypertable database holding raw telemetry and preprocessed signals as time-series data; supports fault-prediction feature pipelines. See `docs/plan/2026-08-04-timescaledb-migration.md`. |
 | Frontend | **React (Vite) + Lucide icons + Chart.js** | Four-page dashboard (Overview / Analytics / Predictions / Reports) with teal/navy control-room theme; polls API and renders live metrics, trend charts, and fault analysis |
 
 The three pieces are fully decoupled — each only knows about HTTP. You could

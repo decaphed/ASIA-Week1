@@ -8,9 +8,9 @@
 
 import * as service from '../services/sensorService.js';
 
-export function getLive(req, res, next) {
+export async function getLive(req, res, next) {
   try {
-    const reading = service.getLatestReading();
+    const reading = await service.getLatestReading();
 
     if (!reading) {
       return res.json({ success: true, data: null, message: 'No readings yet' });

@@ -315,8 +315,8 @@ function classify(metric, minutes, series) {
 }
 
 /** Pull the latest window, reclassify every metric, refresh the cache. */
-function runTrendCheck() {
-  const rows = model.getRecentReadings(WINDOW * ROW_FETCH_MULTIPLIER);
+async function runTrendCheck() {
+  const rows = await model.getRecentReadings(WINDOW * ROW_FETCH_MULTIPLIER);
 
   if (rows.length === 0) return;
 
@@ -365,12 +365,12 @@ export function getTrend() {
  * incremental state — at this window size there's no benefit to the added
  * complexity of an incremental update.
  */
-export function onNewProcessedRecord() {
-  runTrendCheck();
+export async function onNewProcessedRecord() {
+  await runTrendCheck();
 }
 
 /** Runs an initial check on startup to pick up any history already stored. */
-export function startTrendLoop() {
-  runTrendCheck();
+export async function startTrendLoop() {
+  await runTrendCheck();
   logger.info('Trend classification loop started: initial check run; subsequent checks are event-driven (see onNewProcessedRecord)');
 }

@@ -12,7 +12,7 @@ import * as service from '../services/sensorService.js';
 const DEFAULT_LIMIT = 100; // spec: "return the latest 100 readings"
 const MAX_LIMIT = 1000; // safety ceiling
 
-export function getHistory(req, res, next) {
+export async function getHistory(req, res, next) {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(
@@ -22,7 +22,7 @@ export function getHistory(req, res, next) {
     // Only two valid sort values; anything else falls back to 'desc' (newest).
     const sort = req.query.sort === 'asc' ? 'asc' : 'desc';
 
-    const result = service.getHistoryPage({ page, limit, sort });
+    const result = await service.getHistoryPage({ page, limit, sort });
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);

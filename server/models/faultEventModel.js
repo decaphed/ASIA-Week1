@@ -1,146 +1,130 @@
 // ─────────────────────────────────────────────────────────────────────────
 // faultEventModel.js — the ONLY place that contains SQL for fault_events.
 //
-// Same convention as processedModel.js: one prepared statement per query,
-// compiled once at module load, values bound (never string-concatenated).
+// Same convention as processedModel.js: every camelCase column name is
+// double-quoted, values are always bound as $1, $2, … (never concatenated).
+//
+// NOTE: fault_events is intentionally NOT part of this migration's schema
+// (see server/database/migrations/001_init.up.sql's header comment) — it's
+// a separate, later PdM phase per docs/plan/2026-08-04-timescaledb-migration.md
+// §1/§7. This file is converted from better-sqlite3 to `pg` only so that
+// importing it doesn't crash the app at module load (the old code prepared
+// statements against `db` at import time, which throws immediately once
+// `db.js`'s default export became a pg.Pool with no `.prepare()`). Every
+// query here will fail at call time with "relation fault_events does not
+// exist" until PdM's own migration creates that table — callers
+// (faultEventService.js, processedService.js's pdmOnNewRecord) already
+// handle that via try/catch, consistent with PdM being out of scope here.
 // ─────────────────────────────────────────────────────────────────────────
 
-import db from '../database/db.js';
-
-// Insert covers both eventType variants (FLAGGED and NEGATIVE_SAMPLE).
-// status is always bound explicitly by the caller rather than relying on
-// the column's PENDING_REVIEW default — a NEGATIVE_SAMPLE row that let the
-// default fire would silently land in the HITL review queue (see
-// faultEventService.js's negative-sample path, which always passes 'N/A').
-const insertStmt = db.prepare(`
-  INSERT INTO fault_events
-    (processedTelemetryId, eventType, detectedAt, triggerWindowEnd, lastSeenWindowEnd,
-     triggeredRules, confidence, featureSnapshot, thresholdsVersion,
-     faultStart, faultEnd, bufferStart, bufferEnd, status)
-  VALUES
-    (@processedTelemetryId, @eventType, @detectedAt, @triggerWindowEnd, @lastSeenWindowEnd,
-     @triggeredRules, @confidence, @featureSnapshot, @thresholdsVersion,
-     @faultStart, @faultEnd, @bufferStart, @bufferEnd, @status)
-`);
-
-// Atomic find-open-and-extend statement (§3.3.2). "Open" = a PENDING_REVIEW
-// row whose lastSeenWindowEnd is still within the caller-computed lookback
-// bound, AND whose triggeredRules set shares at least one rule with the new
-// window's triggeredRules set (json_each intersection) — an any-metric
-// overlap would wrongly merge two independent multi-metric faults into one
-// row. This is a single UPDATE ... WHERE (correlated subquery) ... RETURNING
-// statement, not a separate SELECT-then-branch — see §3.3.2 for why this
-// stays true even though the current synchronous better-sqlite3/single-
-// threaded-Node stack means the race it guards against isn't live today.
-const extendOpenEventStmt = db.prepare(`
-  UPDATE fault_events
-  SET faultEnd = @triggerWindowEnd,
-      triggerWindowEnd = @triggerWindowEnd,
-      lastSeenWindowEnd = @triggerWindowEnd
-  WHERE id = (
-    SELECT fe.id FROM fault_events fe
-    WHERE fe.status = 'PENDING_REVIEW'
-      AND fe.lastSeenWindowEnd >= @lookbackBound
-      AND EXISTS (
-        SELECT 1 FROM json_each(fe.triggeredRules) existing
-        JOIN json_each(@triggeredRules) incoming ON existing.value = incoming.value
-      )
-    ORDER BY fe.lastSeenWindowEnd DESC
-    LIMIT 1
-  )
-  RETURNING id
-`);
-
-// Whether any FLAGGED event is currently open — gates negative sampling
-// (§3.3.1). Deliberately does NOT filter by triggeredRules overlap: any
-// open fault, on any metric, suppresses sampling, since a transiently-
-// clearing fault window would otherwise get banked as a mislabeled negative.
-const hasOpenEventStmt = db.prepare(`
-  SELECT 1 FROM fault_events
-  WHERE status = 'PENDING_REVIEW' AND lastSeenWindowEnd >= @lookbackBound
-  LIMIT 1
-`);
-
-const listByStatusStmt = db.prepare(`
-  SELECT * FROM fault_events WHERE status = @status ORDER BY id DESC
-`);
-const listAllStmt = db.prepare(`
-  SELECT * FROM fault_events ORDER BY id DESC
-`);
-const getByIdStmt = db.prepare(`
-  SELECT * FROM fault_events WHERE id = ?
-`);
-
-const updateReviewStmt = db.prepare(`
-  UPDATE fault_events
-  SET status = @status,
-      faultType = @faultType,
-      rootCause = @rootCause,
-      resolution = @resolution,
-      reviewedBy = @reviewedBy,
-      reviewedAt = @reviewedAt,
-      notes = @notes,
-      faultEnd = @faultEnd,
-      bufferEnd = @bufferEnd
-  WHERE id = @id
-`);
-
-// §3.6's /stats endpoint: HITL-outcome agreement with Tier 1's own
-// confidence, scoped to FLAGGED rows only (NEGATIVE_SAMPLE rows have no
-// confidence and never go through review).
-const statsStmt = db.prepare(`
-  SELECT confidence, status, COUNT(*) AS count
-  FROM fault_events
-  WHERE eventType = 'FLAGGED'
-  GROUP BY confidence, status
-`);
-
-const bufferRangeStmt = db.prepare(`
-  SELECT * FROM raw_telemetry
-  WHERE timestamp BETWEEN @bufferStart AND @bufferEnd
-  ORDER BY timestamp ASC
-`);
+import pool from '../database/db.js';
 
 /** Insert a new fault_events row (FLAGGED or NEGATIVE_SAMPLE — caller sets eventType/status). */
-export function insertFaultEvent(record) {
-  return insertStmt.run(record);
+export async function insertFaultEvent(record) {
+  const result = await pool.query(
+    `INSERT INTO fault_events
+      ("processedTelemetryId", "eventType", "detectedAt", "triggerWindowEnd", "lastSeenWindowEnd",
+       "triggeredRules", "confidence", "featureSnapshot", "thresholdsVersion",
+       "faultStart", "faultEnd", "bufferStart", "bufferEnd", "status")
+     VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     RETURNING id`,
+    [
+      record.processedTelemetryId, record.eventType, record.detectedAt, record.triggerWindowEnd, record.lastSeenWindowEnd,
+      record.triggeredRules, record.confidence, record.featureSnapshot, record.thresholdsVersion,
+      record.faultStart, record.faultEnd, record.bufferStart, record.bufferEnd, record.status,
+    ],
+  );
+  return { lastInsertRowid: result.rows[0]?.id };
 }
 
 /**
  * Try to extend an existing open row instead of inserting a new one.
  * @returns the extended row's id, or undefined if no open row matched.
  */
-export function extendOpenEvent({ triggerWindowEnd, triggeredRules, lookbackBound }) {
-  const row = extendOpenEventStmt.get({ triggerWindowEnd, triggeredRules, lookbackBound });
-  return row ? row.id : undefined;
+export async function extendOpenEvent({ triggerWindowEnd, triggeredRules, lookbackBound }) {
+  const result = await pool.query(
+    `UPDATE fault_events
+     SET "faultEnd" = $1,
+         "triggerWindowEnd" = $1,
+         "lastSeenWindowEnd" = $1
+     WHERE id = (
+       SELECT fe.id FROM fault_events fe
+       WHERE fe.status = 'PENDING_REVIEW'
+         AND fe."lastSeenWindowEnd" >= $2
+         AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements_text(fe."triggeredRules") existing
+           JOIN jsonb_array_elements_text($3::jsonb) incoming ON existing = incoming
+         )
+       ORDER BY fe."lastSeenWindowEnd" DESC
+       LIMIT 1
+     )
+     RETURNING id`,
+    [triggerWindowEnd, lookbackBound, JSON.stringify(triggeredRules)],
+  );
+  return result.rows[0]?.id;
 }
 
 /** @returns true if any FLAGGED event is currently open (within lookbackBound). */
-export function hasOpenEvent(lookbackBound) {
-  return hasOpenEventStmt.get({ lookbackBound }) !== undefined;
+export async function hasOpenEvent(lookbackBound) {
+  const result = await pool.query(
+    `SELECT 1 FROM fault_events WHERE status = 'PENDING_REVIEW' AND "lastSeenWindowEnd" >= $1 LIMIT 1`,
+    [lookbackBound],
+  );
+  return result.rows.length > 0;
 }
 
 /** @returns fault_events rows filtered by status, or all rows if status is falsy. */
-export function listFaultEvents(status) {
-  return status ? listByStatusStmt.all({ status }) : listAllStmt.all();
+export async function listFaultEvents(status) {
+  const result = status
+    ? await pool.query('SELECT * FROM fault_events WHERE status = $1 ORDER BY id DESC', [status])
+    : await pool.query('SELECT * FROM fault_events ORDER BY id DESC');
+  return result.rows;
 }
 
 /** @returns a single fault_events row by id, or undefined. */
-export function getFaultEventById(id) {
-  return getByIdStmt.get(id);
+export async function getFaultEventById(id) {
+  const result = await pool.query('SELECT * FROM fault_events WHERE id = $1', [id]);
+  return result.rows[0];
 }
 
 /** Apply a HITL review patch (confirm/reject/annotate). */
-export function updateFaultEventReview(record) {
-  return updateReviewStmt.run(record);
+export async function updateFaultEventReview(record) {
+  return pool.query(
+    `UPDATE fault_events
+     SET status = $1,
+         "faultType" = $2,
+         "rootCause" = $3,
+         resolution = $4,
+         "reviewedBy" = $5,
+         "reviewedAt" = $6,
+         notes = $7,
+         "faultEnd" = $8,
+         "bufferEnd" = $9
+     WHERE id = $10`,
+    [
+      record.status, record.faultType, record.rootCause, record.resolution,
+      record.reviewedBy, record.reviewedAt, record.notes, record.faultEnd, record.bufferEnd, record.id,
+    ],
+  );
 }
 
 /** @returns [{ confidence, status, count }] grouped counts for FLAGGED rows. */
-export function getFaultEventStats() {
-  return statsStmt.all();
+export async function getFaultEventStats() {
+  const result = await pool.query(
+    `SELECT confidence, status, COUNT(*) AS count
+     FROM fault_events
+     WHERE "eventType" = 'FLAGGED'
+     GROUP BY confidence, status`,
+  );
+  return result.rows;
 }
 
 /** @returns raw_telemetry rows within [bufferStart, bufferEnd], chronological. */
-export function getBufferRange(bufferStart, bufferEnd) {
-  return bufferRangeStmt.all({ bufferStart, bufferEnd });
+export async function getBufferRange(bufferStart, bufferEnd) {
+  const result = await pool.query(
+    `SELECT * FROM raw_telemetry WHERE "timestamp" BETWEEN $1 AND $2 ORDER BY "timestamp" ASC`,
+    [bufferStart, bufferEnd],
+  );
+  return result.rows;
 }

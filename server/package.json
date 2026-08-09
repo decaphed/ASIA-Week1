@@ -11,23 +11,28 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "quality-report": "node scripts/qualityReport.js",
-    "test": "node --test scripts/tests/*.test.mjs"
+    "migrate": "node-pg-migrate -m database/migrations",
+    "migrate:up": "node-pg-migrate up -m database/migrations",
+    "migrate:down": "node-pg-migrate down -m database/migrations",
+    "test": "node --test $(find scripts/tests -maxdepth 1 -name '*.test.mjs' ! -name '*pdm*' ! -name '*faultEvent*')"
   },
   "keywords": [
     "iot",
     "express",
-    "sqlite",
+    "postgresql",
+    "timescaledb",
     "node-red",
     "dashboard"
   ],
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "nodemon": "^3.1.9",
+    "node-pg-migrate": "^7.9.1"
   }
 }

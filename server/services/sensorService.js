@@ -2,8 +2,6 @@
 // sensorService.js — business logic.
 //
 // The service sits between controllers (HTTP) and the model (SQL). It:
-//   • converts between the DB shape (light = 0/1) and the API shape
-//     (light = true/false),
 //   • fills in a server-side timestamp when the client omits one,
 //   • assembles derived data such as statistics and pagination metadata.
 //
@@ -17,7 +15,15 @@ function round2(value) {
   return value == null ? null : Math.round(value * 100) / 100;
 }
 
-/** Convert a raw DB row into the clean object the API exposes. */
+/**
+ * Convert a raw DB row into the clean object the API exposes.
+ *
+ * physicsValid/abnormalOperation are already real booleans (Postgres
+ * BOOLEAN), and physicsViolations/unfilledMetrics are already parsed
+ * objects (Postgres JSONB) — the model layer no longer stores/returns them
+ * as JSON-encoded strings or 0/1 integers, so no parse/coerce step is
+ * needed here.
+ */
 function rowToReading(row) {
   if (!row) return null;
   return {
@@ -32,10 +38,10 @@ function rowToReading(row) {
     faultType: row.faultType ?? null,
     timestamp: row.timestamp,
     provenance: row.provenance,
-    physicsValid: !!row.physicsValid,
-    physicsViolations: row.physicsViolations ? JSON.parse(row.physicsViolations) : null,
-    unfilledMetrics: row.unfilledMetrics ? JSON.parse(row.unfilledMetrics) : null,
-    abnormalOperation: !!row.abnormalOperation,
+    physicsValid: row.physicsValid,
+    physicsViolations: row.physicsViolations ?? null,
+    unfilledMetrics: row.unfilledMetrics ?? null,
+    abnormalOperation: row.abnormalOperation,
   };
 }
 
@@ -51,7 +57,7 @@ function rowToReading(row) {
  * "valid"/"MEASURED" here only as a safety net for any caller that reaches
  * saveReading() directly, bypassing the pipeline.
  */
-export function saveReading(data) {
+export async function saveReading(data) {
   const record = {
     flowRate: data.flowRate,
     rpm: data.rpm,
@@ -64,36 +70,38 @@ export function saveReading(data) {
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
     timestamp: data.timestamp || new Date().toISOString(),
     provenance: data.provenance || 'MEASURED',
-    physicsValid: data.physicsValid === false ? 0 : 1,
+    physicsValid: data.physicsValid !== false,
     physicsViolations: Array.isArray(data.physicsViolations) && data.physicsViolations.length
-      ? JSON.stringify(data.physicsViolations)
+      ? data.physicsViolations
       : null,
     // Set by preprocessing/missing.js (per-metric fill ceilings) and
     // preprocessing/faultClassifier.js (sensor-fault vs. abnormal-operation
     // classification) respectively — see preprocessing/pipeline.js.
     unfilledMetrics: Array.isArray(data.unfilledMetrics) && data.unfilledMetrics.length
-      ? JSON.stringify(data.unfilledMetrics)
+      ? data.unfilledMetrics
       : null,
-    abnormalOperation: data.abnormalOperation === true ? 1 : 0,
+    abnormalOperation: data.abnormalOperation === true,
   };
 
-  const info = model.insertReading(record);
-  return rowToReading({ id: Number(info.lastInsertRowid), ...record });
+  const info = await model.insertReading(record);
+  return rowToReading({ id: info.lastInsertRowid, ...record });
 }
 
 /** The most recent reading, or null if none stored yet. */
-export function getLatestReading() {
-  return rowToReading(model.getLatest());
+export async function getLatestReading() {
+  return rowToReading(await model.getLatest());
 }
 
 /**
  * A page of history plus pagination metadata.
  * @param {{page:number, limit:number, sort:'asc'|'desc'}} opts
  */
-export function getHistoryPage({ page, limit, sort }) {
+export async function getHistoryPage({ page, limit, sort }) {
   const offset = (page - 1) * limit;
-  const rows = model.getHistory({ limit, offset, sort });
-  const total = model.getCount();
+  const [rows, total] = await Promise.all([
+    model.getHistory({ limit, offset, sort }),
+    model.getCount(),
+  ]);
 
   return {
     page,
@@ -107,11 +115,15 @@ export function getHistoryPage({ page, limit, sort }) {
 }
 
 /** Aggregate statistics for the dashboard's stats panel. */
-export function getStatistics() {
-  const averages = model.getAverages();
+export async function getStatistics() {
+  const [averages, totalRecords, latestTimestamp] = await Promise.all([
+    model.getAverages(),
+    model.getCount(),
+    model.getLatestTimestamp(),
+  ]);
   return {
-    totalRecords: model.getCount(),
-    latestTimestamp: model.getLatestTimestamp(),
+    totalRecords,
+    latestTimestamp,
     averageFlowRate: round2(averages.avgFlowRate),
     averageRpm: round2(averages.avgRpm),
     averageVibration: round2(averages.avgVibration),

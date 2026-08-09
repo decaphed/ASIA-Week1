@@ -7,12 +7,7 @@ services:
       - "pdm:10.10.10.14"
     environment:
       PORT: 3000
-      DB_PATH: /data/data.db
+      DATABASE_URL: ${DATABASE_URL}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
       PDM_SERVICE_URL: ${PDM_SERVICE_URL:-http://pdm:8000}
-    volumes:
-      - server_data:/data
     restart: unless-stopped
-
-volumes:
-  server_data:

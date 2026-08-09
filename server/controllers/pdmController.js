@@ -26,7 +26,7 @@ export function getFaultEvent(req, res, next) {
   }
 }
 
-export function reviewFaultEvent(req, res, next) {
+export async function reviewFaultEvent(req, res, next) {
   try {
     const body = req.body ?? {};
     const errors = validateReviewPatch(body);
@@ -50,7 +50,7 @@ export function reviewFaultEvent(req, res, next) {
       faultEnd,
     };
 
-    const updated = service.reviewFaultEvent(id, patch);
+    const updated = await service.reviewFaultEvent(id, patch);
     if (!updated) return res.status(404).json({ success: false, error: 'fault event not found' });
     res.json({ success: true, data: updated });
   } catch (err) {
@@ -58,9 +58,9 @@ export function reviewFaultEvent(req, res, next) {
   }
 }
 
-export function getFaultEventStats(req, res, next) {
+export async function getFaultEventStats(req, res, next) {
   try {
-    res.json({ success: true, data: service.getFaultEventStats() });
+    res.json({ success: true, data: await service.getFaultEventStats() });
   } catch (err) {
     next(err);
   }
