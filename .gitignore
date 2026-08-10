@@ -11,7 +11,6 @@ dist/
 authentik/traefik/logs/*
 !authentik/traefik/logs/.gitkeep
 
-docs/
 # SQLite database files (auto-created at runtime)
 *.db
 *.db-wal
