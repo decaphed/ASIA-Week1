@@ -1,5 +1,18 @@
 # Authentik SSO on a Dedicated CT — Implementation Plan
 
+> **Superseded for topology.** This plan targeted a 5-CT split deployment
+> (frontend, backend, pdm, pdm-db, auth) with Authentik/Traefik on their own
+> dedicated `auth` CT. That topology has been collapsed into a single CT —
+> see `docs/plan/2026-08-10-single-ct-consolidation.md`, which now supersedes
+> this plan's addressing, compose file shapes, and firewall matrix. This
+> plan's topology-independent reasoning — router priorities,
+> `trustForwardHeader: false`, why Redis is required, the blueprint's
+> `authentik_host` vs `authentik_host_browser` split, the `:?`
+> required-var-guard pattern, and the plain-HTTP-no-TLS decision — is carried
+> forward unchanged into the new plan. Read this plan for that reasoning;
+> read the new plan for anything topology-specific (addresses, compose file
+> contents, DNS names).
+
 Repo-side work for putting a browser-facing Traefik + Authentik forward-auth
 gate (plain HTTP, no TLS — see the decision in §3) on a new Proxmox CT (`auth`, `10.10.10.16`) in front of the
 existing split-CT pump-monitoring stack, using the shared `pdm-db` Postgres/

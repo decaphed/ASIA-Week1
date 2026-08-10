@@ -24,12 +24,15 @@
 # (all Postgres defaults) — this is an application role for a single
 # dedicated database, not an admin role, and needs none of those.
 #
-# *** THIS SCRIPT WILL NOT RUN ON THE LIVE pdm-db INSTANCE. ***
-# /docker-entrypoint-initdb.d/ only fires on first initialization of a
-# fresh volume, and pdm_db_data already exists. This script is committed so
-# a from-scratch rebuild is correct and reproducible; for the live
-# instance, apply the equivalent SQL by hand — see
-# docs/runbook/authentik-operations.md ("Manual database provisioning").
+# This script DOES run automatically on this topology. Per
+# docs/plan/2026-08-10-single-ct-consolidation.md §2/§5.1, this CT's
+# `postgres` volume is created fresh on first `docker compose up` — unlike
+# the prior split-CT design, where this script targeted an already-
+# initialized `pdm-db` volume and had to be applied by hand.
+# /docker-entrypoint-initdb.d/ fires on first initialization of a fresh
+# volume, and this script runs alongside 00-create-role.sh and
+# 01-init-pump-telemetry.sql in that fixed alphabetical order. No manual
+# `psql` provisioning step exists in this topology.
 set -eu
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL

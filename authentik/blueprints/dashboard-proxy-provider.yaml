@@ -17,6 +17,7 @@ metadata:
   name: dashboard-proxy-provider
 entries:
   - model: authentik_providers_proxy.proxyprovider
+    id: dashboard-proxy-provider
     identifiers:
       name: dashboard-proxy-provider
     attrs:
@@ -38,21 +39,30 @@ entries:
       provider: !KeyOf dashboard-proxy-provider
 
   # Updates the built-in embedded outpost, identified by its default name,
-  # to add this provider and to correctly configure the server-side vs.
-  # browser-facing Authentik URLs.
+  # to add this provider and to correctly configure the browser-facing
+  # Authentik URL.
   #
-  # authentik_host is the SERVER-SIDE URL the outpost container uses to
-  # talk to Authentik core over the compose network — it must stay
-  # http://authentik-server:9000/, NOT http://auth.home/. Pointing it at
-  # auth.home makes the outpost try to resolve a hostname it has no DNS
-  # for (no extra_hosts entry, no shared Docker network) — a hard failure.
+  # authentik_host is the host embedded in the browser-facing OAuth2
+  # authorize redirect for the forward_single auth-start flow — verified
+  # empirically (2026.5.6): the redirect literally reuses this value's
+  # host, regardless of the incoming request's Host / X-Forwarded-Host, of
+  # AUTHENTIK_HOST_BROWSER, and of Traefik's trustForwardHeader setting.
+  # It must be http://auth.home/, NOT http://authentik-server:9000/ (the
+  # internal Docker service name), or browsers get a redirect to a host
+  # they can't resolve.
   #
-  # authentik_host_browser is what the BROWSER is told to use for the
-  # login redirect. Without this set correctly, the outpost builds the
-  # redirect from the incoming request's Host header — i.e. it sends the
-  # browser to http://dashboard.home/application/o/authorize/..., which
-  # the `dashboard` Traefik router forwards to nginx, which returns the
-  # SPA's index.html fallback: a blank page, not an error.
+  # This does NOT break outpost-to-core communication for the EMBEDDED
+  # outpost: it talks to core over a local Unix socket
+  # (/dev/shm/authentik-core.sock), not by dialing authentik_host over the
+  # network — confirmed by `getent hosts auth.home` failing inside the
+  # container while the outpost ping endpoint still returns 204. (A
+  # STANDALONE/external outpost is a different story: that one really
+  # does need authentik_host to be network-reachable, since it's a
+  # separate process making real HTTP calls back to core.)
+  #
+  # authentik_host_browser is also set to the same value for consistency /
+  # in case other code paths do consult it, but it is NOT what fixes the
+  # authorize redirect above — don't rely on it alone.
   #
   # authentik_host_insecure omitted deliberately — it's a TLS-verification
   # flag for authentik_host and is irrelevant now that everything is plain
@@ -68,5 +78,5 @@ entries:
       providers:
         - !KeyOf dashboard-proxy-provider
       config:
-        authentik_host: http://authentik-server:9000/
+        authentik_host: http://auth.home/
         authentik_host_browser: http://auth.home/

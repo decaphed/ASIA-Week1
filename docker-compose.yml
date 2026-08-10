@@ -1,30 +1,150 @@
 services:
-  server:
+  postgres:
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD must be set}
+      PDM_APP_PASSWORD: ${PDM_APP_PASSWORD:?PDM_APP_PASSWORD must be set}
+      AUTHENTIK_PG_PASSWORD: ${AUTHENTIK_PG_PASSWORD:?AUTHENTIK_PG_PASSWORD must be set}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No ports: — internal only. See §2 "Why postgres and pdm are not published".
+
+  pdm:
+    build: ./pdm
+    restart: unless-stopped
+    # No ports: — internal only.
+
+  backend:
     build: ./server
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pdm:
+        condition: service_started
     environment:
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL}
-      CLIENT_ORIGIN: http://localhost:5173
+      DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://dashboard.home}
       PDM_SERVICE_URL: http://pdm:8000
     restart: unless-stopped
-    depends_on:
-      - pdm
+    # Renamed from "server" — see §2/§3. Directory stays ./server.
 
   client:
     build:
       context: ./client
       args:
         VITE_API_URL: /api
-    ports:
-      - "127.0.0.1:5173:80"
     depends_on:
-      - server
+      - backend
+    restart: unless-stopped
+    # No ports: — reached only via Traefik at client:80. See §2.
+
+  authentik-redis:
+    image: redis:7-alpine
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik_redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
+    command: server
+    depends_on:
+      authentik-redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__PORT: 5432
+      AUTHENTIK_POSTGRESQL__USER: authentik_svc
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: authentik_db
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      # Global (not per-outpost) equivalent of the outpost blueprint's
+      # authentik_host_browser config attr. Verified empirically that it
+      # is NOT what fixes the browser-facing OAuth2 authorize redirect for
+      # the embedded outpost (that's the outpost's own `authentik_host` —
+      # see dashboard-proxy-provider.yaml) — kept here as a harmless,
+      # possibly-relevant-elsewhere default matching that same value.
+      AUTHENTIK_HOST_BROWSER: http://auth.home
+    volumes:
+      - authentik_media:/media
+      - authentik_certs:/certs
+      - ./authentik/blueprints:/blueprints/custom:ro
+    restart: unless-stopped
+    # No ports: — reached only via Traefik at authentik-server:9000.
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
+    command: worker
+    depends_on:
+      authentik-redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      # Same as authentik-server, INCLUDING bootstrap vars — the worker performs
+      # first-boot bootstrap, not the server process. (Unchanged reasoning from
+      # the prior plan.)
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__PORT: 5432
+      AUTHENTIK_POSTGRESQL__USER: authentik_svc
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: authentik_db
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_HOST_BROWSER: http://auth.home
+    volumes:
+      - authentik_media:/media
+      - ./authentik/blueprints:/blueprints/custom:ro
     restart: unless-stopped
 
-  pdm:
-    build: ./pdm
+  traefik:
+    image: traefik:v3.7.10
     ports:
-      - "8000:8000"
+      - "80:80"
+    volumes:
+      - ./authentik/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./authentik/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./authentik/traefik/logs:/var/log/traefik
+    depends_on:
+      authentik-server:
+        condition: service_started
+      client:
+        condition: service_started
     restart: unless-stopped
+    # No /var/run/docker.sock — unchanged reasoning, file provider only.
+
+volumes:
+  pg_data:
+  authentik_redis_data:
+  authentik_media:
+  authentik_certs:
