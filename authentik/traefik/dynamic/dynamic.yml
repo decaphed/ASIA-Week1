@@ -1,0 +1,76 @@
+# authentik/traefik/dynamic/dynamic.yml — Traefik DYNAMIC configuration:
+# routers, services, and the forward-auth middleware
+# (docs/plan/2026-08-09-authentik-split-ct.md §5.3). File-provider only —
+# no Docker socket is mounted anywhere in this stack (see the plan's
+# "Why Traefik uses the file provider" section for why).
+#
+# NOTE: the frontend CT's IP (10.10.10.11) below is a LITERAL, not sourced
+# from .env.auth — Traefik's file provider does not interpolate environment
+# variables. Every other compose file in this repo keeps such addresses in
+# one place via `extra_hosts`; that pattern doesn't apply here because this
+# is a static YAML file, not a compose service. If the frontend CT's IP
+# changes, this file must be edited directly.
+
+http:
+  services:
+    frontend:
+      loadBalancer:
+        servers:
+          - url: "http://10.10.10.11:5173"
+        # Required so nginx on the frontend CT receives the real Host
+        # header (dashboard.home) to correctly proxy /api/ to Express —
+        # NOT because the outpost needs it (the outpost reads
+        # X-Forwarded-Host on its own forward-auth subrequest, computed by
+        # Traefik from the original request, independent of this setting).
+        passHostHeader: true
+
+    authentik:
+      loadBalancer:
+        servers:
+          - url: "http://authentik-server:9000"
+
+  middlewares:
+    authentik-auth:
+      forwardAuth:
+        address: "http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        # Traefik is the outermost hop here; nothing upstream to trust.
+        trustForwardHeader: false
+        authResponseHeaders:
+          - X-authentik-username
+          - X-authentik-groups
+          - X-authentik-email
+          - X-authentik-name
+          - X-authentik-uid
+
+  routers:
+    # Outpost callback path (login redirect target, logout, etc). Highest
+    # priority: must win over the dashboard catch-all or the callback gets
+    # swallowed by forward-auth and you get a redirect loop.
+    outpost:
+      rule: "Host(`dashboard.home`) && PathPrefix(`/outpost.goauthentik.io/`)"
+      priority: 30
+      entryPoints:
+        - web
+      service: authentik
+      # No middleware attached — attaching authentik-auth here creates a
+      # redirect loop (the outpost's own auth check would gate the outpost).
+
+    # Authentik's own UI (login flow, admin interface).
+    authentik:
+      rule: "Host(`auth.home`)"
+      priority: 20
+      entryPoints:
+        - web
+      service: authentik
+      # No middleware — logging in requires reaching the login page itself
+      # ungated.
+
+    # The gated dashboard: SPA + (transitively, via nginx) /api/*.
+    dashboard:
+      rule: "Host(`dashboard.home`)"
+      priority: 1
+      entryPoints:
+        - web
+      service: frontend
+      middlewares:
+        - authentik-auth

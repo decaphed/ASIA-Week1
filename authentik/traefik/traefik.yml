@@ -1,0 +1,35 @@
+# authentik/traefik/traefik.yml — Traefik STATIC configuration for the auth
+# CT (docs/plan/2026-08-09-authentik-split-ct.md §5.3). Everything that
+# changes per-request-routing (routers/services/middlewares) lives in the
+# DYNAMIC config instead: authentik/traefik/dynamic/dynamic.yml.
+#
+# No api/dashboard section here deliberately — `--api.insecure` is a recon
+# surface on a real edge node, not just a debugging convenience. Debug with
+# `docker compose logs traefik` and `curl` instead.
+
+entryPoints:
+  web:
+    address: ":80"
+    # The only entrypoint — plain HTTP, no TLS, no redirection block. See
+    # docs/plan/2026-08-09-authentik-split-ct.md §3: an earlier draft used
+    # an mkcert local CA on :443; that was cut in favor of accepting
+    # cleartext on the trusted LAN rather than maintaining CA/cert
+    # distribution. Do not reintroduce a "websecure" entrypoint here.
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+log:
+  level: INFO
+
+# Persistent access log (not verification-only — see the plan's decision
+# table §3). Written to /var/log/traefik inside the container, which
+# docker-compose.auth.yml bind-mounts to ./authentik/traefik/logs on the
+# host so it survives container recreation. This CT has no log rotation
+# configured yet — see docs/runbook/authentik-operations.md for the
+# logrotate config that MUST accompany this in production; without it the
+# file grows unbounded.
+accessLog:
+  filePath: /var/log/traefik/access.log

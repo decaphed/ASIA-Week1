@@ -1,0 +1,72 @@
+# authentik/blueprints/dashboard-proxy-provider.yaml — declarative Authentik
+# bootstrap for the dashboard forward-auth gate. Auto-applied by
+# authentik-worker from /blueprints/custom (docker-compose.auth.yml).
+# Matches this repo's existing preference for config-as-tracked-files
+# (see pdm/app/thresholds.yaml) over manual UI configuration — wiping and
+# re-upping this stack reproduces the same provider/application/outpost
+# with zero manual steps (docs/plan/2026-08-09-authentik-split-ct.md §7.9).
+#
+# Hostnames below (dashboard.home, auth.home) are HARDCODED LITERALS, same
+# as authentik/traefik/dynamic/dynamic.yml — Authentik blueprints only read
+# an env var where the YAML explicitly uses an !Env tag, and this blueprint
+# doesn't use one. .env.auth's AUTH_DASHBOARD_HOST/AUTH_AUTHENTIK_HOST are
+# documentation-only. If you change a hostname, edit both this file and
+# dynamic.yml by hand.
+version: 1
+metadata:
+  name: dashboard-proxy-provider
+entries:
+  - model: authentik_providers_proxy.proxyprovider
+    identifiers:
+      name: dashboard-proxy-provider
+    attrs:
+      mode: forward_single
+      external_host: http://dashboard.home
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      # Required at the pinned AUTHENTIK_TAG=2026.5.6 (see .env.auth.example
+      # / docs/plan/2026-08-09-authentik-split-ct.md §3, §5.4) — no hedging
+      # on "if the tag is past 2024.12", this version unconditionally needs
+      # it.
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+
+  - model: authentik_core.application
+    identifiers:
+      slug: dashboard
+    attrs:
+      name: Dashboard
+      slug: dashboard
+      provider: !KeyOf dashboard-proxy-provider
+
+  # Updates the built-in embedded outpost, identified by its default name,
+  # to add this provider and to correctly configure the server-side vs.
+  # browser-facing Authentik URLs.
+  #
+  # authentik_host is the SERVER-SIDE URL the outpost container uses to
+  # talk to Authentik core over the compose network — it must stay
+  # http://authentik-server:9000/, NOT http://auth.home/. Pointing it at
+  # auth.home makes the outpost try to resolve a hostname it has no DNS
+  # for (no extra_hosts entry, no shared Docker network) — a hard failure.
+  #
+  # authentik_host_browser is what the BROWSER is told to use for the
+  # login redirect. Without this set correctly, the outpost builds the
+  # redirect from the incoming request's Host header — i.e. it sends the
+  # browser to http://dashboard.home/application/o/authorize/..., which
+  # the `dashboard` Traefik router forwards to nginx, which returns the
+  # SPA's index.html fallback: a blank page, not an error.
+  #
+  # authentik_host_insecure omitted deliberately — it's a TLS-verification
+  # flag for authentik_host and is irrelevant now that everything is plain
+  # HTTP (§3).
+  #
+  # NOTE: writing `config` here REPLACES the outpost's config object
+  # wholesale — restate any default you care about, don't assume a partial
+  # merge.
+  - model: authentik_outposts.outpost
+    identifiers:
+      name: authentik Embedded Outpost
+    attrs:
+      providers:
+        - !KeyOf dashboard-proxy-provider
+      config:
+        authentik_host: http://authentik-server:9000/
+        authentik_host_browser: http://auth.home/

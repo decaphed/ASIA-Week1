@@ -14,17 +14,24 @@ history.
 This plan assumes the database server is already running and reachable. Do not attempt to
 provision it — infrastructure setup is handled separately.
 
-- PostgreSQL 16 + TimescaleDB running on a dedicated Proxmox CT (`pdm-db`, `10.10.10.13`).
+- PostgreSQL 16 + TimescaleDB running on a dedicated Proxmox CT (`pdm-db`, `10.10.10.15`).
 - Database `pump_telemetry` exists, owned by role `pdm_app`, with the `timescaledb`
   extension enabled.
 - Connections from the backend CT (`10.10.10.12`) are permitted.
 - The connection string is available as `DATABASE_URL` and works:
   ```
-  postgres://pdm_app:PASSWORD@10.10.10.13:5432/pump_telemetry
+  postgres://pdm_app:PASSWORD@10.10.10.15:5432/pump_telemetry
   ```
 
 **Verify this before starting.** If `psql "$DATABASE_URL" -c "SELECT 1;"` fails, stop —
 that is an infrastructure problem, not something to work around in application code.
+
+**Shared instance with Authentik:** this same Postgres/TimescaleDB instance also hosts
+Authentik's `authentik_db` (its own database + role, `authentik_svc`), provisioned per
+`docs/plan/2026-08-09-authentik-split-ct.md` — that plan supersedes, for this split-CT
+topology, the container-based assumption in the earlier
+`docs/superpowers/specs/2026-08-06-authentik-integration-design.md`. See that plan's §5.1
+for the init script and manual live-volume provisioning procedure.
 
 ---
 

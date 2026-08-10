@@ -1,0 +1,107 @@
+# Auth CT stack: Traefik (plain HTTP entrypoint only — no TLS, see
+# docs/plan/2026-08-09-authentik-split-ct.md §3; file provider only, no
+# Docker socket mounted anywhere), a dedicated Authentik Redis, and the
+# Authentik server/worker pair. No local Postgres — Authentik's database
+# lives on the shared pdm-db CT (see db/init/02-create-authentik-db.sh and
+# docs/plan/2026-08-09-authentik-split-ct.md). Same one-compose-file-per-CT
+# convention as docker-compose.backend.yml / .frontend.yml / .pdm.yml.
+#
+# Copy .env.auth.example to .env on the auth CT before first run.
+services:
+  traefik:
+    image: traefik:v3.7.10
+    ports:
+      - "80:80"
+    volumes:
+      - ./authentik/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./authentik/traefik/dynamic:/etc/traefik/dynamic:ro
+      # Writable, for the persistent access log configured in traefik.yml.
+      # Needs a matching .gitignore entry + .gitkeep — see .gitignore and
+      # authentik/traefik/logs/.gitkeep.
+      - ./authentik/traefik/logs:/var/log/traefik
+    restart: unless-stopped
+    depends_on:
+      authentik-server:
+        condition: service_started
+
+  authentik-redis:
+    image: redis:7-alpine
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik_redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
+    command: server
+    depends_on:
+      authentik-redis:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_PG_HOST}
+      AUTHENTIK_POSTGRESQL__PORT: 5432
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      # AUTHENTIK_COOKIE_DOMAIN intentionally unset — see plan §5.3: setting
+      # it would scope the session cookie across every *.home host, which
+      # defeats the point of a per-app perimeter. Forward-auth
+      # single-application mode doesn't need a shared cookie domain.
+    volumes:
+      - authentik_media:/media
+      - authentik_certs:/certs
+      - ./authentik/blueprints:/blueprints/custom:ro
+    restart: unless-stopped
+    # No ports: — reached only via Traefik over the compose network as
+    # http://authentik-server:9000. Publishing 9000 would bypass the
+    # perimeter this stack exists to build.
+    # No healthcheck: block — the image ships no curl. If one is added
+    # later, use `wget -qO- http://localhost:9000/-/health/ready/` or the
+    # image's own `ak healthcheck`.
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
+    command: worker
+    depends_on:
+      authentik-redis:
+        condition: service_healthy
+    environment:
+      # Same DB/Redis/secret env as authentik-server, INCLUDING the
+      # bootstrap vars — the worker, not the server process, performs
+      # first-boot bootstrap (akadmin creation). Omitting them here (an
+      # earlier plan draft's mistake) means akadmin is never created.
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_PG_HOST}
+      AUTHENTIK_POSTGRESQL__PORT: 5432
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+    volumes:
+      - authentik_media:/media
+      - ./authentik/blueprints:/blueprints/custom:ro
+    restart: unless-stopped
+    # No Docker socket — only needed for managing outposts as separate
+    # containers, which this embedded-outpost design avoids entirely.
+
+volumes:
+  authentik_redis_data:
+  authentik_media:
+  authentik_certs:
