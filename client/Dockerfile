@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:20.20.2-alpine3.23 AS build
 WORKDIR /app
 
 COPY package*.json ./
@@ -18,7 +18,7 @@ RUN npm run build
 # master process needs root to bind port 80; this image runs entirely as
 # non-root uid 101 and listens on 8080 instead (see nginx.conf's `listen`
 # directive and the Traefik dynamic.yml service pointing at client:8080).
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27.5-alpine3.21
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
