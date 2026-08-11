@@ -17,6 +17,7 @@ import cors from 'cors';
 
 import apiRoutes from './routes/index.js';
 import { requestTimer } from './middleware/requestTimer.js';
+import { authentikIdentity } from './middleware/authentikIdentity.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { logger } from './utils/logger.js';
 
@@ -27,6 +28,7 @@ export function createApp() {
   app.use(cors({ origin: clientOrigin }));
   app.use(express.json());
   app.use(requestTimer);
+  app.use(authentikIdentity);
 
   // Log only non-GET requests. The dashboard polls several GETs every second,
   // so logging those would drown the console.

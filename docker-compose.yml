@@ -17,11 +17,19 @@ services:
       timeout: 5s
       retries: 5
     # No ports: — internal only. See §2 "Why postgres and pdm are not published".
+    mem_limit: 1g
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
   pdm:
     build: ./pdm
     restart: unless-stopped
     # No ports: — internal only.
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
   backend:
     build: ./server
@@ -45,6 +53,10 @@ services:
     # /api/* route (not just the ingestion POST it was meant for), bypassing
     # Traefik + Authentik entirely. Removed at the source rather than bolted
     # shut with backend-side auth.
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
   client:
     build:
@@ -56,6 +68,10 @@ services:
     restart: unless-stopped
     # No ports: — reached only via Traefik at client:8080 (nginx-unprivileged,
     # non-root — see client/Dockerfile). See §2.
+    mem_limit: 128m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
 
   node-red:
     image: nodered/node-red:4.0.9
@@ -72,9 +88,18 @@ services:
     # (see nodered.home router in dynamic.yml). Flows load read-only from
     # the repo file; edits made in the browser editor don't persist across
     # container recreation unless committed back to node-red/flow.json.
+    # Tightest hardening in this file: flows run arbitrary JS by design, so
+    # this is the container most worth capping if a flow (or the editor,
+    # once authenticated) goes rogue or gets abused.
+    mem_limit: 512m
+    cpus: 1.0
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   authentik-redis:
-    image: redis:7-alpine
+    image: redis:7.4.2-alpine
     command: --save 60 1 --loglevel warning
     volumes:
       - authentik_redis_data:/data
@@ -84,6 +109,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
 
   authentik-server:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
@@ -119,6 +148,10 @@ services:
       - ./authentik/blueprints:/blueprints/custom:ro
     restart: unless-stopped
     # No ports: — reached only via Traefik at authentik-server:9000.
+    mem_limit: 1g
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
@@ -149,6 +182,10 @@ services:
       - authentik_media:/media
       - ./authentik/blueprints:/blueprints/custom:ro
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
   traefik:
     image: traefik:v3.7.10
@@ -169,6 +206,10 @@ services:
         condition: service_started
     restart: unless-stopped
     # No /var/run/docker.sock — unchanged reasoning, file provider only.
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   pg_data:

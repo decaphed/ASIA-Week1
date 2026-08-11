@@ -40,12 +40,21 @@ export async function reviewFaultEvent(req, res, next) {
     // Blank optional strings must become undefined, not '' — the service
     // does `patch.x ?? existing.x`, so an explicit '' would overwrite an
     // existing value where undefined preserves it.
+    //
+    // reviewedBy is validated above but NOT trusted as the actor identity —
+    // when the request carries an Authentik identity (i.e. it came through
+    // the forward-auth gate), the persisted value is the authenticated
+    // username, not whatever the client sent, so a reviewer can't attribute
+    // a decision to someone else. Falls back to the client-supplied value
+    // when there's no identity (direct/dev access — see
+    // middleware/authentikIdentity.js), matching this repo's existing trust
+    // boundary at the Docker network edge.
     const patch = {
       status,
       faultType,
       rootCause: typeof rootCause === 'string' ? rootCause.trim() : rootCause,
       resolution: typeof resolution === 'string' && resolution.trim() === '' ? undefined : resolution,
-      reviewedBy: typeof reviewedBy === 'string' ? reviewedBy.trim() : reviewedBy,
+      reviewedBy: req.identity?.username || (typeof reviewedBy === 'string' ? reviewedBy.trim() : reviewedBy),
       notes: typeof notes === 'string' && notes.trim() === '' ? undefined : notes,
       faultEnd,
     };

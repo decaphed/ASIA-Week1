@@ -22,6 +22,12 @@ import { createProcessedReading, getProcessedLive, getProcessedHistory } from '.
 import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats } from '../controllers/pdmController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 import { validateProcessedMiddleware } from '../middleware/validateProcessed.js';
+import { requireGroup } from '../middleware/authentikIdentity.js';
+
+// Authentik group allowed to submit HITL fault-event reviews (§3.6). Only
+// enforced for requests that actually carry an Authentik identity — see
+// middleware/authentikIdentity.js for why direct/dev access isn't blocked.
+const PDM_REVIEWER_GROUP = process.env.PDM_REVIEWER_GROUP || 'pdm-reviewers';
 
 const router = Router();
 
@@ -56,6 +62,6 @@ router.get('/processed/live', getProcessedLive);
 router.get('/pdm/fault-events/stats', getFaultEventStats);
 router.get('/pdm/fault-events/:id', getFaultEvent);
 router.get('/pdm/fault-events', listFaultEvents);
-router.patch('/pdm/fault-events/:id', reviewFaultEvent);
+router.patch('/pdm/fault-events/:id', requireGroup(PDM_REVIEWER_GROUP), reviewFaultEvent);
 
 export default router;
