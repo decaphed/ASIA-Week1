@@ -46,7 +46,14 @@ export default function Topbar({ alarms = 0, warns = 0, theme = 'dark', onToggle
 
       <Clock />
 
-      <div className="topbar__avatar" aria-hidden="true">OP</div>
+      <a
+        href="/outpost.goauthentik.io/sign_out?rd=/"
+        className="topbar__avatar"
+        aria-label="Log out"
+        title="Log out"
+      >
+        OP
+      </a>
     </header>
   );
 }

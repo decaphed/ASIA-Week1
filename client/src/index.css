@@ -393,6 +393,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
   border: 1px solid var(--border-light);
   display: grid; place-items: center;
   font-family: var(--mono); font-weight: 700; font-size: 11px; color: var(--text-muted);
+  text-decoration: none; cursor: pointer;
 }
 
 /* ── Status indicators ───────────────────────────────────────────────────── */
