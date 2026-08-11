@@ -28,6 +28,16 @@ entryPoints:
           scheme: https
   websecure:
     address: ":443"
+  # Loopback-only — never published, never routable from other containers
+  # (see docker-compose.yml `edge` network). Exists solely so the
+  # `traefik healthcheck --ping` CLI subcommand used by the compose-level
+  # healthcheck has something to hit; deliberately not the api/dashboard
+  # entrypoint this file's top comment already warns against exposing.
+  ping:
+    address: "127.0.0.1:8082"
+
+ping:
+  entryPoint: "ping"
 
 providers:
   file:

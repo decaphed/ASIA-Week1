@@ -19,8 +19,21 @@ services:
     # No ports: — internal only. See §2 "Why postgres and pdm are not published".
     mem_limit: 1g
     cpus: 1.0
+    # timescaledb/postgres entrypoint chowns the data dir and drops root ->
+    # postgres via gosu on boot, so it needs these rather than a bare
+    # cap_drop: ALL. Verify with a fresh-volume `docker compose up postgres`
+    # after any base image bump.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
+    networks: [data]
 
   pdm:
     build: ./pdm
@@ -28,8 +41,11 @@ services:
     # No ports: — internal only.
     mem_limit: 512m
     cpus: 1.0
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    networks: [data]
 
   backend:
     build: ./server
@@ -37,7 +53,7 @@ services:
       postgres:
         condition: service_healthy
       pdm:
-        condition: service_started
+        condition: service_healthy
     environment:
       PORT: 3000
       # Explicit, not just "happens to be unset" — requireGroup()
@@ -59,8 +75,11 @@ services:
     # shut with backend-side auth.
     mem_limit: 512m
     cpus: 1.0
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    networks: [edge, data]
 
   client:
     build:
@@ -68,14 +87,24 @@ services:
       args:
         VITE_API_URL: /api
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     # No ports: — reached only via Traefik at client:8080 (nginx-unprivileged,
     # non-root — see client/Dockerfile). See §2.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     mem_limit: 128m
     cpus: 0.5
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    networks: [edge]
 
   node-red:
     image: nodered/node-red:4.0.9
@@ -84,8 +113,11 @@ services:
       # 'flows.json' (no env var for this in this version) — mount straight
       # to that name rather than trying to override it.
       - ./node-red/flow.json:/data/flows.json:ro
+    # Image ships its own baked-in HEALTHCHECK (node /healthcheck.js) —
+    # no compose-level healthcheck: needed/added here.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     # No ports: — editor UI reached only via Traefik at node-red:1880, gated
     # by the same authentik-auth forward-auth middleware as the dashboard
@@ -101,6 +133,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks: [edge]
 
   authentik-redis:
     image: redis:7.4.2-alpine
@@ -117,10 +150,13 @@ services:
     cpus: 0.5
     security_opt:
       - no-new-privileges:true
+    networks: [data]
 
   authentik-server:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
     command: server
+    # Image ships its own baked-in HEALTHCHECK (ak healthcheck) — no
+    # compose-level healthcheck: needed/added here.
     depends_on:
       authentik-redis:
         condition: service_healthy
@@ -156,6 +192,7 @@ services:
     cpus: 1.0
     security_opt:
       - no-new-privileges:true
+    networks: [edge, data]
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
@@ -190,6 +227,7 @@ services:
     cpus: 1.0
     security_opt:
       - no-new-privileges:true
+    networks: [data]
 
   traefik:
     image: traefik:v3.7.10
@@ -205,15 +243,32 @@ services:
       authentik-server:
         condition: service_started
       client:
-        condition: service_started
+        condition: service_healthy
       node-red:
         condition: service_started
     restart: unless-stopped
     # No /var/run/docker.sock — unchanged reasoning, file provider only.
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     mem_limit: 256m
     cpus: 0.5
     security_opt:
       - no-new-privileges:true
+    networks: [edge]
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    # No member currently needs internet egress (error reporting/update
+    # checks disabled, no SMTP configured — see .env.example). Revisit if
+    # that changes (e.g. authentik SMTP added).
+    internal: true
 
 volumes:
   pg_data:

@@ -5,6 +5,9 @@ dist/
 .env
 !.env.example
 
+# Local network recon output (ip addr, etc.) — must never be committed
+ip.txt
+
 # Traefik persistent access log directory (docker-compose.auth.yml). The
 # *.log entry further down already ignores file contents; this keeps the
 # directory itself present in a fresh clone.
