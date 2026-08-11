@@ -40,6 +40,10 @@ services:
         condition: service_started
     environment:
       PORT: 3000
+      # Explicit, not just "happens to be unset" — requireGroup()
+      # (server/middleware/authentikIdentity.js) fails closed on requests
+      # with no Authentik identity unless NODE_ENV is development/test.
+      NODE_ENV: production
       DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://dashboard.home}
       PDM_SERVICE_URL: http://pdm:8000

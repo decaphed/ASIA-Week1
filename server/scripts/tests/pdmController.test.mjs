@@ -8,6 +8,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 process.env.DB_PATH = './scripts/tests/_pdmController.db';
+// requireGroup (middleware/authentikIdentity.js) fails closed on requests
+// with no Authentik identity unless NODE_ENV is an allowlisted dev env —
+// this suite hits PATCH /pdm/fault-events/:id without those headers.
+process.env.NODE_ENV = 'test';
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

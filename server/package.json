@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "NODE_ENV=development nodemon server.js",
     "quality-report": "node scripts/qualityReport.js",
     "migrate": "node-pg-migrate -m database/migrations",
     "migrate:up": "node-pg-migrate up -m database/migrations",
