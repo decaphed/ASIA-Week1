@@ -11,6 +11,13 @@ dist/
 authentik/traefik/logs/*
 !authentik/traefik/logs/.gitkeep
 
+# mkcert leaf cert/key (docs/runbook/authentik-operations.md §1) — the leaf
+# key is a real private key, not committed even though it's less sensitive
+# than the CA key (which never touches this repo/host at all). Directory
+# itself stays present in a fresh clone.
+authentik/traefik/certs/*
+!authentik/traefik/certs/.gitkeep
+
 # SQLite database files (auto-created at runtime)
 *.db
 *.db-wal

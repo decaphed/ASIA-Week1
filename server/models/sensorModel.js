@@ -32,7 +32,7 @@ export async function insertReading(record) {
     [
       record.flowRate, record.rpm, record.vibration, record.suctionPressure, record.dischargePressure, record.motorTemp,
       record.status, record.faultType, record.timestamp,
-      record.provenance, record.physicsValid, record.physicsViolations, record.unfilledMetrics, record.abnormalOperation,
+      record.provenance, record.physicsValid, JSON.stringify(record.physicsViolations), JSON.stringify(record.unfilledMetrics), record.abnormalOperation,
     ],
   );
   return { lastInsertRowid: result.rows[0].id };

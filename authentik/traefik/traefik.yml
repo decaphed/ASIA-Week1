@@ -8,13 +8,26 @@
 # `docker compose logs traefik` and `curl` instead.
 
 entryPoints:
+  # TLS reinstated — docs/plan/2026-08-09-authentik-split-ct.md §3 originally
+  # cut this to avoid mkcert CA/cert maintenance, and the single-CT
+  # consolidation plan carried that decision forward unchanged. Revisited and
+  # reversed by explicit user request (session-authorized reopening of an
+  # otherwise "not reopened here" decision) — see
+  # docs/plan/2026-08-11-hardening.md. mkcert chosen specifically because
+  # docs/runbook/authentik-operations.md §1 already fully documents the CA
+  # issuance/distribution flow; this reuses it rather than inventing a new one.
   web:
     address: ":80"
-    # The only entrypoint — plain HTTP, no TLS, no redirection block. See
-    # docs/plan/2026-08-09-authentik-split-ct.md §3: an earlier draft used
-    # an mkcert local CA on :443; that was cut in favor of accepting
-    # cleartext on the trusted LAN rather than maintaining CA/cert
-    # distribution. Do not reintroduce a "websecure" entrypoint here.
+    http:
+      # Every plaintext request gets redirected, not just gated behind a
+      # separate entrypoint — leaving :80 servable in parallel would make the
+      # new websecure entrypoint optional-in-practice, defeating the point.
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
 
 providers:
   file:

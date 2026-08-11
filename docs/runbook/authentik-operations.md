@@ -1,24 +1,37 @@
 # Authentik Operations Runbook
 
-Operator procedures for the auth CT (`10.10.10.16`) stack introduced by
-`docs/plan/2026-08-09-authentik-split-ct.md`. This file is the "how", the
-plan is the "why" — read the plan first if something here is unclear.
+Operator procedures for the single app CT stack (`docs/plan/2026-08-10-single-ct-consolidation.md`,
+hardened further in `docs/plan/2026-08-11-hardening.md`). This file is the
+"how", the plan docs are the "why" — read them first if something here is
+unclear.
+
+> **Superseded content removed 2026-08-11:** this file used to describe the
+> earlier split-CT topology (`docs/plan/2026-08-09-authentik-split-ct.md`) —
+> a hardcoded `10.10.10.16` auth CT, four separate `docker-compose.*.yml`
+> files, and a manual `pdm-db` provisioning step. All of that is gone on the
+> single-CT topology: one `docker-compose.yml`, one `postgres` service whose
+> `db/init/*` scripts provision both databases automatically on first boot
+> (see the consolidation plan §2), and one CT whose actual IP you find with
+> `ip -4 addr show eth0` on that CT — don't assume a fixed address here, it's
+> deployment-specific.
 
 ## 1. mkcert local CA setup and distribution
 
-1. Install mkcert on **your own workstation**, not the auth CT — the CA
+1. Install mkcert on **your own workstation**, not the app CT — the CA
    private key should live where you control it, not on a network-facing
    container host.
 2. `mkcert -install` — creates the root CA and installs it into your local
    trust store. `mkcert -CAROOT` prints where the CA files live.
-3. Issue one leaf cert with both SANs:
+3. Issue one leaf cert covering all three hostnames this stack serves:
    ```
    mkcert -cert-file dashboard.home.pem -key-file dashboard.home-key.pem \
-     dashboard.home auth.home
+     dashboard.home auth.home nodered.home
    ```
 4. Copy `dashboard.home.pem` and `dashboard.home-key.pem` to
-   `authentik/certs/` on the auth CT. `chmod 600 dashboard.home-key.pem`.
-   **Never** copy `rootCA-key.pem` to the auth CT.
+   `authentik/traefik/certs/` on the app CT. `chmod 600 dashboard.home-key.pem`.
+   **Never** copy `rootCA-key.pem` there — that file should never leave your
+   workstation. Both files are gitignored (see `.gitignore`), so this is a
+   manual copy every time, not a commit.
 5. Distribute `rootCA.pem` (certificate only, never the key) to every
    machine/browser that will open the dashboard:
    - Machines with mkcert installed: `mkcert -install` there too (uses the
@@ -30,93 +43,57 @@ plan is the "why" — read the plan first if something here is unclear.
      Settings → Privacy & Security → Certificates → View Certificates →
      Authorities → Import, or set `security.enterprise_roots.enabled` in
      `about:config` to use the OS store instead.
-6. **Expiry:** record the leaf's actual expiry date here once issued
+6. Traefik picks up a replaced cert on its own — `tls.certificates` in
+   `authentik/traefik/dynamic/dynamic.yml` is served from the file provider's
+   watched directory tree, but the **cert files themselves live in a
+   separately mounted volume** (`./authentik/traefik/certs`) that isn't
+   watched directly. After overwriting the two files, force a reload with
+   either `docker compose restart traefik` or by touching `dynamic.yml`
+   (e.g. `touch authentik/traefik/dynamic/dynamic.yml`).
+7. **Expiry:** record the leaf's actual expiry date here once issued
    (`openssl x509 -enddate -noout -in dashboard.home.pem`). mkcert leaves
-   are valid ~2 years; the CA is ~10 years. Renewal: re-run step 3, copy
-   the two files over the old ones in `authentik/certs/`, then
-   `docker compose -f docker-compose.auth.yml restart traefik`. Traefik
-   does not need the CA reinstalled for a leaf reissue.
+   are valid ~2 years; the CA is ~10 years.
 
    Leaf issued: _______  |  Expires: _______
 
-## 2. Manual database provisioning (live pdm-db volume)
+## 2. DNS / hosts entries
 
-`db/init/02-create-authentik-db.sh` will **not** run against the existing
-`pdm_db_data` volume — `/docker-entrypoint-initdb.d/` only fires on first
-initialization. Apply the equivalent manually, on the **pdm-db CT**.
-
-**Preferred: interactive session**, so the password is never typed on a
-command line that lands in shell history:
-
+On every machine that will open the dashboard, add to `/etc/hosts` (or
+`C:\Windows\System32\drivers\etc\hosts`), replacing `<APP-CT-IP>` with this
+CT's actual address (`ip -4 addr show eth0` on the CT itself — do not assume
+it matches an old value written down somewhere else):
 ```
-docker compose -f docker-compose.db.yml exec pdm-db psql -U postgres
-```
-Then, at the `psql` prompt:
-```
-CREATE ROLE authentik_svc LOGIN;
-\password authentik_svc
-CREATE DATABASE authentik_db OWNER authentik_svc;
-```
-`\password` reads the value with echo off and never puts it in a command
-line or `.psql_history` in cleartext.
-
-**Fallback: scripted heredoc**, only if you must run this non-interactively
-(e.g. from an automation tool). The password lands in shell history this
-way — clear it afterwards (`history -d` for the relevant line, or
-`history -c` if acceptable):
-```
-docker compose -f docker-compose.db.yml exec -T pdm-db \
-  psql -v ON_ERROR_STOP=1 -U postgres <<'EOSQL'
-CREATE ROLE authentik_svc LOGIN PASSWORD 'REPLACE_ME';
-CREATE DATABASE authentik_db OWNER authentik_svc;
-EOSQL
+<APP-CT-IP>   dashboard.home
+<APP-CT-IP>   auth.home
+<APP-CT-IP>   nodered.home
 ```
 
-Either way, run via `docker compose exec` into the container, not
-`psql -h 10.10.10.15 ...` from elsewhere — the superuser password never
-needs to cross the network this way.
+## 3. Proxmox host firewall
 
-Verify from the **auth CT**, before writing any compose file there:
-```
-psql "postgres://authentik_svc:PASSWORD@10.10.10.15:5432/authentik_db" -c "SELECT 1;"
-```
-If this fails, stop — everything downstream fails confusingly.
+See `docs/runbook/proxmox-firewall.md` for the full staged apply procedure
+and `proxmox/firewall/app-ct.fw` for the actual ruleset — both written for
+this single-CT topology (two published ports only: `80` redirecting to
+`443`). Do not reuse the old split-CT plan's 4-CT firewall table; it
+describes a topology this repo no longer runs.
 
-Verify isolation (should be refused, or connect but see no tables):
-```
-psql "postgres://authentik_svc:PASSWORD@10.10.10.15:5432/pump_telemetry" -c "SELECT 1;"
-```
+## 4. Traefik rate limiting
 
-## 3. DNS / hosts entries
-
-On every machine that will open the dashboard, and on the auth CT itself
-if it self-references either name, add to `/etc/hosts` (or `C:\Windows\
-System32\drivers\etc\hosts`):
-```
-10.10.10.16   dashboard.home
-10.10.10.16   auth.home
-```
-
-## 4. Proxmox CT firewall rules
-
-See `docs/plan/2026-08-09-authentik-split-ct.md` §6 for the full table and
-ordering rationale. Summary: firewall must be enabled at **both** the CT's
-Firewall → Options level **and** on `net0`. Add the SSH+ICMP management
-rule (source `10.10.10.13`) on every CT **before** flipping the input
-policy to DROP, and keep `pct enter <vmid>` open as a recovery path while
-you work. Apply order: pdm-db, backend, frontend, auth (last, since the
-frontend rule going live before Traefik works takes the dashboard offline
-with no way in).
+`authentik/traefik/dynamic/dynamic.yml` defines two `rateLimit` middlewares —
+`rl-auth` (tight, on `auth.home` and the outpost callback paths) and `rl-app`
+(looser, on the gated dashboard/Node-RED routers, sized for the dashboard's
+own per-second polling). If a legitimate multi-user session starts tripping
+`rl-app`'s 429s under normal use, raise `average`/`burst` there rather than
+removing the middleware — the goal is headroom for real traffic, not no
+limit at all.
 
 ## 5. Traefik access log rotation
 
-`docker-compose.auth.yml` bind-mounts `./authentik/traefik/logs` to
+`docker-compose.yml` bind-mounts `./authentik/traefik/logs` to
 `/var/log/traefik` and `traefik.yml` enables `accessLog` persistently.
-The auth CT has no log rotation configured by default — add a
-`logrotate` config on the CT (not managed by this repo), e.g.
-`/etc/logrotate.d/traefik`:
+This CT has no log rotation configured by default — add a `logrotate` config
+on the CT (not managed by this repo), e.g. `/etc/logrotate.d/traefik`:
 ```
-/root/ASIA-Week1/authentik/traefik/logs/access.log {
+/root/ASIA/authentik/traefik/logs/access.log {
     weekly
     rotate 8
     compress
@@ -125,14 +102,14 @@ The auth CT has no log rotation configured by default — add a
     copytruncate
 }
 ```
-Adjust the path to wherever the repo is checked out on the auth CT.
+Adjust the path to wherever the repo is actually checked out on this CT.
 `copytruncate` is used because Traefik keeps the file open; a
 `postrotate`/`kill -HUP` approach also works if preferred but requires
 send-signal support in the container.
 
 ## 6. First login
 
-With `AUTHENTIK_BOOTSTRAP_*` vars set (they are, per `.env.auth.example`),
+With `AUTHENTIK_BOOTSTRAP_*` vars set (they are, per `.env.example`),
 `akadmin` already exists. Log in at `https://auth.home/` with
 `AUTHENTIK_BOOTSTRAP_EMAIL` / `AUTHENTIK_BOOTSTRAP_PASSWORD`. Do **not**
 expect `/if/flow/initial-setup/` to work — that flow is only reachable
@@ -140,7 +117,10 @@ when bootstrap vars were never set.
 
 ## 7. Rollback
 
-See plan §9 for the three-level rollback (firewall relax → `docker compose
-down` on auth CT → full `DROP DATABASE`/`DROP ROLE` + `CLIENT_ORIGIN`
-revert). No existing CT's compose file is ever modified by this stack, so
-rollback at any level restores exactly the pre-auth state.
+Firewall: see `docs/runbook/proxmox-firewall.md` §5. Stack: `docker compose
+down` (add `-v` only if you intend to discard all data — see the
+consolidation plan §8's risk register on this exact footgun). No TLS
+rollback needed at the Traefik level beyond reverting
+`authentik/traefik/traefik.yml`'s entrypoints and `dynamic.yml`'s `tls:`
+block if you ever need to go back to plain HTTP — not expected to be
+necessary.

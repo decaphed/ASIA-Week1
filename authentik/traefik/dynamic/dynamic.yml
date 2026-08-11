@@ -4,12 +4,26 @@
 # no Docker socket is mounted anywhere in this stack (see the plan's
 # "Why Traefik uses the file provider" section for why).
 
+# mkcert leaf cert covering dashboard.home/auth.home/nodered.home — see
+# docs/runbook/authentik-operations.md §1 for issuance and
+# docs/plan/2026-08-11-hardening.md for why TLS came back after being
+# deliberately dropped twice before. The file provider can't interpolate
+# env vars into these paths (same limitation noted historically for the
+# frontend IP in this file), so these are literals matching the volume
+# mount in docker-compose.yml's traefik service.
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/dashboard.home.pem
+      keyFile: /etc/traefik/certs/dashboard.home-key.pem
+
 http:
   services:
     client:
       loadBalancer:
         servers:
-          - url: "http://client:80"
+          # :8080, not :80 — client runs on nginxinc/nginx-unprivileged so
+          # the container has no root process at all (see client/Dockerfile).
+          - url: "http://client:8080"
         # Required so nginx on the client service receives the real Host
         # header (dashboard.home) to correctly proxy /api/ to Express —
         # NOT because the outpost needs it (the outpost reads
@@ -49,6 +63,28 @@ http:
           - X-authentik-name
           - X-authentik-uid
 
+    # Applied to auth.home and the outpost callback paths — the most
+    # sensitive surface (login form, token exchange), so the tightest
+    # limit. average/period is a sustained rate (here: 1/s); burst is the
+    # token-bucket ceiling for a legitimate page load's handful of asset
+    # requests. Generous enough for a real login, tight enough to blunt a
+    # credential-stuffing / flood attempt against the same endpoint.
+    rl-auth:
+      rateLimit:
+        average: 60
+        period: 1m
+        burst: 30
+
+    # Applied to the gated dashboard and Node-RED editor, AFTER login. Set
+    # high enough for the dashboard's own polling (several GET endpoints
+    # once a second per the client) without meaningfully constraining a
+    # real user, while still capping an actual flood.
+    rl-app:
+      rateLimit:
+        average: 240
+        period: 1m
+        burst: 80
+
   routers:
     # Outpost callback path (login redirect target, logout, etc). Highest
     # priority: must win over the dashboard catch-all or the callback gets
@@ -57,10 +93,14 @@ http:
       rule: "Host(`dashboard.home`) && PathPrefix(`/outpost.goauthentik.io/`)"
       priority: 30
       entryPoints:
-        - web
+        - websecure
+      tls: {}
       service: authentik
-      # No middleware attached — attaching authentik-auth here creates a
+      middlewares:
+        - rl-auth
+      # No authentik-auth middleware attached — that would create a
       # redirect loop (the outpost's own auth check would gate the outpost).
+      # rl-auth is safe here: it's a rate limit, not an auth check.
 
     # Same callback carve-out as `outpost` above, but for the nodered.home
     # forward_single provider — forward_single's callback path lives on the
@@ -70,28 +110,38 @@ http:
       rule: "Host(`nodered.home`) && PathPrefix(`/outpost.goauthentik.io/`)"
       priority: 30
       entryPoints:
-        - web
+        - websecure
+      tls: {}
       service: authentik
-      # No middleware — same reasoning as `outpost` above.
+      middlewares:
+        - rl-auth
+      # No authentik-auth — same reasoning as `outpost` above.
 
     # Authentik's own UI (login flow, admin interface).
     authentik:
       rule: "Host(`auth.home`)"
       priority: 20
       entryPoints:
-        - web
+        - websecure
+      tls: {}
       service: authentik
-      # No middleware — logging in requires reaching the login page itself
-      # ungated.
+      middlewares:
+        - rl-auth
+      # No auth-check middleware — logging in requires reaching the login
+      # page itself ungated. rl-auth is a rate limit, not an auth check.
 
     # The gated dashboard: SPA + (transitively, via nginx) /api/*.
+    # rl-app runs first so a flood gets throttled before it ever reaches
+    # the forward-auth subrequest (and authentik-server behind it).
     dashboard:
       rule: "Host(`dashboard.home`)"
       priority: 1
       entryPoints:
-        - web
+        - websecure
+      tls: {}
       service: client
       middlewares:
+        - rl-app
         - authentik-auth
 
     # The gated Node-RED flow editor. Same forward-auth pattern as
@@ -102,7 +152,9 @@ http:
       rule: "Host(`nodered.home`)"
       priority: 1
       entryPoints:
-        - web
+        - websecure
+      tls: {}
       service: node-red
       middlewares:
+        - rl-app
         - authentik-auth

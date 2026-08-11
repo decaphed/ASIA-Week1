@@ -1,0 +1,42 @@
+# app-ct.fw — Proxmox VE per-CT firewall rules for the single app CT
+# (docs/plan/2026-08-10-single-ct-consolidation.md). Lives on the Proxmox
+# HOST at /etc/pve/firewall/<VMID>.fw, NOT inside this repo's checkout on
+# the CT itself — this file is tracked here so the ruleset is
+# version-controlled and reviewable like everything else, but it has to be
+# copied/pasted onto the host by hand. This session has no access to the
+# Proxmox host (no /etc/pve, no pct) to apply it directly — see
+# docs/runbook/proxmox-firewall.md for the staged apply procedure.
+#
+# Replace <MGMT_HOST_IP> below with the IP of the machine you actually SSH
+# into this CT from, before uploading. Find this CT's <VMID> with
+# `pct list` on the Proxmox host (or Datacenter -> CT name in the GUI,
+# shown in parentheses).
+#
+# Only two inbound ports needed — everything else in docker-compose.yml is
+# internal-only (see the container inventory in the architecture review).
+# tcp/3000 does NOT appear here: backend no longer publishes it (Node-RED
+# now runs in-container and reaches backend over the internal Docker
+# network), so there is nothing on this host for a LAN-wide backend rule to
+# protect anymore.
+
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+# Management access FIRST, and verified working from a second terminal,
+# BEFORE this file's policy_in: DROP takes effect on `pve-firewall` reload —
+# see docs/runbook/proxmox-firewall.md. Keep `pct enter <VMID>` console
+# access open the whole time regardless; it bypasses this firewall entirely
+# since it never touches the CT's network stack.
+IN ACCEPT -source <MGMT_HOST_IP> -p tcp -dport 22 -log nolog
+IN ACCEPT -source <MGMT_HOST_IP> -p icmp -log nolog
+
+# The dashboard/auth/Node-RED front door — Traefik, LAN-wide.
+IN ACCEPT -p tcp -dport 80 -log nolog
+# Once TLS is live (docs/runbook/proxmox-firewall.md's TLS section /
+# docs/plan/2026-08-11-tls-and-rate-limiting.md): Traefik also listens on
+# 443. Uncomment once the mkcert leaf cert is deployed and
+# authentik/traefik/traefik.yml has the websecure entryPoint:
+#IN ACCEPT -p tcp -dport 443 -log nolog

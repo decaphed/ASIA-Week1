@@ -22,7 +22,7 @@ entries:
       name: dashboard-proxy-provider
     attrs:
       mode: forward_single
-      external_host: http://dashboard.home
+      external_host: https://dashboard.home
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
       # Required at the pinned AUTHENTIK_TAG=2026.5.6 (see .env.auth.example
       # / docs/plan/2026-08-09-authentik-split-ct.md §3, §5.4) — no hedging
@@ -50,7 +50,7 @@ entries:
       name: nodered-proxy-provider
     attrs:
       mode: forward_single
-      external_host: http://nodered.home
+      external_host: https://nodered.home
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
 
@@ -69,11 +69,16 @@ entries:
   # authentik_host is the host embedded in the browser-facing OAuth2
   # authorize redirect for the forward_single auth-start flow — verified
   # empirically (2026.5.6): the redirect literally reuses this value's
-  # host, regardless of the incoming request's Host / X-Forwarded-Host, of
-  # AUTHENTIK_HOST_BROWSER, and of Traefik's trustForwardHeader setting.
-  # It must be http://auth.home/, NOT http://authentik-server:9000/ (the
-  # internal Docker service name), or browsers get a redirect to a host
-  # they can't resolve.
+  # scheme+host, regardless of the incoming request's Host / X-Forwarded-Host,
+  # of AUTHENTIK_HOST_BROWSER, and of Traefik's trustForwardHeader setting.
+  # Now that TLS is live (docs/plan/2026-08-11-hardening.md), this MUST be
+  # https://auth.home/ — leaving it http:// would still technically work
+  # (Traefik's web entrypoint redirects http->https), but only by bouncing
+  # the browser through an extra needless redirect hop, and the initial
+  # http:// leg would carry cookies without the Secure flag being relevant
+  # yet. It must resolve to auth.home either way, NOT
+  # http://authentik-server:9000/ (the internal Docker service name), or
+  # browsers get a redirect to a host they can't resolve.
   #
   # This does NOT break outpost-to-core communication for the EMBEDDED
   # outpost: it talks to core over a local Unix socket
@@ -82,15 +87,14 @@ entries:
   # container while the outpost ping endpoint still returns 204. (A
   # STANDALONE/external outpost is a different story: that one really
   # does need authentik_host to be network-reachable, since it's a
-  # separate process making real HTTP calls back to core.)
+  # separate process making real HTTP calls back to core.) Because of this,
+  # authentik_host_insecure (a TLS-verification flag for an outbound
+  # connection to authentik_host) still doesn't apply here even under TLS —
+  # there's no outbound connection to verify a cert on — and stays omitted.
   #
   # authentik_host_browser is also set to the same value for consistency /
   # in case other code paths do consult it, but it is NOT what fixes the
   # authorize redirect above — don't rely on it alone.
-  #
-  # authentik_host_insecure omitted deliberately — it's a TLS-verification
-  # flag for authentik_host and is irrelevant now that everything is plain
-  # HTTP (§3).
   #
   # NOTE: writing `config` here REPLACES the outpost's config object
   # wholesale — restate any default you care about, don't assume a partial
@@ -103,5 +107,5 @@ entries:
         - !KeyOf dashboard-proxy-provider
         - !KeyOf nodered-proxy-provider
       config:
-        authentik_host: http://auth.home/
-        authentik_host_browser: http://auth.home/
+        authentik_host: https://auth.home/
+        authentik_host_browser: https://auth.home/

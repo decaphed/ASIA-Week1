@@ -1,8 +1,8 @@
 -- 001_init.up.sql — initial TimescaleDB schema.
 --
 -- Ported 1:1 from the former SQLite schema.sql (raw_telemetry +
--- processed_telemetry only — fault_events is a later, separate PdM phase
--- and is intentionally NOT included here). Column names, NOT NULL
+-- processed_telemetry only — fault_events is a later, separate PdM phase,
+-- added in 002_fault_events.up.sql once it was actually needed). Column names, NOT NULL
 -- constraints, and DEFAULTs are preserved exactly; comments are carried
 -- over so the *why* behind each column travels with the schema, not just
 -- the *what*.

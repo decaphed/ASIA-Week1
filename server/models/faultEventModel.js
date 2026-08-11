@@ -4,17 +4,11 @@
 // Same convention as processedModel.js: every camelCase column name is
 // double-quoted, values are always bound as $1, $2, … (never concatenated).
 //
-// NOTE: fault_events is intentionally NOT part of this migration's schema
-// (see server/database/migrations/001_init.up.sql's header comment) — it's
-// a separate, later PdM phase per docs/plan/2026-08-04-timescaledb-migration.md
-// §1/§7. This file is converted from better-sqlite3 to `pg` only so that
-// importing it doesn't crash the app at module load (the old code prepared
-// statements against `db` at import time, which throws immediately once
-// `db.js`'s default export became a pg.Pool with no `.prepare()`). Every
-// query here will fail at call time with "relation fault_events does not
-// exist" until PdM's own migration creates that table — callers
-// (faultEventService.js, processedService.js's pdmOnNewRecord) already
-// handle that via try/catch, consistent with PdM being out of scope here.
+// fault_events is created by server/database/migrations/002_fault_events.up.sql
+// (deferred out of 001_init, then genuinely forgotten until it started
+// failing every query at runtime — see docs/plan/2026-08-11-hardening.md's
+// bugfix note). This file is converted from better-sqlite3 to `pg`, matching
+// every other model in this directory.
 // ─────────────────────────────────────────────────────────────────────────
 
 import pool from '../database/db.js';

@@ -25,8 +25,6 @@ services:
 
   backend:
     build: ./server
-    ports:
-      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,10 +33,18 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
-      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://dashboard.home}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://dashboard.home}
       PDM_SERVICE_URL: http://pdm:8000
     restart: unless-stopped
     # Renamed from "server" — see §2/§3. Directory stays ./server.
+    # No ports: — Node-RED now runs internally (see node-red service below)
+    # and posts to http://backend:3000/api/data over the Compose network, so
+    # nothing outside this stack needs to reach backend directly anymore.
+    # Previously published 3000:3000 for an external Node-RED host; that was
+    # also, unintentionally, an unauthenticated LAN-wide path into every
+    # /api/* route (not just the ingestion POST it was meant for), bypassing
+    # Traefik + Authentik entirely. Removed at the source rather than bolted
+    # shut with backend-side auth.
 
   client:
     build:
@@ -48,7 +54,8 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-    # No ports: — reached only via Traefik at client:80. See §2.
+    # No ports: — reached only via Traefik at client:8080 (nginx-unprivileged,
+    # non-root — see client/Dockerfile). See §2.
 
   node-red:
     image: nodered/node-red:4.0.9
@@ -105,7 +112,7 @@ services:
       # the embedded outpost (that's the outpost's own `authentik_host` —
       # see dashboard-proxy-provider.yaml) — kept here as a harmless,
       # possibly-relevant-elsewhere default matching that same value.
-      AUTHENTIK_HOST_BROWSER: http://auth.home
+      AUTHENTIK_HOST_BROWSER: https://auth.home
     volumes:
       - authentik_media:/media
       - authentik_certs:/certs
@@ -137,7 +144,7 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
-      AUTHENTIK_HOST_BROWSER: http://auth.home
+      AUTHENTIK_HOST_BROWSER: https://auth.home
     volumes:
       - authentik_media:/media
       - ./authentik/blueprints:/blueprints/custom:ro
@@ -147,9 +154,11 @@ services:
     image: traefik:v3.7.10
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./authentik/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./authentik/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./authentik/traefik/certs:/etc/traefik/certs:ro
       - ./authentik/traefik/logs:/var/log/traefik
     depends_on:
       authentik-server:
