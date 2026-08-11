@@ -6,7 +6,7 @@
 
 import { Signal, Server, Database } from 'lucide-react';
 import {
-  DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReviewNavIcon, ReportsNavIcon,
+  DashboardNavIcon, AnalyticsNavIcon, PredictNavIcon, ReviewNavIcon, ReportsNavIcon, LogOutIcon,
 } from '../ui/Icons.jsx';
 import { PUMP_ID } from '../../utils/constants.js';
 import { computeServiceStatus } from '../../utils/health.js';
@@ -82,6 +82,13 @@ export default function Sidebar({ route, health, healthError }) {
             />
           </div>
         ))}
+      </div>
+
+      <div className="sidebar__logout-section">
+        <a href="/outpost.goauthentik.io/sign_out?rd=/" className="sidebar__link">
+          <span className="sidebar__icon"><LogOutIcon /></span>
+          <span>Log Out</span>
+        </a>
       </div>
 
       <div className="sidebar__footer">

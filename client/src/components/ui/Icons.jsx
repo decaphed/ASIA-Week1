@@ -9,7 +9,7 @@
 import {
   Activity, Waves, RotateCw, Gauge, Thermometer, Power, Bell,
   AlertTriangle, XCircle, CheckCircle2, Info, BarChart2, History,
-  Settings, Sun, Moon, FileText, BrainCircuit, Radio, ClipboardCheck,
+  Settings, Sun, Moon, FileText, BrainCircuit, Radio, ClipboardCheck, LogOut,
 } from 'lucide-react';
 
 const defaults = { size: 16, strokeWidth: 1.75 };
@@ -48,6 +48,9 @@ export const ReviewNavIcon = makeIcon(ClipboardCheck, 'ReviewNavIcon');
 // ── Theme toggle icons ───────────────────────────────────────────────────────
 export const SunIcon = makeIcon(Sun, 'SunIcon');
 export const MoonIcon = makeIcon(Moon, 'MoonIcon');
+
+// ── Session icons ───────────────────────────────────────────────────────────
+export const LogOutIcon = makeIcon(LogOut, 'LogOutIcon');
 
 // Unreferenced aliases — kept for backward compatibility, no current call sites
 export const DropletIcon = FlowIcon;
