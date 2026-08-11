@@ -28,7 +28,7 @@ function ReadOnlySummary({ event, onAmend }) {
 }
 
 export default function ReviewForm({
-  event, mode, formState, setFormState, submitting, feedback,
+  event, mode, formState, setFormState, reviewerIdentity, submitting, feedback,
   showAmendConfirm, onSubmit, onCancel, onAmend, onAmendConfirm, onAmendCancel,
 }) {
   if (mode === 'view') {
@@ -148,10 +148,24 @@ export default function ReviewForm({
         </label>
       )}
 
-      <label className="review-form__label">
-        Reviewed by
-        <input className="manual-entry__input" type="text" value={formState.reviewedBy} onChange={set('reviewedBy')} />
-      </label>
+      {reviewerIdentity?.username ? (
+        // The server persists the signed-in Authentik identity regardless of
+        // what's sent here (pdmController.js) — read-only, not just
+        // pre-filled, so the form never implies a reviewer can attribute a
+        // decision to anyone else.
+        <div className="review-form__label">
+          Reviewed by
+          <div className="manual-entry__input manual-entry__input--readonly">{reviewerIdentity.username}</div>
+        </div>
+      ) : (
+        // No Authentik identity on this request (dev/local access, outside
+        // Traefik's forward-auth gate) — the server falls back to trusting
+        // whatever's typed here, so it has to stay editable.
+        <label className="review-form__label">
+          Reviewed by
+          <input className="manual-entry__input" type="text" value={formState.reviewedBy} onChange={set('reviewedBy')} />
+        </label>
+      )}
 
       {feedback && (
         <p className={`manual-entry__feedback manual-entry__feedback--${feedback.kind}`}>{feedback.text}</p>

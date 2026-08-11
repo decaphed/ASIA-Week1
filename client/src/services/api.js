@@ -48,6 +48,12 @@ export async function getHealth() {
   return res.data;
 }
 
+/** GET /api/whoami → the caller's Authentik identity ({ username, email, groups }), all null in dev/local access. */
+export async function getWhoami() {
+  const res = await client.get('/whoami');
+  return res.data.data;
+}
+
 /** GET /api/forecast → per-metric { level, trend, forecast, lowerBound, upperBound } (or null). */
 export async function getForecast() {
   const res = await client.get('/forecast');

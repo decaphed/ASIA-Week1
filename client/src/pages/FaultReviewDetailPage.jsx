@@ -11,10 +11,8 @@ import ErrorBanner from '../components/ui/ErrorBanner.jsx';
 import EvidencePanel from '../components/pdm/EvidencePanel.jsx';
 import ReviewForm from '../components/pdm/ReviewForm.jsx';
 import { useAsync } from '../hooks/useAsync.js';
-import { getFaultEvent, reviewFaultEvent } from '../services/api.js';
+import { getFaultEvent, reviewFaultEvent, getWhoami } from '../services/api.js';
 import { toLocalDatetimeInputValue } from '../utils/formatters.js';
-
-const REVIEWER_STORAGE_KEY = 'pdm.reviewedBy';
 
 function blankFormState(event) {
   return {
@@ -24,7 +22,7 @@ function blankFormState(event) {
     rootCause: '',
     resolution: '',
     notes: '',
-    reviewedBy: localStorage.getItem(REVIEWER_STORAGE_KEY) ?? '',
+    reviewedBy: '',
   };
 }
 
@@ -85,8 +83,30 @@ export default function FaultReviewDetailPage({ id }) {
   const [showAmendConfirm, setShowAmendConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  // The signed-in Authentik identity — null fields when accessed outside
+  // Traefik's forward-auth gate (dev/local). The server already ignores
+  // whatever `reviewedBy` the client sends once it has an identity of its
+  // own (pdmController.js), so fetching this here just lets the form show
+  // what will actually be persisted instead of a stale/misleading input.
+  const [identity, setIdentity] = useState(null);
   const initialFormStateRef = useRef(null);
   const prevEventIdRef = useRef(null);
+
+  useEffect(() => {
+    getWhoami().then(setIdentity).catch(() => setIdentity({ username: null, email: null, groups: [] }));
+  }, []);
+
+  // Once the signed-in identity is known and the form is editable, lock
+  // reviewedBy to it — this is what the server will actually persist
+  // (pdmController.js), so the field should never show anything else while
+  // an identity is present. Runs on mode changes too, so confirming Amend
+  // (which seeds the previous reviewer's name for display) immediately
+  // switches to the current actor before any edit is made.
+  useEffect(() => {
+    if (mode !== 'edit' || !identity?.username || !formState) return;
+    if (formState.reviewedBy === identity.username) return;
+    setFormState((s) => ({ ...s, reviewedBy: identity.username }));
+  }, [mode, identity, formState]);
 
   useEffect(() => {
     if (!event) return;
@@ -145,7 +165,6 @@ export default function FaultReviewDetailPage({ id }) {
     try {
       const patch = buildReviewPatch(formState, initialFormStateRef.current);
       const updated = await reviewFaultEvent(id, patch);
-      localStorage.setItem(REVIEWER_STORAGE_KEY, formState.reviewedBy);
       setData(updated);
       setFeedback({ kind: 'success', text: 'Review saved.' });
       setTimeout(() => {
@@ -171,6 +190,7 @@ export default function FaultReviewDetailPage({ id }) {
           mode={mode}
           formState={formState ?? blankFormState(event)}
           setFormState={setFormState}
+          reviewerIdentity={identity}
           submitting={submitting}
           feedback={feedback}
           showAmendConfirm={showAmendConfirm}

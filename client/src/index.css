@@ -1247,6 +1247,9 @@ button { font-family: inherit; cursor: pointer; border: none; }
 }
 .manual-entry__input::placeholder { color: var(--text-faint); font-family: var(--font); }
 .manual-entry__input:focus { border-color: var(--accent); }
+.manual-entry__input--readonly {
+  color: var(--text-faint); background: var(--bg-subtle, var(--bg-elevated));
+}
 .manual-entry__actions {
   display: flex; align-items: center; gap: 14px; margin-top: 16px;
 }
