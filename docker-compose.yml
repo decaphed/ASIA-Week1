@@ -50,6 +50,22 @@ services:
     restart: unless-stopped
     # No ports: — reached only via Traefik at client:80. See §2.
 
+  node-red:
+    image: nodered/node-red:4.0.9
+    volumes:
+      # The image's generated /data/settings.js hardcodes flowFile:
+      # 'flows.json' (no env var for this in this version) — mount straight
+      # to that name rather than trying to override it.
+      - ./node-red/flow.json:/data/flows.json:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    # No ports: — editor UI reached only via Traefik at node-red:1880, gated
+    # by the same authentik-auth forward-auth middleware as the dashboard
+    # (see nodered.home router in dynamic.yml). Flows load read-only from
+    # the repo file; edits made in the browser editor don't persist across
+    # container recreation unless committed back to node-red/flow.json.
+
   authentik-redis:
     image: redis:7-alpine
     command: --save 60 1 --loglevel warning
@@ -139,6 +155,8 @@ services:
       authentik-server:
         condition: service_started
       client:
+        condition: service_started
+      node-red:
         condition: service_started
     restart: unless-stopped
     # No /var/run/docker.sock — unchanged reasoning, file provider only.

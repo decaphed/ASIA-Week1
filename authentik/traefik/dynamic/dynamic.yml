@@ -22,6 +22,11 @@ http:
         servers:
           - url: "http://authentik-server:9000"
 
+    node-red:
+      loadBalancer:
+        servers:
+          - url: "http://node-red:1880"
+
   middlewares:
     authentik-auth:
       forwardAuth:
@@ -57,6 +62,18 @@ http:
       # No middleware attached — attaching authentik-auth here creates a
       # redirect loop (the outpost's own auth check would gate the outpost).
 
+    # Same callback carve-out as `outpost` above, but for the nodered.home
+    # forward_single provider — forward_single's callback path lives on the
+    # SAME host as the app it protects, so each protected host needs its own
+    # outpost router, not just its own gated router.
+    outpost-nodered:
+      rule: "Host(`nodered.home`) && PathPrefix(`/outpost.goauthentik.io/`)"
+      priority: 30
+      entryPoints:
+        - web
+      service: authentik
+      # No middleware — same reasoning as `outpost` above.
+
     # Authentik's own UI (login flow, admin interface).
     authentik:
       rule: "Host(`auth.home`)"
@@ -74,5 +91,18 @@ http:
       entryPoints:
         - web
       service: client
+      middlewares:
+        - authentik-auth
+
+    # The gated Node-RED flow editor. Same forward-auth pattern as
+    # `dashboard` — an unauthenticated Node-RED editor is effectively an
+    # unauthenticated remote-code-execution panel (flows can run arbitrary
+    # JS/shell), so it gets the same gate, not a lighter one.
+    nodered:
+      rule: "Host(`nodered.home`)"
+      priority: 1
+      entryPoints:
+        - web
+      service: node-red
       middlewares:
         - authentik-auth
