@@ -88,6 +88,36 @@ export function eventId(row) {
   return `FE-${row.id}`;
 }
 
+// Recency window options for the fault-event filter bar. `ms: null` means
+// "All time" (no lower bound).
+export const RECENCY_OPTIONS = [
+  { id: 'all', label: 'All time', ms: null },
+  { id: '24h', label: 'Last 24 hours', ms: 24 * 60 * 60 * 1000 },
+  { id: '7d', label: 'Last 7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+  { id: '30d', label: 'Last 30 days', ms: 30 * 24 * 60 * 60 * 1000 },
+];
+
+export const DEFAULT_FILTERS = { severity: 'ALL', metric: 'ALL', recency: 'all' };
+
+/**
+ * Shared filter for both the Needs Review queue and the All Detections
+ * table — same three axes (severity, metric, recency) apply to either list,
+ * so the filtering logic lives in one place rather than being duplicated
+ * per tab.
+ * @param events fault_events rows.
+ * @param filters { severity: 'ALL'|'CRITICAL'|'WARNING', metric: 'ALL'|metricKey, recency: RECENCY_OPTIONS id }
+ */
+export function filterEvents(events, filters) {
+  const recency = RECENCY_OPTIONS.find((r) => r.id === filters.recency) || RECENCY_OPTIONS[0];
+  const cutoff = recency.ms != null ? Date.now() - recency.ms : null;
+  return events.filter((e) => {
+    if (filters.severity !== 'ALL' && severityOf(e) !== filters.severity) return false;
+    if (filters.metric !== 'ALL' && !eventMetrics(e).includes(filters.metric)) return false;
+    if (cutoff != null && Date.parse(e.detectedAt) < cutoff) return false;
+    return true;
+  });
+}
+
 export function faultTypeLabel(row) {
   return row.faultType ? (FAULT_TYPE_LABEL[row.faultType] || row.faultType) : '—';
 }

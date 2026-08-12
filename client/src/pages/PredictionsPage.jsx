@@ -7,7 +7,7 @@ import { METRICS, METRIC_BY_KEY, THRESHOLDS, pillFor, fmt } from '../utils/const
 import { pts, line, bandPath, range } from '../utils/geometry.js';
 import {
   eventId, eventTitle, metricsLabel, modelLine, severityOf, sevPill,
-  confidenceLabel, shortStamp,
+  confidenceLabel, shortStamp, filterEvents, RECENCY_OPTIONS, DEFAULT_FILTERS,
 } from '../utils/faultEvents.js';
 
 const X0 = 52;
@@ -344,8 +344,60 @@ function ForecastTab({ forecast, points, metricKey, setMetricKey, goReview }) {
   );
 }
 
+// Shared by ReviewTab and DetectTab — same three axes filter either list.
+function FilterBar({ filters, setFilters, resultCount, totalCount }) {
+  const selectStyle = { border: '1px solid #d3dbe2', borderRadius: 6, padding: '6px 10px', fontSize: 12.5, background: '#ffffff', color: '#1a2530' };
+  const isDefault = filters.severity === 'ALL' && filters.metric === 'ALL' && filters.recency === 'all';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+      <select
+        aria-label="Filter by severity"
+        value={filters.severity}
+        onChange={(e) => setFilters((f) => ({ ...f, severity: e.target.value }))}
+        style={selectStyle}
+      >
+        <option value="ALL">All severities</option>
+        <option value="CRITICAL">Critical</option>
+        <option value="WARNING">Warning</option>
+      </select>
+      <select
+        aria-label="Filter by metric"
+        value={filters.metric}
+        onChange={(e) => setFilters((f) => ({ ...f, metric: e.target.value }))}
+        style={selectStyle}
+      >
+        <option value="ALL">All metrics</option>
+        {METRICS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+      </select>
+      <select
+        aria-label="Filter by recency"
+        value={filters.recency}
+        onChange={(e) => setFilters((f) => ({ ...f, recency: e.target.value }))}
+        style={selectStyle}
+      >
+        {RECENCY_OPTIONS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+      </select>
+      {!isDefault && (
+        <button
+          type="button"
+          className="hover-underline"
+          onClick={() => setFilters(DEFAULT_FILTERS)}
+          style={{ ...buttonReset, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}
+        >
+          Clear filters
+        </button>
+      )}
+      <span style={{ fontSize: 11.5, color: '#8a99a8', marginLeft: 'auto' }}>
+        Showing {resultCount} of {totalCount}
+      </span>
+    </div>
+  );
+}
+
 function DetectTab({ queue, audit, stats }) {
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const all = [...queue, ...audit].sort((a, b) => Date.parse(b.detectedAt) - Date.parse(a.detectedAt));
+  const filtered = filterEvents(all, filters);
   const confirmed = audit.filter((a) => a.status === 'CONFIRMED').length;
   const rejected = audit.filter((a) => a.status === 'REJECTED').length;
   const reviewed = confirmed + rejected;
@@ -405,11 +457,15 @@ function DetectTab({ queue, audit, stats }) {
             Export training data (CSV) →
           </a>
         </div>
+        <FilterBar filters={filters} setFilters={setFilters} resultCount={filtered.length} totalCount={all.length} />
         <div style={{ display: 'grid', gridTemplateColumns: '96px 1.8fr 1fr 130px 130px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
           <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Status</span>
         </div>
         {all.length === 0 && <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>No detections recorded yet.</div>}
-        {all.map((d) => {
+        {all.length > 0 && filtered.length === 0 && (
+          <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>No detections match these filters.</div>
+        )}
+        {filtered.map((d) => {
           const pill = pillFor(d.status);
           return (
             <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '96px 1.8fr 1fr 130px 130px', fontSize: 13, padding: '11px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
@@ -434,8 +490,9 @@ function DetectTab({ queue, audit, stats }) {
 
 function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }) {
   const [selected, setSelected] = useState(() => new Set());
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
-  const sorted = [...queue].sort((a, b) => {
+  const sorted = filterEvents(queue, filters).sort((a, b) => {
     const rank = (e) => (severityOf(e) === 'CRITICAL' ? 0 : 1);
     return rank(a) - rank(b) || Date.parse(a.detectedAt) - Date.parse(b.detectedAt);
   });
@@ -483,15 +540,15 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
               Dismiss selected ({selected.size})
             </button>
           )}
-          {queue.length > 0 && (
+          {sorted.length > 0 && (
             <button
               type="button"
               className="hover-ghost"
               onClick={dismissAll}
-              title="Dismiss every pending event — each stays on record as DISMISSED, not deleted"
+              title="Dismiss every event currently shown — each stays on record as DISMISSED, not deleted"
               style={{ ...buttonReset, color: '#8a99a8', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600 }}
             >
-              Dismiss all
+              {sorted.length === queue.length ? 'Dismiss all' : `Dismiss all shown (${sorted.length})`}
             </button>
           )}
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '4px 11px', background: '#FBF3E0', color: '#8a5f00', border: '1px solid #ecd9a8' }}>
@@ -499,6 +556,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
           </span>
         </div>
       </div>
+      <FilterBar filters={filters} setFilters={setFilters} resultCount={sorted.length} totalCount={queue.length} />
       <div style={{ display: 'grid', gridTemplateColumns: '28px 96px 1.9fr 1fr 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', alignItems: 'center' }}>
         <input
           ref={selectAllRef}
@@ -560,6 +618,11 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
       {queue.length === 0 && (
         <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>
           Queue clear. Every detection has been reviewed. <span style={{ color: '#177E4D', fontWeight: 600 }}>✓</span>
+        </div>
+      )}
+      {queue.length > 0 && sorted.length === 0 && (
+        <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>
+          No pending events match these filters.
         </div>
       )}
     </Card>
