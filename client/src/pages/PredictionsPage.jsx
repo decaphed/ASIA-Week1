@@ -432,11 +432,36 @@ function DetectTab({ queue, audit, stats }) {
   );
 }
 
-function ReviewTab({ queue, onOpen, onDismiss, dismissingId }) {
+function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }) {
+  const [selected, setSelected] = useState(() => new Set());
+
   const sorted = [...queue].sort((a, b) => {
     const rank = (e) => (severityOf(e) === 'CRITICAL' ? 0 : 1);
     return rank(a) - rank(b) || Date.parse(a.detectedAt) - Date.parse(b.detectedAt);
   });
+
+  const allSelected = sorted.length > 0 && sorted.every((q) => selected.has(q.id));
+  const someSelected = sorted.some((q) => selected.has(q.id));
+  const selectAllRef = (node) => {
+    if (node) node.indeterminate = someSelected && !allSelected;
+  };
+
+  const toggleOne = (id) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(sorted.map((q) => q.id)));
+
+  const dismissSelected = () => {
+    const events = sorted.filter((q) => selected.has(q.id));
+    setSelected(new Set());
+    onDismissMany(events);
+  };
+  const dismissAll = () => {
+    setSelected(new Set());
+    onDismissMany(sorted);
+  };
 
   return (
     <Card style={{ padding: '20px 22px' }}>
@@ -447,19 +472,56 @@ function ReviewTab({ queue, onOpen, onDismiss, dismissingId }) {
             Nothing enters the maintenance record until an engineer confirms or rejects it. Most urgent first.
           </div>
         </div>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '4px 11px', background: '#FBF3E0', color: '#8a5f00', border: '1px solid #ecd9a8' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B27400' }} />{queue.length} PENDING_REVIEW
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {someSelected && (
+            <button
+              type="button"
+              className="hover-ghost"
+              onClick={dismissSelected}
+              style={{ ...buttonReset, color: '#8a99a8', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600 }}
+            >
+              Dismiss selected ({selected.size})
+            </button>
+          )}
+          {queue.length > 0 && (
+            <button
+              type="button"
+              className="hover-ghost"
+              onClick={dismissAll}
+              title="Dismiss every pending event — each stays on record as DISMISSED, not deleted"
+              style={{ ...buttonReset, color: '#8a99a8', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600 }}
+            >
+              Dismiss all
+            </button>
+          )}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '4px 11px', background: '#FBF3E0', color: '#8a5f00', border: '1px solid #ecd9a8' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B27400' }} />{queue.length} PENDING_REVIEW
+          </span>
+        </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '28px 96px 1.9fr 1fr 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', alignItems: 'center' }}>
+        <input
+          ref={selectAllRef}
+          type="checkbox"
+          checked={allSelected}
+          onChange={toggleAll}
+          aria-label="Select all pending events"
+          disabled={sorted.length === 0}
+        />
         <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Severity</span><span />
       </div>
       {sorted.map((q) => {
         const sev = severityOf(q);
         const sp = sevPill(sev);
-        const dismissing = dismissingId === q.id;
+        const dismissing = dismissingIds.has(q.id);
         return (
-          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 100px 190px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '28px 96px 1.9fr 1fr 120px 100px 190px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={selected.has(q.id)}
+              onChange={() => toggleOne(q.id)}
+              aria-label={`Select ${eventId(q)}: ${eventTitle(q)}`}
+            />
             <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, color: '#33475a' }}>{eventId(q)}</span>
             <span style={{ paddingRight: 12 }}>
               <span style={{ fontWeight: 600 }}>{eventTitle(q)}</span>
@@ -475,7 +537,7 @@ function ReviewTab({ queue, onOpen, onDismiss, dismissingId }) {
                 type="button"
                 className="hover-ghost"
                 disabled={dismissing}
-                onClick={() => onDismiss(q)}
+                onClick={() => onDismissOne(q)}
                 aria-label={`Dismiss ${eventId(q)}: ${eventTitle(q)}`}
                 title="Remove from the review queue without a full review — stays on record as DISMISSED"
                 style={{ ...buttonReset, display: 'inline-block', color: '#8a99a8', borderRadius: 6, padding: '6px 10px', fontSize: 12.5, fontWeight: 600, opacity: dismissing ? 0.5 : 1, cursor: dismissing ? 'not-allowed' : 'pointer' }}
@@ -507,7 +569,7 @@ function ReviewTab({ queue, onOpen, onDismiss, dismissingId }) {
 function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goReview, refreshEvents }) {
   const [metricKey, setMetricKey] = useState('vibration');
   const [drawerId, setDrawerId] = useState(null);
-  const [dismissingId, setDismissingId] = useState(null);
+  const [dismissingIds, setDismissingIds] = useState(() => new Set());
 
   const { data: forecastRes } = usePolling(() => api.forecast(), 30000, []);
   const { data: seriesRes } = usePolling(() => api.series('8h'), 60000, []);
@@ -516,22 +578,43 @@ function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goRev
   const points = seriesRes?.data?.points ?? [];
   const drawerEvent = queue.find((q) => q.id === drawerId) || null;
 
-  // Soft-dismiss: pulls a junk/false-positive detection out of the review
-  // queue without a full confirm/reject. The row is kept (status=DISMISSED),
-  // not deleted, so the record and the CSV export stay complete.
-  const dismiss = useCallback(async (event) => {
-    if (!window.confirm(`Dismiss ${eventId(event)}? It leaves the review queue but stays on record as DISMISSED.`)) return;
-    setDismissingId(event.id);
-    try {
-      await api.reviewFaultEvent(event.id, { status: 'DISMISSED', reviewedBy: reviewer });
-      showToast(`${eventId(event)} dismissed`, '#9fb0bf');
-      refreshEvents();
-    } catch (err) {
-      showToast(err.message, '#e08a80');
-    } finally {
-      setDismissingId(null);
+  // Soft-dismiss (single or bulk): pulls junk/false-positive detections out
+  // of the review queue without a full confirm/reject per event. Rows are
+  // kept (status=DISMISSED), not deleted, so the record and the CSV export
+  // stay complete. Runs one PATCH per event in parallel — no separate bulk
+  // API endpoint, since the existing per-event route already does the
+  // group-gated write and a queue this size (a handful to dozens of pending
+  // detections) doesn't need one.
+  const dismissEvents = useCallback(async (events) => {
+    if (!events.length) return;
+    setDismissingIds(new Set(events.map((e) => e.id)));
+    const results = await Promise.allSettled(
+      events.map((e) => api.reviewFaultEvent(e.id, { status: 'DISMISSED', reviewedBy: reviewer }))
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    const ok = results.length - failed;
+    if (ok && !failed) {
+      showToast(`${ok} event${ok === 1 ? '' : 's'} dismissed`, '#9fb0bf');
+    } else if (ok) {
+      showToast(`${ok} dismissed, ${failed} failed`, '#e08a80');
+    } else {
+      showToast(`Dismiss failed for all ${failed} event${failed === 1 ? '' : 's'}`, '#e08a80');
     }
+    refreshEvents();
+    setDismissingIds(new Set());
   }, [reviewer, showToast, refreshEvents]);
+
+  const dismissOne = useCallback((event) => {
+    if (!window.confirm(`Dismiss ${eventId(event)}? It leaves the review queue but stays on record as DISMISSED.`)) return;
+    dismissEvents([event]);
+  }, [dismissEvents]);
+
+  const dismissMany = useCallback((events) => {
+    if (!events.length) return;
+    const n = events.length;
+    if (!window.confirm(`Dismiss ${n} pending event${n === 1 ? '' : 's'}? They'll leave the review queue but stay on record as DISMISSED.`)) return;
+    dismissEvents(events);
+  }, [dismissEvents]);
 
   return (
     <div style={{ padding: '26px 32px 44px', display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeUp .3s ease' }}>
@@ -549,7 +632,13 @@ function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goRev
         )}
         {tab === 'detect' && <DetectTab queue={queue} audit={audit} stats={statsRes?.data} />}
         {tab === 'review' && (
-          <ReviewTab queue={queue} onOpen={(q) => setDrawerId(q.id)} onDismiss={dismiss} dismissingId={dismissingId} />
+          <ReviewTab
+            queue={queue}
+            onOpen={(q) => setDrawerId(q.id)}
+            onDismissOne={dismissOne}
+            onDismissMany={dismissMany}
+            dismissingIds={dismissingIds}
+          />
         )}
       </div>
 
