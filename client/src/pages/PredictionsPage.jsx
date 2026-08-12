@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import Card, { CardLabel, buttonReset } from '../components/Card.jsx';
 import ReviewDrawer from '../components/ReviewDrawer.jsx';
 import { api } from '../api/client.js';
@@ -432,7 +432,7 @@ function DetectTab({ queue, audit, stats }) {
   );
 }
 
-function ReviewTab({ queue, onOpen }) {
+function ReviewTab({ queue, onOpen, onDismiss, dismissingId }) {
   const sorted = [...queue].sort((a, b) => {
     const rank = (e) => (severityOf(e) === 'CRITICAL' ? 0 : 1);
     return rank(a) - rank(b) || Date.parse(a.detectedAt) - Date.parse(b.detectedAt);
@@ -451,14 +451,15 @@ function ReviewTab({ queue, onOpen }) {
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B27400' }} />{queue.length} PENDING_REVIEW
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 110px 96px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5' }}>
         <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Severity</span><span />
       </div>
       {sorted.map((q) => {
         const sev = severityOf(q);
         const sp = sevPill(sev);
+        const dismissing = dismissingId === q.id;
         return (
-          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 110px 96px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '96px 1.9fr 1fr 120px 100px 190px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
             <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, color: '#33475a' }}>{eventId(q)}</span>
             <span style={{ paddingRight: 12 }}>
               <span style={{ fontWeight: 600 }}>{eventTitle(q)}</span>
@@ -469,7 +470,18 @@ function ReviewTab({ queue, onOpen }) {
             <span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '3px 9px', background: sp.bg, color: sp.color }}>{sev}</span>
             </span>
-            <span>
+            <span style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="hover-ghost"
+                disabled={dismissing}
+                onClick={() => onDismiss(q)}
+                aria-label={`Dismiss ${eventId(q)}: ${eventTitle(q)}`}
+                title="Remove from the review queue without a full review — stays on record as DISMISSED"
+                style={{ ...buttonReset, display: 'inline-block', color: '#8a99a8', borderRadius: 6, padding: '6px 10px', fontSize: 12.5, fontWeight: 600, opacity: dismissing ? 0.5 : 1, cursor: dismissing ? 'not-allowed' : 'pointer' }}
+              >
+                {dismissing ? '…' : 'Dismiss'}
+              </button>
               <button
                 type="button"
                 className="hover-outline-btn"
@@ -495,6 +507,7 @@ function ReviewTab({ queue, onOpen }) {
 function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goReview, refreshEvents }) {
   const [metricKey, setMetricKey] = useState('vibration');
   const [drawerId, setDrawerId] = useState(null);
+  const [dismissingId, setDismissingId] = useState(null);
 
   const { data: forecastRes } = usePolling(() => api.forecast(), 30000, []);
   const { data: seriesRes } = usePolling(() => api.series('8h'), 60000, []);
@@ -502,6 +515,23 @@ function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goRev
 
   const points = seriesRes?.data?.points ?? [];
   const drawerEvent = queue.find((q) => q.id === drawerId) || null;
+
+  // Soft-dismiss: pulls a junk/false-positive detection out of the review
+  // queue without a full confirm/reject. The row is kept (status=DISMISSED),
+  // not deleted, so the record and the CSV export stay complete.
+  const dismiss = useCallback(async (event) => {
+    if (!window.confirm(`Dismiss ${eventId(event)}? It leaves the review queue but stays on record as DISMISSED.`)) return;
+    setDismissingId(event.id);
+    try {
+      await api.reviewFaultEvent(event.id, { status: 'DISMISSED', reviewedBy: reviewer });
+      showToast(`${eventId(event)} dismissed`, '#9fb0bf');
+      refreshEvents();
+    } catch (err) {
+      showToast(err.message, '#e08a80');
+    } finally {
+      setDismissingId(null);
+    }
+  }, [reviewer, showToast, refreshEvents]);
 
   return (
     <div style={{ padding: '26px 32px 44px', display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeUp .3s ease' }}>
@@ -518,7 +548,9 @@ function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goRev
           />
         )}
         {tab === 'detect' && <DetectTab queue={queue} audit={audit} stats={statsRes?.data} />}
-        {tab === 'review' && <ReviewTab queue={queue} onOpen={(q) => setDrawerId(q.id)} />}
+        {tab === 'review' && (
+          <ReviewTab queue={queue} onOpen={(q) => setDrawerId(q.id)} onDismiss={dismiss} dismissingId={dismissingId} />
+        )}
       </div>
 
       <ReviewDrawer

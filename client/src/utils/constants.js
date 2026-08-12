@@ -58,11 +58,12 @@ export function isExcursion(status) {
   return status === 'warn' || status === 'crit';
 }
 
-// Review outcome pill palette (PENDING_REVIEW / CONFIRMED / REJECTED / N/A).
+// Review outcome pill palette (PENDING_REVIEW / CONFIRMED / REJECTED / DISMISSED / N/A).
 export function pillFor(status) {
   if (status === 'PENDING_REVIEW') return { label: 'PENDING_REVIEW', color: '#8a5f00', bg: '#FBF3E0', border: '#ecd9a8' };
   if (status === 'CONFIRMED') return { label: 'CONFIRMED', color: '#177E4D', bg: '#E4F3EB', border: '#bfe0cd' };
   if (status === 'REJECTED') return { label: 'REJECTED', color: '#5f6f7e', bg: '#eef1f4', border: '#dde4ea' };
+  if (status === 'DISMISSED') return { label: 'DISMISSED', color: '#8a99a8', bg: '#f6f8fa', border: '#e6ebf0' };
   return { label: 'N/A', color: '#8a99a8', bg: '#ffffff', border: '#dde4ea' };
 }
 

@@ -13,7 +13,12 @@
 // the controller boundary.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const REVIEW_STATUSES = ['PENDING_REVIEW', 'CONFIRMED', 'REJECTED', 'N/A'];
+// DISMISSED: a lightweight "delete from the queue" outcome for junk/false-
+// positive detections — deliberately NOT a TERMINAL_STATUS (no rootCause/
+// resolution/faultType required), since dismissing isn't a diagnosis, just
+// "this doesn't need one." Still requires reviewedBy so the audit trail
+// records who cleared it — see validateReviewPatch below.
+export const REVIEW_STATUSES = ['PENDING_REVIEW', 'CONFIRMED', 'REJECTED', 'DISMISSED', 'N/A'];
 
 export const FAULT_EVENT_FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING', 'OTHER'];
 
@@ -37,6 +42,13 @@ export function validateReviewPatch(body) {
 
   if (body.status !== undefined && !REVIEW_STATUSES.includes(body.status)) {
     return [`status must be one of: ${REVIEW_STATUSES.join(', ')}`];
+  }
+
+  if (body.status === 'DISMISSED') {
+    if (isBlank(body.reviewedBy)) {
+      errors.push('reviewedBy is required and must be a non-empty string');
+    }
+    return errors;
   }
 
   if (!TERMINAL_STATUSES.includes(body.status)) {
