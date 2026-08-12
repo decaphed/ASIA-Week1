@@ -6,19 +6,19 @@
 import * as service from '../services/faultEventService.js';
 import { validateReviewPatch } from '../utils/pdmReviewValidation.js';
 
-export function listFaultEvents(req, res, next) {
+export async function listFaultEvents(req, res, next) {
   try {
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-    res.json({ success: true, data: service.listFaultEvents(status) });
+    res.json({ success: true, data: await service.listFaultEvents(status) });
   } catch (err) {
     next(err);
   }
 }
 
-export function getFaultEvent(req, res, next) {
+export async function getFaultEvent(req, res, next) {
   try {
     const id = parseInt(req.params.id, 10);
-    const event = service.getFaultEvent(id);
+    const event = await service.getFaultEvent(id);
     if (!event) return res.status(404).json({ success: false, error: 'fault event not found' });
     res.json({ success: true, data: event });
   } catch (err) {
