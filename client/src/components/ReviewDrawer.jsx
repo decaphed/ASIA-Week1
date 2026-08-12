@@ -5,7 +5,7 @@ import { METRIC_BY_KEY, THRESHOLDS, FAULT_TYPES, fmt } from '../utils/constants.
 import { pts, line, area, range } from '../utils/geometry.js';
 import {
   eventId, eventTitle, metricsLabel, modelLine, severityOf, sevPill,
-  confidenceLabel, eventMetrics, parseRules, shortStamp,
+  confidenceLabel, eventMetrics, parseRules, ruleLabel, shortStamp,
 } from '../utils/faultEvents.js';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -103,8 +103,8 @@ function EvidenceChart({ event, points }) {
       )}
       <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
         {parseRules(event).map((rule) => (
-          <span key={rule} style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, background: '#eef1f4', color: '#5f6f7e', borderRadius: 4, padding: '3px 8px' }}>
-            {rule}
+          <span key={rule} style={{ fontSize: 10.5, fontWeight: 600, background: '#eef1f4', color: '#5f6f7e', borderRadius: 4, padding: '3px 8px' }}>
+            {ruleLabel(rule)}
           </span>
         ))}
       </div>

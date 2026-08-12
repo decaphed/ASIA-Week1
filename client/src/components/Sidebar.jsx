@@ -38,7 +38,7 @@ const PAGES = [
   { id: 'reports', label: 'Reports' },
 ];
 
-function Sidebar({ page, onNavigate, pendingCount, connected, reviewer, onLogout }) {
+function Sidebar({ page, onNavigate, pendingCount, connected, reviewer, title, onLogout }) {
   const initials = reviewer
     .split(/[\s.]+/)
     .filter(Boolean)
@@ -104,7 +104,7 @@ function Sidebar({ page, onNavigate, pendingCount, connected, reviewer, onLogout
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{reviewer}</div>
-            <div style={{ fontSize: 11, color: '#8a99a8' }}>Reliability Engineer</div>
+            <div style={{ fontSize: 11, color: '#8a99a8' }}>{title || 'Reliability Engineer'}</div>
           </div>
           <button
             type="button"

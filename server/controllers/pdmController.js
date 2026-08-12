@@ -5,6 +5,12 @@
 
 import * as service from '../services/faultEventService.js';
 import { validateReviewPatch } from '../utils/pdmReviewValidation.js';
+import { toCsv } from '../utils/csv.js';
+
+const EXPORT_COLUMNS = [
+  'faultEventId', 'phase', 'eventStatus', 'eventFaultType', 'timestamp',
+  'flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp', 'pumpStatus',
+];
 
 export async function listFaultEvents(req, res, next) {
   try {
@@ -70,6 +76,25 @@ export async function reviewFaultEvent(req, res, next) {
 export async function getFaultEventStats(req, res, next) {
   try {
     res.json({ success: true, data: await service.getFaultEventStats() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * CSV training-data export: every reviewed event's buffer window
+ * (faultStart-1h .. faultEnd+1h), one row per raw_telemetry sample, tagged
+ * with faultEventId + phase (see faultEventService.exportBufferRows).
+ * ?status= optionally restricts to one fault_events status (e.g. CONFIRMED).
+ */
+export async function exportFaultEventBuffers(req, res, next) {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const rows = await service.exportBufferRows(status);
+    const csv = toCsv(rows, EXPORT_COLUMNS);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="fault-event-buffers.csv"');
+    res.send(csv);
   } catch (err) {
     next(err);
   }

@@ -11,7 +11,7 @@
 // every other model in this directory.
 // ─────────────────────────────────────────────────────────────────────────
 
-import pool from '../database/db.js';
+import pool, { toIso } from '../database/db.js';
 
 /** Insert a new fault_events row (FLAGGED or NEGATIVE_SAMPLE — caller sets eventType/status). */
 export async function insertFaultEvent(record) {
@@ -120,5 +120,5 @@ export async function getBufferRange(bufferStart, bufferEnd) {
     `SELECT * FROM raw_telemetry WHERE "timestamp" BETWEEN $1 AND $2 ORDER BY "timestamp" ASC`,
     [bufferStart, bufferEnd],
   );
-  return result.rows;
+  return result.rows.map((row) => ({ ...row, timestamp: toIso(row.timestamp) }));
 }

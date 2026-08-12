@@ -32,6 +32,10 @@ export default function App() {
   const { data: whoamiRes } = usePolling(() => api.whoami(), 60000, []);
   const identity = whoamiRes?.data ?? null;
   const reviewer = identity?.username || 'Local Engineer';
+  // Authentik doesn't expose a job title, so the sidebar shows the account's
+  // first group as its stand-in — falls back to the default label in
+  // Sidebar.jsx when there's no identity (dev/local access) or no group.
+  const title = identity?.groups?.[0];
 
   const { data: eventsRes, refresh: refreshEvents } = usePolling(() => api.faultEvents(), 15000, []);
   const flagged = useMemo(
@@ -63,6 +67,7 @@ export default function App() {
         pendingCount={queue.length}
         connected={liveOk}
         reviewer={reviewer}
+        title={title}
         onLogout={onLogout}
       />
       <main style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>

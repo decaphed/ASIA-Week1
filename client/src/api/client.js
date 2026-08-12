@@ -46,4 +46,9 @@ export const api = {
     request(`/pdm/fault-events/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   postReading: (reading) =>
     request('/data', { method: 'POST', body: JSON.stringify(reading) }),
+  // A plain URL, not a fetch() call — this one is meant for a browser
+  // download (<a href>), which streams the CSV/triggers Content-Disposition
+  // directly rather than being parsed as JSON through request().
+  faultEventBufferCsvUrl: (status) =>
+    `${BASE}/pdm/fault-events/export/csv${status ? `?status=${encodeURIComponent(status)}` : ''}`,
 };

@@ -24,6 +24,14 @@ export function parseRules(row) {
   return Array.isArray(rules) ? rules : [];
 }
 
+/** "Discharge Pressure — rising too fast" from a raw "dischargePressure.rateOfChange" rule id. */
+export function ruleLabel(rule) {
+  const [metricKey, ruleKind] = rule.split('.');
+  const metric = METRIC_BY_KEY[metricKey];
+  const phrase = RULE_PHRASES[ruleKind] || 'abnormal behavior';
+  return `${metric ? metric.label : metricKey} — ${phrase}`;
+}
+
 /** Metric keys involved in an event, in rule order, deduplicated. */
 export function eventMetrics(row) {
   const seen = [];

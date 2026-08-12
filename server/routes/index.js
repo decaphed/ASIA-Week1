@@ -19,7 +19,7 @@ import { getForecast } from '../controllers/forecastController.js';
 import { getDrift } from '../controllers/driftController.js';
 import { getTrend } from '../controllers/trendController.js';
 import { createProcessedReading, getProcessedLive, getProcessedHistory } from '../controllers/processedController.js';
-import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats } from '../controllers/pdmController.js';
+import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats, exportFaultEventBuffers } from '../controllers/pdmController.js';
 import { getWhoami } from '../controllers/whoamiController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 import { validateProcessedMiddleware } from '../middleware/validateProcessed.js';
@@ -59,9 +59,11 @@ router.get('/trend', getTrend);
 router.get('/processed', getProcessedHistory);
 router.get('/processed/live', getProcessedLive);
 
-// PdM HITL review endpoints (§3.6). /stats is registered before the /:id
-// routes so Express doesn't try to parse "stats" as an :id param.
+// PdM HITL review endpoints (§3.6). /stats and /export/csv are registered
+// before the /:id routes so Express doesn't try to parse "stats"/"export"
+// as an :id param.
 router.get('/pdm/fault-events/stats', getFaultEventStats);
+router.get('/pdm/fault-events/export/csv', exportFaultEventBuffers);
 router.get('/pdm/fault-events/:id', getFaultEvent);
 router.get('/pdm/fault-events', listFaultEvents);
 router.patch('/pdm/fault-events/:id', requireGroup(PDM_REVIEWER_GROUP), reviewFaultEvent);

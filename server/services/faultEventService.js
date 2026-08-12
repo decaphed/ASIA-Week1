@@ -155,6 +155,54 @@ export async function getFaultEventBuffer(id) {
 }
 
 /**
+ * Flat, per-sample rows for CSV export / model training data: every
+ * eligible event's buffer window (faultStart-1h .. faultEnd+1h), each row
+ * tagged with its own faultEventId + phase (BEFORE_FAULT/FAULT/AFTER_FAULT).
+ *
+ * Deliberately NOT a single concatenated time series: two events can be
+ * hours or days apart, so nothing here implies row N follows row N-1 in
+ * real time. A consumer (e.g. a training pipeline) must group by
+ * faultEventId before building sequences — the phase column marks where
+ * within that one event's window each row falls.
+ *
+ * Only events whose buffer window is fully known (bufferStart AND
+ * bufferEnd both set — i.e. reviewed, see reviewFaultEvent()) are
+ * included; a still-PENDING_REVIEW event's bufferEnd is null because its
+ * fault hasn't been confirmed as over yet.
+ * @param status optional fault_events status filter (e.g. 'CONFIRMED').
+ */
+export async function exportBufferRows(status) {
+  const events = await model.listFaultEvents(status);
+  const eligible = events.filter((e) => e.bufferStart && e.bufferEnd);
+
+  const rows = [];
+  for (const event of eligible) {
+    const faultStartMs = Date.parse(event.faultStart);
+    const faultEndMs = Date.parse(event.faultEnd);
+    const samples = await model.getBufferRange(event.bufferStart, event.bufferEnd);
+    for (const sample of samples) {
+      const ts = Date.parse(sample.timestamp);
+      const phase = ts < faultStartMs ? 'BEFORE_FAULT' : ts > faultEndMs ? 'AFTER_FAULT' : 'FAULT';
+      rows.push({
+        faultEventId: event.id,
+        phase,
+        eventStatus: event.status,
+        eventFaultType: event.faultType,
+        timestamp: sample.timestamp,
+        flowRate: sample.flowRate,
+        rpm: sample.rpm,
+        vibration: sample.vibration,
+        suctionPressure: sample.suctionPressure,
+        dischargePressure: sample.dischargePressure,
+        motorTemp: sample.motorTemp,
+        pumpStatus: sample.status,
+      });
+    }
+  }
+  return rows;
+}
+
+/**
  * Apply a HITL review patch. When status is CONFIRMED and faultEnd is
  * given, bufferEnd (= faultEnd + 1 hour) is finalized here — until then the
  * buffer's trailing edge is genuinely unknown (§3.6).

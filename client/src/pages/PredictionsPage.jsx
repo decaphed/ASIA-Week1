@@ -393,7 +393,18 @@ function DetectTab({ queue, audit, stats }) {
       </Card>
 
       <Card>
-        <CardLabel style={{ marginBottom: 6 }}>All detections</CardLabel>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <CardLabel>All detections</CardLabel>
+          <a
+            href={api.faultEventBufferCsvUrl()}
+            download
+            className="hover-underline"
+            style={{ fontSize: 12, fontWeight: 600, color: '#1F3A6E' }}
+            title="Every reviewed event's buffer window (1h before, the fault, 1h after), tagged per-row with its event id and phase — for training-data export"
+          >
+            Export training data (CSV) →
+          </a>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '96px 1.8fr 1fr 130px 130px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
           <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Status</span>
         </div>
