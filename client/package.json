@@ -3,19 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "React + Vite dashboard that displays live and historical IoT sensor data.",
+  "description": "ASIA pump monitoring dashboard — live telemetry, analytics, forecasting and fault review.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "animejs": "^4.5.0",
-    "axios": "^1.7.9",
-    "chart.js": "^4.4.7",
-    "lucide-react": "^1.24.0",
     "react": "^18.3.1",
-    "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {

@@ -1,11 +1,12 @@
 # Industrial Pump Monitoring Dashboard
 
 A full-stack, real-time SCADA dashboard for industrial pump monitoring built for a
-university IoT assignment. **Node-RED** simulates a sensor gateway, **Express + SQLite**
-ingests and stores pump telemetry, and a **React + Vite** dashboard (reskinned with a
-teal/navy control-room theme, lucide-react icons, and four-page architecture) displays
-live metrics, rolling trend charts, fault predictions, and historical analysis — all
-without manual page refresh.
+university IoT assignment. **Node-RED** simulates a sensor gateway, **Express +
+PostgreSQL/TimescaleDB** ingests, preprocesses and stores pump telemetry, a **Python
+(FastAPI) service** runs Tier-1 rule-based fault detection with a human-in-the-loop
+review workflow, and a **React + Vite** dashboard displays live metrics, trend
+analysis, short-horizon forecasts, and fault review tools — all without manual page
+refresh.
 
 This README is written to be read *and* to teach: after the reference sections
 there is a complete, beginner-friendly Node-RED tutorial and a step-by-step
@@ -23,7 +24,7 @@ explain and rebuild every part of this project.
 5. [Running the Backend](#running-the-backend)
 6. [Running the React Client](#running-the-react-client)
 7. [Running Node-RED](#running-node-red)
-8. [Why SQLite](#why-sqlite)
+8. [Why PostgreSQL + TimescaleDB](#why-postgresql--timescaledb)
 9. [API Documentation](#api-documentation)
 10. [Node-RED Learning Guide](#node-red-learning-guide-beginner-friendly)
 11. [End-to-End Data Flow Walkthrough](#end-to-end-data-flow-walkthrough)
@@ -36,40 +37,48 @@ explain and rebuild every part of this project.
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Data generation | **Node-RED** | Simulates a sensor gateway every second, injecting pump telemetry (6 metrics, 3 fault signatures) and POSTs to the backend |
-| Backend | **Node.js + Express** | Validates, preprocesses (outlier-caps, smooths), stores pump readings, computes trends/forecasts, serves REST API |
-| Storage | **PostgreSQL 16 + TimescaleDB** (`pg`) | A networked hypertable database holding raw telemetry and preprocessed signals as time-series data; supports fault-prediction feature pipelines. See `docs/plan/2026-08-04-timescaledb-migration.md`. |
-| Frontend | **React (Vite) + Lucide icons + Chart.js** | Four-page dashboard (Overview / Analytics / Predictions / Reports) with teal/navy control-room theme; polls API and renders live metrics, trend charts, and fault analysis |
+| Data generation | **Node-RED** | Simulates a sensor gateway every second: random-walks a single "load" scalar with mean reversion (so the 6 metrics move together like real pump telemetry), injects rare RUNNING→FAULT/STOPPED episodes with one of three fault-type signatures (THERMAL, CAVITATION, BEARING), and POSTs each reading to the backend behind a retry-with-backoff queue |
+| Backend | **Node.js + Express** | Validates, preprocesses (physics checks, missing-data gap-filling, outlier capping, one-minute aggregation), stores pump readings, computes trends/forecasts/drift, calls the PdM service for fault scoring, serves REST API |
+| Fault detection | **Python (FastAPI)**, `pdm/` | Tier-1 rule engine: evaluates each closed one-minute window against per-metric min/max/stdDev/rate-of-change thresholds (`pdm/app/thresholds.yaml`) and returns a flagged/confidence verdict the backend persists for human review |
+| Storage | **PostgreSQL 16 + TimescaleDB** (`pg`) | A networked hypertable database holding raw telemetry, preprocessed signals, and fault-event review records as time-series data. See `docs/plan/2026-08-04-timescaledb-migration.md`. |
+| Frontend | **React (Vite)** | Four-page dashboard (Overview / Analytics / Predictions / Reports); every chart is hand-built SVG (no charting library); polls the API and renders live metrics, trend charts, forecasts, and the fault-review workflow |
 
-The three pieces are fully decoupled — each only knows about HTTP. You could
-swap Node-RED for a real gateway, or React for a mobile app, without touching
-the other two.
+The pieces are decoupled — each only knows about HTTP. You could swap
+Node-RED for a real gateway, or React for a mobile app, without touching the
+others.
 
-**Dashboard pages (v4 redesign, July 2026):**
-- **Overview** — at-a-glance: machine health gauge, current readings, active alarms, process schematic
-- **Analytics** — detailed trend analysis: scrolling time-series per metric, statistical summaries, 24h/7d rollups
-- **Predictions** — fault forecasting (in progress): statistical outlook (ETS forecast) and placeholder for AI/ML failure-prediction model
-- **Reports** — engineering tools: historical data export, manual test-reading form, system events log
+**Dashboard pages:**
+- **Overview** — at-a-glance: machine health gauge, active alarms, fault-review queue card, 6 live metric cards with 60-second sparklines, animated P&ID process schematic
+- **Analytics** — per-metric time series (1h/8h/24h/7d) with the alarm limit overlaid, availability/run-time/excursion tiles, 24h and 7d rollup tables
+- **Predictions** — three tabs: **Forecast** (4-hour projection extrapolated from the backend's damped-trend model), **Fault Detection** (every Tier-1 rule-engine detection and its outcome), **Needs Review** (the human-in-the-loop queue and review drawer)
+- **Reports** — historical data export (CSV/Excel/PDF, generated client-side), manual test-reading entry, fault-review audit trail, a composed system event log
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────┐   HTTP POST /api/data    ┌─────────────────────────┐
-│  Node-RED    │  every 1s (JSON reading) │   Express backend :3000 │
-│  (generator) │ ───────────────────────► │  routes→controllers→    │
-│  inject→func │                          │  services→SQLite (better│
-│  →http req   │                          │  -sqlite3)  data.db     │
-└──────────────┘                          └───────────┬─────────────┘
-                                                       │ GET /api/live   (1s)
-                                                       │ GET /api/history(5s)
-                                                       │ GET /api/stats /health
-                                                       ▼
+┌──────────────┐   HTTP POST /api/data    ┌──────────────────────────┐
+│  Node-RED    │  every 1s (JSON reading) │   Express backend :3000  │
+│  (generator) │ ───────────────────────► │  routes→controllers→     │
+│  inject→func │                          │  services→preprocessing  │
+│  →http req   │                          │  →PostgreSQL/TimescaleDB │
+└──────────────┘                          └──────────┬────────┬──────┘
+                                                       │        │ POST /score
+                                    GET /api/live (1s) │        │ (per closed
+                               GET /api/history/series │        │  1-min window)
+                                    GET /api/stats/     │        ▼
+                                    health/forecast/…   │  ┌──────────────────┐
+                                                        │  │ PdM service :8000│
+                                                        │  │ (Python/FastAPI) │
+                                                        │  │ Tier-1 rule      │
+                                                        │  │ engine           │
+                                                        │  └──────────────────┘
+                                                        ▼
                                           ┌─────────────────────────┐
                                           │  React dashboard :5173  │
-                                          │  services/api → hooks → │
-                                          │  cards / charts / table │
+                                          │  api/client.js → hooks →│
+                                          │  pages / cards / charts │
                                           └─────────────────────────┘
 ```
 
@@ -83,49 +92,74 @@ the other two.
   database`. Each layer has one job (URL mapping, HTTP shaping, business
   logic, SQL, storage), so no file mixes concerns and every layer can be
   tested or replaced independently.
-- **SQLite** is a single file (`server/data.db`) — no database server to
-  install, configure, or crash. See [Why SQLite](#why-sqlite) for the full
-  reasoning.
+- **PostgreSQL + TimescaleDB** stores telemetry as hypertables, giving cheap
+  time-bucketed aggregation for the Analytics/summary/trend/forecast
+  endpoints without hand-rolled downsampling logic. See
+  [Why PostgreSQL + TimescaleDB](#why-postgresql--timescaledb).
+- **The PdM service is a separate process** (Python/FastAPI) so the
+  fault-detection rule engine can be developed and tested — and eventually
+  swapped for a trained model — independently of the Express backend; the
+  backend only knows it POSTs a closed window and gets back a verdict.
 - **React polls** rather than uses WebSockets/SSE, because polling is the
   simplest mechanism to build, explain, and debug live in a viva. `/api/live`
-  is polled every second (matches Node-RED's generation rate); `/api/history`
-  and `/api/stats` every 5 seconds (they don't need per-second freshness).
+  is polled every second (matches Node-RED's generation rate); other
+  endpoints poll on their own slower cadence (15s–5min) since they don't need
+  per-second freshness.
 
 ---
 
-## Design System (v4, July 2026)
+## Frontend Design System
 
-**Color palette:** Operator-grade, brutalist dark mode. No pure black, no gradients, no blur.
+**Look and feel:** a light, operator-grade control-room theme — no dark mode,
+no gradients, no external icon library (every icon is inline SVG).
 
-- **Substrate:** deep navy (`#0d1117` background, `#141a21` panels) — mimics a
-  control-room CRT aesthetic
-- **Accent:** teal (`#00d4c8`) — functional brand color, accessible against navy,
-  used for highlights and primary CTAs
-- **Status indicators:** flat, no soft glow — `#00a89d` (ok/green), `#f59e0b` (warn/amber),
-  `#ef4444` (danger/red), each with darkened background `rgba(..., 0.08-0.10)` for badge
-  contrast
-- **Metric colors:** desaturated to sit inside the utilitarian palette (flow, RPM,
-  vibration, suction/discharge pressure, motor temp) — each metric is instantly
-  recognizable on overlaid charts
-- **Typography:** `Inter` body (system-ui fallback), `Archivo Black` for headers and hero
-  numerals (tight tracking, uppercase, applied selectively)
-- **Shape:** zero border radius everywhere (mechanical rigidity, no rounded corners)
-- **Shadows:** hard offset only (2-5px, 90% opacity black), no color tint or blur
-- **Icons:** lucide-react library replacing custom SVG icons — consistent stroke weight,
-  scalable, semantic (Power for status, Bell for alarms, Activity for vibration, etc.)
+- **Palette:** page background `#F1F4F8`; white cards (`#ffffff`) on a
+  `#E2E8F0` border with a soft two-layer shadow; primary navy `#1F3A6E` for
+  CTAs and emphasis; slate `#33475a` and muted `#8a99a8` for secondary text.
+- **Status palette** (shared across cards, chips, and the process schematic):
+  normal `#177E4D`, warning `#B27400`, alarm `#B3282D`, and a fourth state,
+  **unknown/no-data** `#5f6f7e` — deliberately not a shade of green, so a
+  missing reading can never look the same as a healthy one (see
+  [Live-data staleness](#live-data-staleness) below).
+- **Typography:** `IBM Plex Sans` for body/UI text, `IBM Plex Mono` for every
+  numeric/tabular value (readings, timestamps, event IDs), loaded from Google
+  Fonts in `client/index.html`.
+- **Shape:** 10px border radius on cards, 6-8px on controls; soft shadows,
+  no hard offsets.
+- **Charts:** no charting library. Every chart — the health gauge, metric
+  sparklines, the Analytics time-series, the forecast fan, the P&ID process
+  schematic, the review drawer's evidence chart — is hand-built SVG generated
+  by `client/src/utils/geometry.js` (`pts`, `line`, `area`, `bandPath`, `arc`,
+  `polar`, `range`). `client/package.json`'s only runtime dependencies are
+  `react` and `react-dom`.
+- **Routing:** no router, no hash routes. `App.jsx` holds the current page in
+  React state (`useState('overview')`) and conditionally renders one of the
+  four page components.
+- **Accessibility:** every interactive control is a real `<button>` (never a
+  bare `<div onClick>`); the page has a proper `h1`→`h2`→`h3` heading
+  hierarchy; the Predictions tab strip uses `role="tablist"/"tab"/"tabpanel"`;
+  the fault-review drawer is a `role="dialog"` with `aria-modal`, a focus
+  trap, Escape-to-close, and focus restored to the triggering button on
+  close; a global `:focus-visible` ring and a `.sr-only` utility live in
+  `client/src/index.css`.
 
-**Pages and their purpose:**
+**Pages:**
 
-| Page | URL | Purpose |
-|---|---|---|
-| **Overview** | `#/overview` | At-a-glance: machine health gauge, current readings (6 metrics), active alarms, process schematic (P&ID diagram) |
-| **Analytics** | `#/analytics` | Detailed trend analysis: scrolling time-series per metric, min/max/avg stats, 24h/7d rollups |
-| **Predictions** | `#/predict` | Short-horizon forecasting (ETS statistical model) and placeholder UI for future AI/ML failure-prediction model |
-| **Reports** | `#/reports` | Engineering tools: searchable historical data export, manual test-reading form, system events log |
+| Page | Purpose |
+|---|---|
+| **Overview** | At-a-glance: machine health gauge, active alarms, fault-review queue card, 6 live metric cards with 60-second sparklines, animated P&ID process schematic |
+| **Analytics** | Per-metric time series (1h/8h/24h/7d) with the alarm limit overlaid, availability/run-time/excursion tiles, 24h and 7d rollup tables |
+| **Predictions** | **Forecast** tab (4-hour projection per metric), **Fault Detection** tab (every Tier-1 rule-engine detection and its outcome), **Needs Review** tab (the pending human-in-the-loop queue and review drawer) |
+| **Reports** | Historical data export (CSV/Excel/PDF, generated client-side from the history-series endpoint), manual test-reading entry, fault-review audit trail, a composed system event log |
 
-**Component immutability:** ProcessSchematic.jsx and PumpModel3D.jsx (3D SVG visualization)
-are deliberately left untouched — they are not part of the v4 redesign and serve as
-reference implementations for complex visualizations.
+### Live-data staleness
+
+If `/api/live` stops returning fresh readings (no new timestamp for 3 poll
+intervals), the Overview page does **not** keep showing the last-known values
+as if they were current. It shows a banner ("No live data from the gateway"),
+blanks the health gauge and metric values to `—`, greys out the schematic,
+and reports alarm state as **unknown** rather than "no active alarms" — an
+outage must never read as an all-clear.
 
 ---
 
@@ -133,62 +167,49 @@ reference implementations for complex visualizations.
 
 ```
 ASIA-Week1/
-├── client/                          # React + Vite frontend (v4 reskin: teal/navy, lucide-react)
+├── client/                          # React + Vite frontend — light control-room theme, no chart library
 │   ├── src/
-│   │   ├── assets/                  # SVG/PNG assets
-│   │   ├── components/
-│   │   │   ├── charts/              # LiveChart.jsx (rolling trend visualization)
-│   │   │   ├── dashboard/           # domain-specific panels
-│   │   │   │   ├── HealthStrip.jsx           # 6-tile machine health summary (gauge, status, availability, alarms, runtime)
-│   │   │   │   ├── SensorCard.jsx            # individual metric card with trend sparkline
-│   │   │   │   ├── SensorCardGrid.jsx        # grid layout for 6 metrics
-│   │   │   │   ├── StatsPanel.jsx            # aggregate stats (min/max/avg)
-│   │   │   │   ├── AlarmsPanel.jsx           # active alarms with timestamps
-│   │   │   │   ├── ViolationsPanel.jsx       # threshold violations log
-│   │   │   │   ├── SystemHealthPanel.jsx     # health indicator + status colors
-│   │   │   │   ├── ExecutiveSummary.jsx      # management-facing KPI rollup
-│   │   │   │   ├── PeriodSummary.jsx         # 24h/7d summaries
-│   │   │   │   ├── ProcessSchematic.jsx      # P&ID pump diagram (immutable)
-│   │   │   │   ├── PumpModel3D.jsx           # 3D pump visualization (immutable)
-│   │   │   │   └── ManualReadingForm.jsx     # manual test entry form
-│   │   │   ├── layout/              # page chrome
-│   │   │   │   ├── Sidebar.jsx              # 4-page navigation (Overview/Analytics/Predict/Reports)
-│   │   │   │   ├── Topbar.jsx               # system status indicators + theme toggle
-│   │   │   │   ├── StatusIndicator.jsx      # health/backend/database status lights
-│   │   │   │   └── Clock.jsx                # system time display
-│   │   │   ├── tables/              # HistoryTable.jsx (searchable, paginated historical data)
-│   │   │   └── ui/                  # design system + utilities
-│   │   │       ├── Icons.jsx                # lucide-react icon wrappers (Power, Bell, Activity, RotateCw, …)
-│   │   │       ├── Card.jsx                 # base card component
-│   │   │       ├── Spinner.jsx              # loading indicator
-│   │   │       └── ErrorBanner.jsx          # connection error UI
+│   │   ├── assets/
+│   │   │   └── logo.png             # ASIA wordmark
+│   │   ├── api/
+│   │   │   └── client.js            # the ONLY file making HTTP calls; unwraps the {success,data} envelope
 │   │   ├── hooks/
-│   │   │   ├── usePolling.js                 # base polling logic (memoized, deduped)
-│   │   │   ├── useSensorData.js              # hooks: useHealth, useLiveData, useHistory, useStats, useForecast, useTrend
-│   │   │   ├── useHashRoute.js               # hash-based routing (/#/overview, etc.)
-│   │   │   └── useTheme.js                   # light/dark theme toggle persistence
+│   │   │   ├── usePolling.js        # generic interval poller (fetcher, intervalMs, deps)
+│   │   │   ├── useLiveBuffer.js     # 1 Hz /api/live poll into a rolling 60-sample buffer per metric, with staleness detection
+│   │   │   └── useClock.js          # wall-clock display
+│   │   ├── utils/
+│   │   │   ├── constants.js         # METRICS, THRESHOLDS (ported from server/config/thresholds.js), SC status palette, statusOf(), fmt()
+│   │   │   ├── geometry.js          # SVG path helpers shared by every hand-drawn chart
+│   │   │   └── faultEvents.js       # presentation helpers for fault_events rows (titles, severity, timestamps)
+│   │   ├── components/
+│   │   │   ├── Card.jsx             # Card, CardLabel, Pill, buttonReset — shared primitives
+│   │   │   ├── Sidebar.jsx          # left-nav (Overview/Analytics/Predictions/Reports), connection status, reviewer identity
+│   │   │   ├── TopBar.jsx           # page title, LIVE indicator, pending-review CTA
+│   │   │   ├── Toast.jsx            # bottom-center confirmation toast
+│   │   │   ├── ProcessSchematic.jsx # animated P&ID diagram with live instrument bubbles
+│   │   │   └── ReviewDrawer.jsx     # fault-review modal: evidence chart + HITL confirm/reject form
 │   │   ├── pages/
-│   │   │   ├── OverviewPage.jsx              # current state (health gauge, alarms, process schematic)
-│   │   │   ├── AnalyticsPage.jsx             # trends & statistics (per-metric time series)
-│   │   │   ├── PredictPage.jsx               # forecasting & AI model placeholder
-│   │   │   └── ReportsPage.jsx               # export, manual readings, event log
-│   │   ├── services/                # api.js — the ONLY file making HTTP calls to /api
-│   │   ├── utils/                   # formatters.js, health.js, constants.js (PUMP_NAME, SENSORS, CHART_WINDOW)
-│   │   ├── styles/                  # management.css (executive summary layer)
-│   │   ├── App.jsx                  # application shell (Sidebar + Topbar + routed Page)
+│   │   │   ├── OverviewPage.jsx     # health gauge, alarms, queue card, metric cards, schematic
+│   │   │   ├── AnalyticsPage.jsx    # per-metric trend chart + rollup tables
+│   │   │   ├── PredictionsPage.jsx  # Forecast / Fault Detection / Needs Review tabs
+│   │   │   └── ReportsPage.jsx      # export, manual reading, audit trail, event log
+│   │   ├── App.jsx                  # application shell: page state, live-data hook, fault-event polling
 │   │   ├── main.jsx                 # React entry point
-│   │   └── index.css                # design tokens (teal #00d4c8, navy #0d1117, metric colors, shadows)
+│   │   └── index.css                # design tokens, keyframes, focus/hover states
 │   ├── index.html
 │   ├── vite.config.js
-│   └── .env.example
-├── server/                          # Express + SQLite backend (telemetry ingestion & preprocessing)
+│   ├── nginx.conf                   # production static-file server + /api reverse proxy
+│   └── Dockerfile
+├── server/                          # Express + PostgreSQL/TimescaleDB backend (telemetry ingestion & preprocessing)
 │   ├── config/                      # thresholds.js (alarm bands per metric)
-│   ├── controllers/                 # HTTP routing → JSON response shaping
-│   ├── routes/                      # URL → controller mapping
-│   ├── middleware/                  # validation, error handling, latency timing
-│   ├── database/                    # db.js (connection setup), schema.sql (raw_telemetry, processed_telemetry)
-│   ├── models/                      # data access layer: sensorModel.js, processedModel.js (ALL SQL here)
-│   ├── services/                    # business logic: sensorService.js, trendService.js, forecastService.js, driftService.js
+│   ├── controllers/                 # HTTP routing → JSON response shaping (live/history/series/summary/stats/health/
+│   │                                 #   forecast/trend/drift/processed/pdm/whoami controllers)
+│   ├── routes/                      # URL → controller mapping (index.js is the whole API surface at a glance)
+│   ├── middleware/                  # validation, error handling, latency timing, Authentik identity/group gating
+│   ├── database/                    # db.js (pg Pool via DATABASE_URL), schema.sql, node-pg-migrate migrations
+│   ├── models/                      # data access layer — ALL SQL here (sensorModel.js, processedModel.js, forecastModel.js, faultEventModel.js)
+│   ├── services/                    # business logic: sensorService, summaryService, trendService, forecastService,
+│   │                                 #   driftService, processedService, faultEventService, pdmService
 │   ├── preprocessing/               # signal processing pipeline
 │   │   ├── pipeline.js              # main entry: normalizes, caps outliers, captures pre-cap features
 │   │   ├── precapFeatures.js        # raw stddev/rate-of-change/excursion (pre-Hampel-cap)
@@ -196,14 +217,25 @@ ASIA-Week1/
 │   │       ├── episodes.js          # identify contiguous FAULT episodes, walk-forward split
 │   │       └── metrics.js           # precision/recall/Brier score at lead times
 │   ├── scripts/                     # utilities: evaluateFaultPrediction.js
-│   ├── utils/                       # logger.js, validation.js (field ranges)
+│   ├── utils/                       # logger.js, validation.js, pdmReviewValidation.js
 │   ├── app.js                       # Express app configuration (CORS, middleware stack)
 │   ├── server.js                    # entry point (port 3000)
 │   └── .env.example
+├── pdm/                              # Python (FastAPI) Tier-1 fault-detection service
+│   ├── app/
+│   │   ├── main.py                  # FastAPI app (POST /score), thresholds.yaml loader
+│   │   ├── rules.py                 # pure threshold-evaluation functions (min/max/stdDev/rateOfChange per metric)
+│   │   └── thresholds.yaml          # per-metric rule thresholds + version string
+│   └── requirements.txt
 ├── node-red/                        # sensor gateway simulator
-│   └── flow.json                    # importable flow: inject (1s timer) → function (generate reading + fault signature) → HTTP POST → debug
+│   └── flow.json                    # inject(1s) → function(generate reading) → http request(POST /api/data, with
+│   │                                 #   catch/retry/delay on failure) → debug
+├── authentik/                       # Traefik + Authentik forward-auth stack (dashboard SSO, PdM-reviewer group gating)
+├── db/                              # Postgres init scripts run on first container start
+├── docker-compose.yml               # postgres, pdm, backend, client, node-red, Traefik, Authentik services
 ├── scripts/                         # repository-level utilities
-├── FAULT_PREDICTION_PLAN.md         # detailed plan for ML pipeline (Phases 1-3 done, 4-6 planned)
+├── docs/                            # dated plan/spec/runbook documents (migration history, hardening, PdM design, …)
+├── FAULT_PREDICTION_PLAN.md         # detailed plan for the ML pipeline (Phases 1-3 done; see status below)
 └── README.md
 ```
 
@@ -236,17 +268,26 @@ cp .env.example .env
 
 ## Running the Backend
 
+The backend requires a running PostgreSQL/TimescaleDB instance reachable at
+`DATABASE_URL` (see `server/.env.example`). For local development the
+simplest path is to start just the database service from the repo root:
+
+```bash
+docker compose up postgres
+```
+
+Then apply migrations and start the server:
+
 ```bash
 cd server
-npm run dev      # nodemon, auto-restarts on file changes
-# or: npm start   for a plain node run
+npm run migrate:up   # node-pg-migrate — creates raw_telemetry, processed_telemetry, fault_events, etc.
+npm run dev           # nodemon, auto-restarts on file changes
+# or: npm start        for a plain node run
 ```
 
-On first run, `server/data.db` is created automatically and the `SensorData`
-table is set up. You should see:
+You should see:
 
 ```
-[INFO ] SQLite ready at .../server/data.db
 [INFO ] Backend listening on http://localhost:3000
 ```
 
@@ -263,9 +304,10 @@ cd client
 npm run dev
 ```
 
-Open **http://localhost:5173**. Until Node-RED starts sending data, the cards
-show `--` and the history table shows "No readings yet" — this is expected,
-graceful behaviour, not a bug.
+Open **http://localhost:5173**. Until Node-RED starts sending data — or if
+the feed stops — the dashboard shows a "No live data from the gateway"
+banner and blanks the metric values to `—` rather than pretending stale
+numbers are current. This is expected, graceful behaviour, not a bug.
 
 To build a production bundle: `npm run build` (outputs to `client/dist/`).
 
@@ -310,88 +352,89 @@ below to import `node-red/flow.json` and start the simulator.
 > If you prefer a permanent install: `npm install -g node-red`, then just run
 > `node-red`.
 
-> **Running Node-RED in Docker instead?** The shipped `flow.json` targets
-> `http://host.docker.internal:3000/api/data` in its "POST /api/data" node,
-> since `localhost` inside a container refers to the container itself, not
-> your host machine. If you're running Node-RED **natively** (no container),
-> open that node and change the URL back to `http://localhost:3000/api/data`.
+> **Running Node-RED natively instead of via Docker Compose?** The committed
+> `flow.json` targets `http://backend:3000/api/data` — the Compose service
+> name — because it's designed to run as the `node-red` service inside
+> `docker-compose.yml`, on the same network as `backend`. If you run Node-RED
+> **natively** (`npx node-red`, no container), open the "POST /api/data" node
+> and change the URL to `http://localhost:3000/api/data`, since `backend` as
+> a DNS name only resolves inside the Compose network.
 
 ---
 
-## Why SQLite
+## Why PostgreSQL + TimescaleDB
 
-SQLite is the right database for this project for several concrete reasons:
+The project moved from an embedded SQLite database to a networked PostgreSQL
+16 instance with the TimescaleDB extension — see
+`docs/plan/2026-08-04-timescaledb-migration.md` for the full migration
+rationale and history. The concrete reasons the current stack uses it:
 
-- **Zero configuration.** There's no separate database server to install,
-  start, or crash independently of your app — the entire database is one file
-  (`server/data.db`). For a student project or a small edge-device gateway,
-  this removes an entire category of setup problems.
-- **Embedded, not networked.** The database library links directly into the
-  Node process (`better-sqlite3`). There's no TCP connection, no connection
-  pool, no network latency between your app and its data.
-- **Perfectly matched to the data volume.** A dashboard ingesting one row per
-  second produces ~86,400 rows/day — trivial for SQLite, which comfortably
-  handles databases many gigabytes in size.
-- **Synchronous API (via `better-sqlite3`).** Every query
-  (`db.prepare(sql).get()/.all()/.run()`) returns immediately — no callbacks,
-  no promises. This makes the storage code read top-to-bottom, which is ideal
-  for learning and for a viva walkthrough.
-- **WAL mode** (`PRAGMA journal_mode = WAL`, set in `database/db.js`) lets the
-  many `GET` requests (reads) proceed concurrently with the `POST /api/data`
-  writes from Node-RED, so the dashboard never blocks waiting on ingestion.
+- **Hypertables give cheap time-bucketed aggregation.** The Analytics page's
+  per-range series, the management summary, and the trend/drift/forecast
+  services all need "average this metric over N-second buckets" —
+  TimescaleDB does this natively (`time_bucket()`), instead of hand-rolled
+  downsampling logic against a plain table.
+- **A shared, networked database matches the multi-service architecture.**
+  The stack now has multiple processes touching telemetry-adjacent data (the
+  Express backend, the PdM fault-detection service via the `fault_events`
+  table, and human reviewers via the frontend). A single embedded SQLite file
+  can't be shared safely across processes/containers the way a networked
+  Postgres instance can.
+- **JSONB columns hold structured pipeline metadata** — per-metric feature
+  snapshots, triggered-rule lists, physics-violation details — with real
+  query support, rather than serializing everything to `TEXT`.
+- **`pg`** (`node-postgres`) is the driver; the connection is a pooled
+  `DATABASE_URL` (see `server/database/db.js`). Schema changes are applied
+  with `node-pg-migrate` (`npm run migrate:up` / `migrate:down` in
+  `server/`).
 
-The schema (`server/database/schema.sql`) is intentionally simple:
+The core tables are `raw_telemetry` (one row per ingested reading — the six
+pump metrics, `status`, `faultType`, `provenance`, physics-validation flags),
+`processed_telemetry` (the one-minute aggregates the preprocessing pipeline
+produces — mean/median/min/max/stdDev per metric, dominant status, pre-cap
+features), and `fault_events` (the PdM rule engine's flagged detections and
+their human-in-the-loop review outcome). See `server/database/schema.sql` and
+`server/models/` for the authoritative column lists — this README summarizes
+rather than duplicates them, so it can't drift out of sync with the real
+schema the way the old SQLite-era description did.
 
-```sql
-CREATE TABLE IF NOT EXISTS SensorData (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  temperature REAL    NOT NULL,
-  humidity    REAL    NOT NULL,
-  pressure    REAL    NOT NULL,
-  light       INTEGER NOT NULL DEFAULT 0,  -- 0/1, SQLite has no BOOLEAN type
-  timestamp   TEXT    NOT NULL              -- ISO-8601 string
-);
-
-CREATE INDEX IF NOT EXISTS idx_sensordata_timestamp ON SensorData (timestamp DESC);
-```
-
-- `INTEGER PRIMARY KEY` is SQLite's alias for the internal `ROWID`, so it
-  auto-increments with no extra syntax.
-- `light` is stored as `0`/`1` because SQLite has no native boolean type; the
-  service layer (`services/sensorService.js`) converts it back to `true`/`false`
-  for the API.
-- `timestamp` is `TEXT` in ISO-8601 format (`2026-07-05T10:00:00.000Z`).
-  SQLite has no dedicated date type, but ISO strings sort correctly as plain
-  text, which is all `ORDER BY timestamp` needs.
-- The index on `timestamp` speeds up the "give me the newest N rows" queries
-  that `/api/live` and `/api/history` run constantly.
-
-All SQL lives in exactly one file: **`server/models/sensorModel.js`**. Nowhere
-else in the backend writes a SQL string — controllers and services only call
-named functions like `insertReading()` or `getHistory()`. This is the standard
-data-access-layer pattern: one place to audit, optimize, or swap out storage.
+All SQL lives in the `server/models/` layer. Nowhere else in the backend
+writes a SQL string — controllers and services only call named functions
+(`insertReading()`, `getHistory()`, `getFaultEventById()`, …). This is the
+standard data-access-layer pattern: one place to audit, optimize, or extend
+storage.
 
 ---
 
 ## API Documentation
 
-Base URL: `http://localhost:3000/api`
+Base URL: `http://localhost:3000/api`. Every endpoint responds with a
+`{ "success": true, "data": … }` envelope (or `{ "success": false, "error", "details"? }`
+on failure).
 
 ### `POST /api/data`
 
-Ingests one sensor reading (this is what Node-RED calls every second).
+Ingests one raw reading (this is what Node-RED calls every second). Runs the
+full preprocessing pipeline on every request.
 
 **Request body:**
 ```json
 {
-  "temperature": 24.6,
-  "humidity": 55.2,
-  "pressure": 1013.1,
-  "light": true,
-  "timestamp": "2026-07-05T10:00:00.000Z"
+  "flowRate": 212.4,
+  "rpm": 2950,
+  "vibration": 3.12,
+  "suctionPressure": 1.85,
+  "dischargePressure": 8.6,
+  "motorTemp": 68.2,
+  "status": "RUNNING",
+  "faultType": null,
+  "timestamp": "2026-08-11T14:05:00.000Z"
 }
 ```
-`timestamp` is optional — if omitted, the server stamps the current time.
+`status` is one of `RUNNING | STOPPED | FAULT` (defaults to `RUNNING`);
+`faultType` is one of `THERMAL | CAVITATION | BEARING` (only meaningful when
+`status` is `FAULT`); `timestamp` is optional — the server stamps the current
+time if omitted.
 
 **Success (201):**
 ```json
@@ -399,11 +442,17 @@ Ingests one sensor reading (this is what Node-RED calls every second).
   "success": true,
   "data": {
     "id": 1,
-    "temperature": 24.6,
-    "humidity": 55.2,
-    "pressure": 1013.1,
-    "light": true,
-    "timestamp": "2026-07-05T10:00:00.000Z"
+    "flowRate": 212.4,
+    "rpm": 2950,
+    "vibration": 3.12,
+    "suctionPressure": 1.85,
+    "dischargePressure": 8.6,
+    "motorTemp": 68.2,
+    "status": "RUNNING",
+    "faultType": null,
+    "timestamp": "2026-08-11T14:05:00.000Z",
+    "provenance": "MEASURED",
+    "physicsValid": true
   }
 }
 ```
@@ -413,58 +462,41 @@ Ingests one sensor reading (this is what Node-RED calls every second).
 {
   "success": false,
   "error": "Invalid sensor data",
-  "details": ["temperature must be a number", "humidity is required"]
+  "details": ["flowRate must be a number", "rpm is required"]
 }
 ```
 
 ### `GET /api/live`
 
-Returns the single most recent reading.
-
-```json
-{ "success": true, "data": { "id": 42, "temperature": 26.1, "humidity": 61.3, "pressure": 1009.4, "light": false, "timestamp": "2026-07-05T10:05:00.000Z" } }
-```
-If no readings exist yet: `{ "success": true, "data": null, "message": "No readings yet" }`.
+Returns the single most recent reading, or
+`{ "success": true, "data": null, "message": "No readings yet" }` if none exist.
 
 ### `GET /api/history`
 
-Returns a page of historical readings, newest first by default.
+A page of historical readings, newest first by default. **Query params:**
+`page` (default 1), `limit` (default 100, max 1000), `sort` (`asc`|`desc`,
+default `desc`).
 
-**Query params:** `page` (default 1), `limit` (default 100, max 1000), `sort` (`asc`|`desc`, default `desc`)
+### `GET /api/history/series?range=1h|8h|24h|7d`
 
-```
-GET /api/history?page=1&limit=5&sort=desc
-```
+A downsampled per-metric time series for the Analytics chart:
 ```json
-{
-  "success": true,
-  "page": 1,
-  "limit": 5,
-  "sort": "desc",
-  "total": 238,
-  "totalPages": 48,
-  "count": 5,
-  "data": [ { "id": 238, "temperature": 27.3, "humidity": 58.0, "pressure": 1015.2, "light": true, "timestamp": "2026-07-05T10:09:58.000Z" }, "... 4 more" ]
-}
+{ "success": true, "data": { "range": "24h", "bucketSeconds": 900,
+  "points": [ { "t": "2026-08-11T14:00:00.000Z", "flowRate": 210.4, "rpm": 2950,
+                "vibration": 3.12, "suctionPressure": 1.85,
+                "dischargePressure": 8.6, "motorTemp": 68.2 } ] } }
 ```
+
+### `GET /api/summary?range=24h|7d`
+
+A management roll-up: availability, real run-time, per-sensor min/max/avg,
+and distinct warn/alarm excursion counts.
 
 ### `GET /api/stats`
 
-Aggregate statistics across all stored readings.
-
-```json
-{
-  "success": true,
-  "data": {
-    "totalRecords": 238,
-    "latestTimestamp": "2026-07-05T10:09:58.000Z",
-    "averageTemperature": 27.41,
-    "averageHumidity": 59.87,
-    "averagePressure": 1012.03,
-    "apiLatencyMs": 0.68
-  }
-}
-```
+Aggregate statistics across all stored readings — `totalRecords`,
+`latestTimestamp`, per-metric averages, plus the last request's
+`apiLatencyMs`.
 
 ### `GET /api/health`
 
@@ -477,23 +509,66 @@ indicators.
   "status": "ok",
   "database": "connected",
   "uptimeSeconds": 340,
-  "lastReadingAt": "2026-07-05T10:09:58.000Z",
-  "serverTime": "2026-07-05T10:09:59.100Z"
+  "lastReadingAt": "2026-08-11T14:05:58.000Z",
+  "serverTime": "2026-08-11T14:05:59.100Z"
 }
 ```
 
-The React app infers the **Node-RED** indicator itself: if `lastReadingAt` is
-more recent than a few seconds ago, data must still be flowing in, so Node-RED
-must be running — no dedicated "Node-RED heartbeat" endpoint is needed.
+The React app infers the **Node-RED** indicator itself: `useLiveBuffer`
+treats a reading as stale once no new timestamp has arrived for 3 poll
+intervals — no dedicated "Node-RED heartbeat" endpoint is needed.
+
+### `GET /api/forecast`
+
+The current damped-trend (Holt's Linear / ETS) forecast per metric:
+`{ <metric>: { level, trend, forecast, lowerBound, upperBound } }` — one step
+ahead; the Predictions page extrapolates this across a 4-hour horizon
+client-side.
+
+### `GET /api/trend`
+
+Short-horizon (Mann-Kendall/Theil-Sen) rate-of-change classification per
+metric: direction, magnitude label, slope, significance.
+
+### `GET /api/drift`
+
+A two-sample z-test comparing a recent window against a longer reference
+window per metric — flags a structural shift to a new operating level.
+
+### `GET /api/whoami`
+
+Echoes the Authentik identity attached to the request (username, email,
+groups), or all-`null` fields for direct/dev access with no forward-auth
+identity.
+
+### `GET /api/pdm/fault-events` · `GET /api/pdm/fault-events/:id` · `GET /api/pdm/fault-events/stats`
+
+Lists/reads fault-event rows produced by the PdM Tier-1 rule engine — `id`,
+`status` (`PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A`), `confidence`
+(`LOW`/`MEDIUM`/`HIGH`), `triggeredRules`, `detectedAt`, and review fields
+once reviewed. `/stats` returns a confidence×outcome agreement breakdown.
+
+### `PATCH /api/pdm/fault-events/:id`
+
+Human-in-the-loop review: records `status` (`CONFIRMED`/`REJECTED`),
+`faultType`, `rootCause`, `resolution`, `notes`, and an optional `faultEnd`.
+Gated by `requireGroup('pdm-reviewers')` when the request carries an
+Authentik identity. See `server/utils/pdmReviewValidation.js` for the exact
+per-status required fields.
 
 ---
 
-## Fault Prediction Pipeline (In Progress)
+## Fault Detection & Prediction Pipeline
 
-**Status:** Phases 1–3 complete. ML model training gated on data collection milestone.
-See `FAULT_PREDICTION_PLAN.md` for detailed phases, rationale, and progress tracking.
+**Status:** Tier-1 rule-based fault detection with human-in-the-loop review
+is live in production (the `pdm/` service, the `fault_events` table, and the
+Predictions page's Fault Detection / Needs Review tabs). Short-horizon
+statistical forecasting (damped-trend ETS, `GET /api/forecast`) is also live.
+A trained ML classifier — the original scope of "Phases 4-6" below — remains
+future work, gated on fault-episode volume. See `FAULT_PREDICTION_PLAN.md`
+for the full historical phase plan.
 
-### What's been implemented
+### History (Phases 1-3, complete)
 
 **Phase 1 — Fault-type diversity** (commit `048b7fe`)
 - Node-RED now injects one of three realistic failure signatures (THERMAL, CAVITATION,
@@ -520,15 +595,26 @@ See `FAULT_PREDICTION_PLAN.md` for detailed phases, rationale, and progress trac
 - Script: `node server/scripts/evaluateFaultPrediction.js` — prints current episode
   count and blocks model work until the gate clears.
 
-### Phases 4–6 (planned)
+### What replaced the original Phase 4-6 plan
 
-After reaching ~100–200 fault episodes (estimated 3–6 days of continuous runtime):
+The original plan called for populating a `PredictPage` UI and a dedicated
+`/api/predict` endpoint once ~100-200 fault episodes had accumulated. That
+scope was superseded by two things that shipped instead of waiting on a
+trained model:
 
-- **Phase 4** — Candidate model selection (SVM, RF, temporal CNN)
-- **Phase 5** — Hyperparameter tuning & lead-time optimization
-- **Phase 6** — Model integration (PredictPage UI population, `/api/predict` endpoint)
+- **Tier-1 rule engine + HITL review** (`pdm/`, `fault_events`,
+  `PATCH /api/pdm/fault-events/:id`) — a working, auditable detection loop
+  that flags threshold/rate-of-change excursions and routes them to an
+  engineer for confirm/reject, rather than waiting on model training.
+- **ETS statistical forecasting** (`GET /api/forecast`) — a working
+  short-horizon outlook per metric, extrapolated to 4 hours on the
+  Predictions page's Forecast tab.
 
-Current data collection baseline (2026-07-13): 23 FAULT episodes across 909 rows.
+A trained classifier (SVM/RF/temporal CNN, per the original phase plan) is
+still open work; see `FAULT_PREDICTION_PLAN.md` and
+`server/scripts/evaluateFaultPrediction.js` for the evaluation-gate mechanics
+that would still apply — `checkEvaluationGate()` still requires ≥100 fault
+episodes before any model can be trained or evaluated.
 
 ---
 
@@ -595,55 +681,41 @@ tab) and a palette of nodes down the left side.
 | | |
 |---|---|
 | **Category** | Function |
-| **Purpose** | Runs arbitrary JavaScript. Here it builds one fake sensor reading. |
-| **Why it's needed** | This is where the actual simulation logic lives — random values within realistic physical ranges. |
-| **Configuration** | The code below is pasted into the node's "Function" tab. |
+| **Purpose** | Runs arbitrary JavaScript. Here it builds one simulated pump reading. |
+| **Why it's needed** | This is where the actual simulation logic lives — not independent random draws, but a persistent virtual pump model, so the 6 metrics move together the way real telemetry does. |
+| **Configuration** | The full code lives in `flow.json`; the walkthrough below covers its structure rather than reproducing all ~80 lines inline. |
 
-**Full code** (also embedded in `flow.json`):
-```javascript
-// Generate one simulated sensor reading.
-// rand() returns a value in [min, max] rounded to 1 decimal place.
-function rand(min, max) {
-    return Math.round((Math.random() * (max - min) + min) * 10) / 10;
-}
+**How it works, conceptually** (full code in `node-red/flow.json`'s
+`gen_reading` node):
 
-msg.payload = {
-    temperature: rand(20, 35),   // degrees Celsius
-    humidity: rand(40, 80),      // percent
-    pressure: rand(980, 1040),   // hectopascals (hPa)
-    light: Math.random() > 0.5,  // random on/off
-    timestamp: new Date().toISOString()
-};
-
-// Tell the backend the body is JSON so Express parses it correctly.
-msg.headers = { "Content-Type": "application/json" };
-
-return msg;
-```
-
-**Line-by-line:**
-- `function rand(min, max) {...}` — a small helper that scales
-  `Math.random()` (which returns 0–1) into the given range and rounds to one
-  decimal place, so values look like real sensor precision (e.g. `24.6`, not
-  `24.638291...`).
-- `msg.payload = {...}` — every Node-RED message carries its data in
-  `msg.payload`. We overwrite it entirely with our reading object.
-- `temperature/humidity/pressure` — each calls `rand()` with the physical
-  range specified in the assignment brief.
-- `light: Math.random() > 0.5` — a coin flip; `true` about half the time.
-- `timestamp: new Date().toISOString()` — the current instant as an ISO-8601
-  string, e.g. `"2026-07-05T10:00:00.000Z"` — exactly the format our backend
-  expects.
-- `msg.headers = {...}` — the next node (`http request`) reads this to set the
-  outgoing request's `Content-Type` header, so Express's `express.json()`
-  middleware parses the body correctly.
-- `return msg;` — every function node must return the (possibly modified)
-  message to pass it along the wire.
-
-**Expected debug output** (see node 4 below) for one tick might look like:
-```json
-{ "temperature": 24.6, "humidity": 55.2, "pressure": 1013.1, "light": true, "timestamp": "2026-07-05T10:00:00.000Z" }
-```
+1. **Persistent state across ticks.** Unlike `msg`, Node-RED's `context`
+   object survives between function calls, so the node keeps a `state`
+   object (`load`, `regime`, `faultType`, …) instead of drawing fresh random
+   numbers each second.
+2. **`load`** (0–1, "how hard the pump is working") random-walks with mean
+   reversion toward a regime-specific target — this is what gives every
+   metric real momentum instead of jumping between unrelated values tick to
+   tick.
+3. **Regime transitions.** Mostly `RUNNING`; small per-tick probabilities
+   flip it into a `FAULT` episode (15-40 ticks, picking one of `THERMAL` /
+   `CAVITATION` / `BEARING`) or a `STOPPED` episode (20-60 ticks), then back
+   to `RUNNING`.
+4. **Per-fault-type metric profiles.** Each fault type biases a different
+   subset of the 6 metrics — e.g. `THERMAL` spikes `motorTemp` and sags
+   `rpm`; `CAVITATION` collapses `suctionPressure` and `flowRate`; `BEARING`
+   spikes `vibration` and destabilizes `rpm` — scaled by a severity ramp that
+   climbs across the episode.
+5. **Output shape:**
+   ```json
+   { "flowRate": 212.4, "rpm": 2950, "vibration": 3.12, "suctionPressure": 1.85,
+     "dischargePressure": 8.6, "motorTemp": 68.2, "status": "RUNNING",
+     "faultType": null, "timestamp": "2026-08-11T14:00:00.000Z" }
+   ```
+   `status` is `RUNNING` | `STOPPED` | `FAULT`; `faultType` is only set while
+   `status === "FAULT"`.
+6. **`msg.headers = { "Content-Type": "application/json" }`** — read by the
+   next node (`http request`) so Express's `express.json()` middleware parses
+   the body correctly.
 
 #### 3. `http request` — "POST /api/data"
 
@@ -677,16 +749,40 @@ the new `msg.payload` flowing into the next node.
   "success": true,
   "data": {
     "id": 87,
-    "temperature": 24.6,
-    "humidity": 55.2,
-    "pressure": 1013.1,
-    "light": true,
-    "timestamp": "2026-07-05T10:00:00.000Z"
+    "flowRate": 212.4,
+    "rpm": 2950,
+    "vibration": 3.12,
+    "suctionPressure": 1.85,
+    "dischargePressure": 8.6,
+    "motorTemp": 68.2,
+    "status": "RUNNING",
+    "faultType": null,
+    "timestamp": "2026-08-11T14:00:00.000Z",
+    "provenance": "MEASURED",
+    "physicsValid": true
   }
 }
 ```
 Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 — generate → send → store — is working end to end.
+
+#### 5. Resilience: `catch` → `retry with backoff` → `delay`
+
+Three additional nodes handle a failed `POST /api/data` call rather than
+silently dropping that tick's reading:
+
+| | |
+|---|---|
+| **`catch`** | Scoped only to the `http request` node (`senderr: true` on that node is what makes failures reach the catch, rather than crashing the flow). Receives the *original* message that entered the failing node — `msg.payload` is still the reading object, not a response body. |
+| **`retry with backoff (max 3)`** | Increments `msg.retryCount`; gives up (and logs a warning) after 3 attempts, otherwise passes the message on. |
+| **`delay`** | Waits ~1s (with jitter) before feeding the message back into the same `http request` node. |
+
+This absorbs transient failures — a backend restart, a momentary network
+blip — that a fire-and-forget POST would otherwise lose outright. A sustained
+outage longer than ~3 retry cycles still drops readings for that window,
+which is why the dashboard treats a stale live feed as a real condition to
+surface (see [Live-data staleness](#live-data-staleness)), not something to
+paper over.
 
 ### Step 4 — Deploy and verify
 
@@ -708,7 +804,7 @@ Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 | Inject node fires once, then never again | "Repeat" left as "none" | Edit the inject node → set Repeat → "interval" → every 1 second |
 | `http request` node shows a red triangle / "error" | Backend isn't running, or wrong port/URL | Start the backend first; confirm the URL is exactly `http://localhost:3000/api/data` |
 | Debug panel shows nothing | Debug node is disabled, or wired to the wrong output | Click the small button on the debug node to toggle it active (green) |
-| Backend returns 400 "Invalid sensor data" | Function node's ranges were edited to something out of bounds | Keep temperature 20–35, humidity 40–80, pressure 980–1040, or widen the ranges in `server/utils/validation.js` to match |
+| Backend returns 400 "Invalid sensor data" | A required field is missing or non-numeric | Check `server/utils/validation.js`'s `NUMERIC_FIELDS`/`VALID_STATUSES`/`VALID_FAULT_TYPES` — every field the flow's `function` node emits must be present and correctly typed |
 | CORS error mentioned in browser console | You're calling the API from a page whose origin isn't allowed | Not applicable to Node-RED itself (server-to-server has no CORS), but if you build a browser-based simulator instead, make sure `CLIENT_ORIGIN` in `server/.env` matches |
 | Node-RED changes don't seem to apply | Forgot to click **Deploy** after editing | Always click the red Deploy button after any change |
 
@@ -716,42 +812,46 @@ Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 
 ## End-to-End Data Flow Walkthrough
 
-1. **Node-RED generates sensor data.** The `inject` node fires once per
-   second, triggering the `function` node to build a random reading object.
-2. **Node-RED sends an HTTP POST request.** The `http request` node POSTs that
-   JSON object to `http://localhost:3000/api/data`.
+1. **Node-RED generates a reading.** The `inject` node fires once per second,
+   triggering the `function` node to advance the virtual pump model one tick
+   and build a reading object.
+2. **Node-RED sends an HTTP POST request.** The `http request` node POSTs
+   that JSON object to `/api/data` (retried with backoff on failure — see
+   the resilience nodes above).
 3. **Express receives the request.** `app.js` routes it through CORS,
    `express.json()` (parses the body), the latency timer, then to
    `routes/index.js`, which maps `POST /data` to the validation middleware and
    `dataController.createReading`.
-4. **The backend validates the data.**
-   `middleware/validateReading.js` calls `utils/validation.js`, rejecting the
-   request with `400` if any field is missing, non-numeric, or out of its
-   physical range.
-5. **SQLite stores the reading.** `services/sensorService.js` normalizes the
-   payload (booleans → 0/1, fills in a timestamp if missing) and calls
-   `models/sensorModel.js`'s `insertReading()`, which runs a prepared `INSERT`
-   statement against `data.db`.
-6. **React requests live and historical data.** Independently of ingestion,
-   the dashboard's `hooks/useSensorData.js` hooks (`useLiveData`, `useHistory`,
-   `useStats`, `useHealth`) call `services/api.js`, which calls the
-   corresponding `GET` endpoints on a timer (`usePolling.js`).
-7. **The backend returns JSON responses.** Each controller
-   (`liveController`, `historyController`, `statsController`,
-   `healthController`) calls the service layer, which calls the model layer,
-   and shapes a consistent `{ success, data }` envelope.
-8. **React updates the dashboard cards.** `useLiveData`'s new data flows into
-   `DashboardPage.jsx` → `SensorCardGrid` → each `SensorCard`, which detects
-   the value changed (via a `useRef` comparison) and plays a brief pulse
-   animation.
-9. **React updates the charts.** The same live reading is appended to a
-   rolling 30-point window per metric (`DashboardPage.jsx`'s `series` state),
-   which `LiveChart` (Chart.js) redraws with animation disabled for an instant,
-   scrolling feel.
-10. **React refreshes the historical table.** Every 5 seconds, `useHistory`
-    fetches the latest 100 rows; `HistoryTable` re-applies the user's current
-    search/sort/pagination on the client side, so the view stays consistent
-    even as new rows arrive underneath.
+4. **The backend validates the data.** `middleware/validateReading.js` calls
+   `utils/validation.js`, rejecting the request with `400` if any field is
+   missing or the wrong type, or `status`/`faultType` isn't one of the
+   allowed enum values.
+5. **The preprocessing pipeline runs.** `server/preprocessing/pipeline.js`
+   physics-checks the reading, gap-fills missing metrics, Hampel-caps
+   outliers, and rolls the reading into the current one-minute
+   `processed_telemetry` aggregate.
+6. **PostgreSQL/TimescaleDB stores both layers.** `services/sensorService.js`
+   normalizes the payload and calls `models/sensorModel.js`'s
+   `insertReading()`; the processed one-minute window is written by
+   `processedService.js` once it closes.
+7. **The PdM service scores each closed window.** `services/pdmService.js`
+   POSTs the closed window to the Python Tier-1 rule engine (`pdm/`); a
+   flagged verdict creates or extends a `fault_events` row via
+   `faultEventService.js`.
+8. **React requests live and historical data.** Independently of ingestion,
+   `App.jsx` and each page call `api/client.js` through `usePolling`/
+   `useLiveBuffer`, hitting the corresponding `GET` endpoints on their own
+   cadence (`/api/live` at 1 Hz; others every 15s-5min).
+9. **The backend returns JSON responses.** Each controller calls the service
+   layer, which calls the model layer, and shapes a consistent
+   `{ success, data }` envelope.
+10. **React updates the dashboard.** `OverviewPage`'s live buffer drives the
+    health gauge, alarm panel, and per-metric spark cards; `AnalyticsPage`
+    and `PredictionsPage` redraw their hand-built SVG charts from their own
+    polled data; a stale/missing feed flips the whole page into the
+    no-live-data state described in
+    [Live-data staleness](#live-data-staleness) rather than freezing on old
+    numbers.
 
 ---
 
@@ -759,34 +859,47 @@ Seeing `"success": true` and an incrementing `id` confirms the whole pipeline
 
 | Problem | What you'll see | Fix |
 |---|---|---|
-| Backend offline | Dashboard shows an "Backend offline" banner; Backend indicator turns red | Start the server: `cd server && npm run dev` |
-| SQLite unavailable | `/api/health` returns `503` with `"database": "unavailable"` | Check the `DB_PATH` in `server/.env` is writable; ensure no other process has locked `data.db` |
-| Node-RED disconnected | Node-RED indicator turns red while Backend/Database stay green | Deploy the flow in Node-RED again; confirm the `inject` node's Repeat is set |
-| `ECONNREFUSED` from the `http request` node, backend confirmed running | You're running Node-RED **inside Docker** (stack trace shows a path like `file:///usr/src/node-red/...`), so `localhost` inside the container refers to the container itself, not your host machine | In the "POST /api/data" node, change the URL from `http://localhost:3000/api/data` to `http://host.docker.internal:3000/api/data` (Docker Desktop's special DNS name for reaching the host), then Deploy again |
-| Invalid sensor data (400) | Node-RED's `http request` node shows an error status | Check the function node's generated ranges match `server/utils/validation.js`'s `RANGES` |
+| Backend offline | Dashboard shows the "No live data from the gateway" banner; Sidebar's connection dot turns red | Start the server: `cd server && npm run dev` |
+| Database unavailable | `/api/health` returns `503` with `"database": "unavailable"` | Confirm PostgreSQL/TimescaleDB is running and `DATABASE_URL` in `server/.env` is correct (`docker compose up postgres` for local dev); check migrations were applied (`npm run migrate:up`) |
+| Fault-review queue stays empty | Predictions → Needs Review shows "Queue clear" even though thresholds are clearly being exceeded | The PdM service (`pdm/`) isn't running or isn't reachable — the backend fails the `/score` call silently (logged, not fatal). Start it per [Running the PdM Service](#running-the-pdm-service) and confirm `PDM_SERVICE_URL` points at it |
+| Node-RED disconnected | The live feed goes stale after a few seconds even though the backend is up | Deploy the flow in Node-RED again; confirm the `inject` node's Repeat is set to "interval" |
+| `ECONNREFUSED` from the `http request` node, backend confirmed running | Running Node-RED **natively** while `flow.json` still targets the Compose DNS name `backend`, or vice versa | See the Docker/native URL note in [Running Node-RED](#running-node-red) — the URL must match how Node-RED is actually deployed |
+| Invalid sensor data (400) | Node-RED's `http request` node shows an error status | Check `server/utils/validation.js`'s `NUMERIC_FIELDS`/`VALID_STATUSES`/`VALID_FAULT_TYPES` against what the `function` node emits |
 | Empty history / "No readings yet" | Normal on first run | Start Node-RED so readings begin flowing |
 | CORS error in browser console | Dashboard requests fail, console shows a CORS message | Make sure `client/.env`'s `VITE_API_URL` origin matches `server/.env`'s `CLIENT_ORIGIN` (default `http://localhost:5173`) |
-| Network error / timeout | Dashboard hooks show `error`, stale data stays on screen | Confirm the backend is reachable at the configured `VITE_API_URL` and no firewall is blocking port 3000 |
+| Network error / timeout | Dashboard shows the no-live-data banner, `usePolling` calls reject | Confirm the backend is reachable at the configured `VITE_API_URL` and no firewall is blocking port 3000 |
 
 ---
 
 ## Future Work
 
-**High priority (blocks fault-prediction model):**
-- Continue collecting fault episodes (target: ~100–200) to clear the evaluation gate
-  and enable Phase 4 (model selection & hyperparameter tuning).
+**Already done, previously listed here as future work:**
+- ~~Docker Compose to spin up the stack~~ — `docker-compose.yml` now runs
+  postgres, pdm, backend, client, node-red, Traefik and Authentik together.
+- ~~Authentication on the ingestion/review endpoints~~ — Authentik
+  forward-auth now fronts the dashboard, and `PATCH /api/pdm/fault-events/:id`
+  is gated to the `pdm-reviewers` group when an identity is present.
+- ~~CSV/JSON export from the Reports page~~ — implemented client-side (CSV,
+  Excel via SpreadsheetML, and a PDF print view), generated from the
+  `/api/history/series` endpoint with no dedicated export endpoint needed.
+
+**High priority (blocks a trained fault-prediction model):**
+- Continue collecting fault episodes (target: ~100–200) to clear the
+  evaluation gate and enable model selection & hyperparameter tuning — see
+  [Fault Detection & Prediction Pipeline](#fault-detection--prediction-pipeline).
 
 **Medium priority (production readiness):**
-- **Server-Sent Events (SSE) or WebSockets** instead of polling, for instant push
-  updates with less network chatter (currently 1s/5s poll rates are adequate for
-  a university demo, but a real control room would benefit from sub-second latency).
-- **Authentication** on the ingestion endpoint so only trusted gateways can POST readings.
-- **Docker Compose** to spin up backend + Node-RED + client with one command.
-- **Configurable alert thresholds** (e.g. flag motorTemp > 85°C) surfaced as
-  dashboard notifications (currently thresholds live in `server/config/thresholds.js`).
-- **Data retention/rollup jobs** to downsample very old readings once the table grows large
-  (currently unbounded; see SQLite's `PRAGMA auto_vacuum` for cleanup options).
-
-**Nice to have (UX):**
-- Dark/light theme toggle persistence (partially implemented via `useTheme` hook).
-- CSV/JSON export from the Reports page history table (UI button exists, backend endpoint needed).
+- **Server-Sent Events (SSE) or WebSockets** instead of polling, for instant
+  push updates with less network chatter (current poll rates — 1s for live
+  data, 15s-5min for everything else — are adequate for a university demo,
+  but a real control room would benefit from sub-second latency).
+- **User-editable alert thresholds** — currently a static config file
+  (`server/config/thresholds.js`, mirrored in `client/src/utils/constants.js`)
+  rather than something a reviewer can adjust from the UI.
+- **TimescaleDB retention/compression policies** to downsample or roll up
+  very old raw readings once the table grows large (currently unbounded; see
+  TimescaleDB's `add_retention_policy`/`add_compression_policy`).
+- **Frontend lint tooling** — `client/` has no ESLint config; adding
+  `eslint-plugin-react-hooks` and `eslint-plugin-jsx-a11y` would catch hook
+  and accessibility regressions automatically rather than relying on manual
+  review.

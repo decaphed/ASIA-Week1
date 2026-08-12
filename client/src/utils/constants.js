@@ -1,144 +1,83 @@
 // ─────────────────────────────────────────────────────────────────────────
-// constants.js — shared configuration values.
+// constants.js — metric catalogue, alarm bands, and status palette.
+//
+// THRESHOLDS are PORTED from server/config/thresholds.js (client and server
+// do not share a module boundary). Keep the two in sync when bands change.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const POLL_INTERVALS = {
-  live:      1000,
-  stats:     5000,
-  health:    5000,
-  history:   5000,
-  forecast:  15000,
-  drift:     15000,
-  trend:     15000,
-  processed: 15000,
-  series:    60000,
-  summary:   60000,
-  pdm:       30000,
-};
-
-// 180 = COALESCE_LOOKBACK_WINDOWS (3) × WINDOW_SECONDS (60), hand-copied
-// from server/services/faultEventService.js:20-21. This is a duplicate,
-// not derived — the API doesn't expose the lookback bound anywhere, so if
-// either server constant ever changes this will silently drift and the
-// ONGOING pill will quietly stop matching the server's coalescing window.
-export const ONGOING_WINDOW_SECONDS = 180;
-
-// Above this fraction of a window's samples being reconstructed (not
-// measured), SystemHealthPanel's "Data Reliability" row switches from a
-// quiet "Live" state to flagging the estimate — occasional single-tick
-// gap-fills shouldn't trigger a constant warning.
-export const IMPUTATION_WARN_THRESHOLD = 0.1;
-
-export const CHART_WINDOW = 40;
-
-export const NODE_RED_FRESH_SECONDS = 5;
-
-// ── Pump identity ─────────────────────────────────────────────────────────
-export const PUMP_ID   = 'PUMP-01';
-export const PUMP_NAME = 'Centrifugal Pump Unit 1';
-export const PUMP_AREA = 'Process Line A — Bay 3';
-
-// ── Sensor definitions ────────────────────────────────────────────────────
-// `min`/`max`  → fill-bar operating range (normal envelope)
-// `warnHigh`   → value above which we show a WARNING state (amber)
-// `alarmHigh`  → value above which we show an ALARM state (red)
-// `warnLow`    → value below which we show a WARNING state
-// `alarmLow`   → value below which we show an ALARM state
-// `accent`     → CSS colour class
-export const SENSORS = [
-  {
-    key:       'flowRate',
-    label:     'Flow Rate',
-    shortLabel:'FLOW',
-    unit:      'L/min',
-    min:       50,   max:       300,
-    warnLow:   80,   alarmLow:  60,
-    warnHigh:  270,  alarmHigh: 295,
-    accent:    'flow',
-    prec:      1,
-    desc:      'Volumetric flow through pump',
-  },
-  {
-    key:       'rpm',
-    label:     'Shaft Speed',
-    shortLabel:'RPM',
-    unit:      'rpm',
-    min:       1000, max:       3600,
-    warnLow:   1200, alarmLow:  1050,
-    warnHigh:  3400, alarmHigh: 3550,
-    accent:    'rpm',
-    prec:      0,
-    desc:      'Impeller rotational speed',
-  },
-  {
-    key:       'vibration',
-    label:     'Vibration',
-    shortLabel:'VIB',
-    unit:      'mm/s',
-    min:       0.5,  max:       12,
-    warnLow:   null, alarmLow:  null,
-    warnHigh:  7.1,  alarmHigh: 11.2,
-    accent:    'vibration',
-    prec:      2,
-    desc:      'RMS vibration velocity (ISO 10816)',
-  },
-  {
-    key:       'suctionPressure',
-    label:     'Suction Pressure',
-    shortLabel:'SUCT',
-    unit:      'bar',
-    min:       0.5,  max:       3,
-    warnLow:   0.8,  alarmLow:  0.6,
-    warnHigh:  2.8,  alarmHigh: 2.95,
-    accent:    'pressure-s',
-    prec:      2,
-    desc:      'Pump inlet pressure',
-  },
-  {
-    key:       'dischargePressure',
-    label:     'Discharge Pressure',
-    shortLabel:'DISCH',
-    unit:      'bar',
-    min:       2,    max:       12,
-    warnLow:   3,    alarmLow:  2.2,
-    warnHigh:  10.5, alarmHigh: 11.5,
-    accent:    'pressure-d',
-    prec:      2,
-    desc:      'Pump outlet pressure',
-  },
-  {
-    key:       'motorTemp',
-    label:     'Motor Temp',
-    shortLabel:'TEMP',
-    unit:      '°C',
-    min:       20,   max:       90,
-    warnLow:   null, alarmLow:  null,
-    warnHigh:  75,   alarmHigh: 85,
-    accent:    'temp',
-    prec:      1,
-    desc:      'Motor winding temperature',
-  },
+export const METRICS = [
+  { key: 'flowRate', label: 'Flow Rate', short: 'FLW', unit: 'm³/h', dec: 0 },
+  { key: 'rpm', label: 'Pump Speed', short: 'RPM', unit: 'RPM', dec: 0 },
+  { key: 'vibration', label: 'Vibration', short: 'VIB', unit: 'mm/s', dec: 2 },
+  { key: 'suctionPressure', label: 'Suction Pressure', short: 'SUC', unit: 'bar', dec: 2 },
+  { key: 'dischargePressure', label: 'Discharge Pressure', short: 'DIS', unit: 'bar', dec: 2 },
+  { key: 'motorTemp', label: 'Motor Temp', short: 'TMP', unit: '°C', dec: 1 },
 ];
 
-// ── PdM Fault Review ────────────────────────────────────────────────────
-// Glyph + plain-English label per triggeredRules rule type. Metric label
-// and accent color always come from SENSORS — never re-declared here.
-export const FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING', 'OTHER'];
+export const METRIC_BY_KEY = Object.fromEntries(METRICS.map((m) => [m.key, m]));
 
-export const RULE_TYPE_META = {
-  min:          { glyph: '▼', label: 'below minimum' },
-  max:          { glyph: '▲', label: 'above maximum' },
-  stdDev:       { glyph: '∿', label: 'unstable (std dev)' },
-  rateOfChange: { glyph: '⇗', label: 'rapid rate of change' },
+// Ported from server/config/thresholds.js — warn/alarm bands per metric.
+export const THRESHOLDS = {
+  flowRate: { warnLow: 80, alarmLow: 60, warnHigh: 270, alarmHigh: 295 },
+  rpm: { warnLow: 1200, alarmLow: 1050, warnHigh: 3400, alarmHigh: 3550 },
+  vibration: { warnHigh: 7.1, alarmHigh: 11.2 },
+  suctionPressure: { warnLow: 0.8, alarmLow: 0.6, warnHigh: 2.8, alarmHigh: 2.95 },
+  dischargePressure: { warnLow: 3, alarmLow: 2.2, warnHigh: 10.5, alarmHigh: 11.5 },
+  motorTemp: { warnHigh: 75, alarmHigh: 85 },
 };
 
-// ── Alarm evaluation helper ───────────────────────────────────────────────
-// Returns 'alarm' | 'warn' | 'normal' | 'nodata'
-export function getAlarmState(sensor, value) {
-  if (value === null || value === undefined) return 'nodata';
-  if (sensor.alarmHigh !== null && value >= sensor.alarmHigh) return 'alarm';
-  if (sensor.alarmLow  !== null && value <= sensor.alarmLow)  return 'alarm';
-  if (sensor.warnHigh  !== null && value >= sensor.warnHigh)  return 'warn';
-  if (sensor.warnLow   !== null && value <= sensor.warnLow)   return 'warn';
-  return 'normal';
+// Status palette used across cards, chips and schematic.
+//
+// 'unknown' is deliberately NOT a shade of green: a channel with no reading
+// must never look the same as one confirmed in-band. See statusOf().
+export const SC = {
+  ok: { c: '#177E4D', bg: '#E4F3EB', bd: '#bfe0cd', label: 'Normal' },
+  warn: { c: '#B27400', bg: '#FBF3E0', bd: '#ecd9a8', label: 'Warning' },
+  crit: { c: '#B3282D', bg: '#FBEAE8', bd: '#efc4bf', label: 'Alarm' },
+  unknown: { c: '#5f6f7e', bg: '#eef1f4', bd: '#dde4ea', label: 'No data' },
+};
+
+/**
+ * Classify one value against a metric's band.
+ * @returns 'ok' | 'warn' | 'crit' | 'unknown'
+ *
+ * A missing/NaN reading returns 'unknown', never 'ok' — an absent sensor and
+ * a healthy sensor must not render identically on a monitoring dashboard.
+ */
+export function statusOf(key, value) {
+  if (value == null || Number.isNaN(value)) return 'unknown';
+  const t = THRESHOLDS[key];
+  if (!t) return 'ok';
+  if ((t.alarmHigh != null && value >= t.alarmHigh) || (t.alarmLow != null && value <= t.alarmLow)) return 'crit';
+  if ((t.warnHigh != null && value >= t.warnHigh) || (t.warnLow != null && value <= t.warnLow)) return 'warn';
+  return 'ok';
+}
+
+/** True for statuses representing an actual excursion (not ok/unknown). */
+export function isExcursion(status) {
+  return status === 'warn' || status === 'crit';
+}
+
+// Review outcome pill palette (PENDING_REVIEW / CONFIRMED / REJECTED / N/A).
+export function pillFor(status) {
+  if (status === 'PENDING_REVIEW') return { label: 'PENDING_REVIEW', color: '#8a5f00', bg: '#FBF3E0', border: '#ecd9a8' };
+  if (status === 'CONFIRMED') return { label: 'CONFIRMED', color: '#177E4D', bg: '#E4F3EB', border: '#bfe0cd' };
+  if (status === 'REJECTED') return { label: 'REJECTED', color: '#5f6f7e', bg: '#eef1f4', border: '#dde4ea' };
+  return { label: 'N/A', color: '#8a99a8', bg: '#ffffff', border: '#dde4ea' };
+}
+
+// Fault types accepted by PATCH /api/pdm/fault-events/:id (server enum) with
+// operator-friendly display labels.
+export const FAULT_TYPES = [
+  { value: 'CAVITATION', label: 'Cavitation' },
+  { value: 'BEARING', label: 'Bearing wear' },
+  { value: 'THERMAL', label: 'Motor overheating' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+export const FAULT_TYPE_LABEL = Object.fromEntries(FAULT_TYPES.map((f) => [f.value, f.label]));
+
+export function fmt(v, dec = 0) {
+  if (v == null || Number.isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 }

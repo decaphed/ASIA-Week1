@@ -1,104 +1,91 @@
-// ─────────────────────────────────────────────────────────────────────────
-// App.jsx — the application shell.
-//
-// Lays out the fixed Sidebar + (Topbar over the scrolling page area) and
-// routes between the four pages via the URL hash (useHashRoute). It owns:
-//   • the single /api/health poll and the single /api/live poll — shared by
-//     the Topbar and every page;
-//   • the rolling `series` buffer built from live readings — lifted here so
-//     the chart history survives page switches (pages unmount on navigate);
-//   • the light/dark theme state.
-// ─────────────────────────────────────────────────────────────────────────
-
-import { useEffect, useRef, useState } from 'react';
-import Sidebar from './components/layout/Sidebar.jsx';
-import Topbar from './components/layout/Topbar.jsx';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import Sidebar from './components/Sidebar.jsx';
+import TopBar from './components/TopBar.jsx';
+import Toast from './components/Toast.jsx';
 import OverviewPage from './pages/OverviewPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
-import PredictPage from './pages/PredictPage.jsx';
-import FaultReviewPage from './pages/FaultReviewPage.jsx';
+import PredictionsPage from './pages/PredictionsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
-import ErrorBanner from './components/ui/ErrorBanner.jsx';
-import { useHealth, useLiveData } from './hooks/useSensorData.js';
-import { useHashRoute } from './hooks/useHashRoute.js';
-import { useTheme } from './hooks/useTheme.js';
-import { countAlarms } from './utils/health.js';
-import { CHART_WINDOW, SENSORS } from './utils/constants.js';
-import { formatTime } from './utils/formatters.js';
-
-const PAGES = {
-  overview:  OverviewPage,
-  analytics: AnalyticsPage,
-  predict:   PredictPage,
-  review:    FaultReviewPage,
-  reports:   ReportsPage,
-};
+import { api } from './api/client.js';
+import { usePolling } from './hooks/usePolling.js';
+import { useLiveBuffer } from './hooks/useLiveBuffer.js';
 
 export default function App() {
-  const { route, param } = useHashRoute();
-  const { theme, toggle: toggleTheme } = useTheme();
-  const { data: health, error: healthError } = useHealth(5000);
-  const { data: reading, error: liveError, loading: liveLoading, refresh } = useLiveData(1000);
+  const [page, setPage] = useState('overview');
+  // Navigating from a "review" CTA should land on that tab, not Forecast.
+  const [predictionsTab, setPredictionsTab] = useState('forecast');
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
 
-  // Rolling per-metric series for sparklines & trend charts. Lives here (not
-  // in a page) so navigating between pages doesn't reset chart history.
-  const [series, setSeries] = useState(
-    Object.fromEntries(SENSORS.map((s) => [s.key, []]))
+  const showToast = useCallback((msg, accent = '#8fb8dd') => {
+    setToast({ msg, accent });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 4200);
+  }, []);
+
+  // Ticks at 1 Hz. Only Overview and Reports receive it; Sidebar, TopBar,
+  // Analytics and Predictions are memoised so they don't re-render every
+  // second for data they never display.
+  const live = useLiveBuffer(1000);
+  const liveOk = live.connected && !live.stale;
+
+  const { data: whoamiRes } = usePolling(() => api.whoami(), 60000, []);
+  const identity = whoamiRes?.data ?? null;
+  const reviewer = identity?.username || 'Local Engineer';
+
+  const { data: eventsRes, refresh: refreshEvents } = usePolling(() => api.faultEvents(), 15000, []);
+  const flagged = useMemo(
+    () => (eventsRes?.data ?? []).filter((e) => e.eventType === 'FLAGGED'),
+    [eventsRes]
   );
-  const lastTsRef = useRef(null);
+  const queue = useMemo(() => flagged.filter((e) => e.status === 'PENDING_REVIEW'), [flagged]);
+  const audit = useMemo(() => flagged.filter((e) => e.status !== 'PENDING_REVIEW'), [flagged]);
 
-  useEffect(() => {
-    if (!reading?.timestamp) return;
-    if (lastTsRef.current === reading.timestamp) return;
-    lastTsRef.current = reading.timestamp;
+  const goReview = useCallback(() => {
+    setPredictionsTab('review');
+    setPage('predictions');
+  }, []);
 
-    const t = formatTime(reading.timestamp);
-    setSeries((prev) => {
-      const next = {};
-      for (const s of SENSORS) {
-        next[s.key] = [...prev[s.key], { t, v: reading[s.key] }].slice(-CHART_WINDOW);
-      }
-      return next;
-    });
-  }, [reading]);
-
-  const { alarms, warns } = countAlarms(reading);
-  // Fallback covers stale bookmarks (e.g. the retired #/telemetry route).
-  const Page = PAGES[route] ?? OverviewPage;
-  // Whole-app ambient wash: the chrome itself breathes with plant status,
-  // so an alarm registers in peripheral vision even off the Overview page.
-  const ambientTone = alarms > 0 ? 'danger' : warns > 0 ? 'warn' : 'ok';
+  const onLogout = useCallback(() => {
+    if (identity?.username) {
+      // Authentik forward-auth sign-out, routed by Traefik on this host.
+      window.location.href = '/outpost.goauthentik.io/sign_out';
+    } else {
+      showToast('No SSO session — direct/dev access is not signed in', '#9fb0bf');
+    }
+  }, [identity, showToast]);
 
   return (
-    <div className="app">
-      <div className={`app-ambient app-ambient--${ambientTone}`} aria-hidden="true" />
-      <Sidebar route={route} health={health} healthError={healthError} />
-      <div className="app__main">
-        <Topbar
-          alarms={alarms}
-          warns={warns}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-        />
-        <main className="app__content">
-          {liveError && (
-            <ErrorBanner
-              title="Connection lost — Backend unreachable"
-              message="Cannot reach the API on port 3000. Displaying last known values."
-              onRetry={refresh}
-            />
-          )}
-          <Page
-            reading={reading}
-            series={series}
-            liveLoading={liveLoading}
-            refresh={refresh}
-            health={health}
-            healthError={healthError}
-            param={param}
+    <div style={{ display: 'flex', height: '100vh', background: '#F1F4F8', color: '#1a2530', fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 14, overflow: 'hidden' }}>
+      <Sidebar
+        page={page}
+        onNavigate={setPage}
+        pendingCount={queue.length}
+        connected={liveOk}
+        reviewer={reviewer}
+        onLogout={onLogout}
+      />
+      <main style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+        <TopBar page={page} live={liveOk} pendingCount={queue.length} onOpenReview={goReview} />
+        {page === 'overview' && <OverviewPage live={live} queue={queue} goReview={goReview} />}
+        {page === 'analytics' && <AnalyticsPage />}
+        {page === 'predictions' && (
+          <PredictionsPage
+            tab={predictionsTab}
+            setTab={setPredictionsTab}
+            queue={queue}
+            audit={audit}
+            reviewer={reviewer}
+            showToast={showToast}
+            goReview={goReview}
+            refreshEvents={refreshEvents}
           />
-        </main>
-      </div>
+        )}
+        {page === 'reports' && (
+          <ReportsPage live={live} queue={queue} audit={audit} showToast={showToast} />
+        )}
+      </main>
+      <Toast toast={toast} />
     </div>
   );
 }
