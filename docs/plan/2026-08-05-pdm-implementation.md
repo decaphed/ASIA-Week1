@@ -45,7 +45,9 @@ happening first, or at all. See §7 for the one thing to watch if both land clos
 - **No Tier 2 model training or trained model artifact.** There isn't enough labeled fault
   data yet — that's the entire reason Tier 1 + HITL exists first. `pdm/app/model.py` is
   scaffolded with a clear extension point but ships with no model loaded, and `/score`
-  returns the rule-engine verdict only.
+  returns the rule-engine verdict only. **§10 (added later) starts sketching what eventual
+  Tier 2 training looks like — still discussion-only, not committed, doesn't change this
+  bullet's status today.**
 - **No TimescaleDB / Postgres.** Everything here runs against the current SQLite database.
 - **No multi-pump support.** Same single-stream assumption the rest of the codebase makes
   today (see `docs/plan/2026-08-04-timescaledb-migration.md` §4.5's note on this).
@@ -742,3 +744,328 @@ source to under-sample (§3.3.1). If revisited later, key it off "windows since 
 static `flowRateMean`/`rpmMean` bucket. Re-open this question once real operational
 telemetry exists — it may expose genuinely distinct operating setpoints the simulator
 doesn't model. Not required for this plan's Definition of Done.
+
+---
+
+## 10. [Addendum — discussion only, not committed] Tier 2 retraining via uploaded fault datasets, Python-owned
+
+**Status: exploratory. Nothing below has a work-item breakdown, a DoD checklist entry, or an
+implementation go-ahead. It captures a design conversation held after §1–§9 were written, once
+"how does Tier 2 actually get retrained without drifting" became the live question. §1–§9
+above are unchanged by this section.**
+
+**Note on §0/§7's SQLite assumption:** §1–§9 were written when this repo still ran on
+`better-sqlite3` and explicitly scoped themselves as independent of the (then-hypothetical)
+TimescaleDB migration. That migration has since actually landed — `server/database/db.js` now
+runs on `pg`/Postgres, and `fault_events` itself was ported in
+`server/database/migrations/002_fault_events.up.sql`. This matters for §10.6 point 2 below:
+several of the SQLite-specific constraints §3.4 originally reasoned from (single-writer model,
+no safe second process) no longer apply the same way under Postgres.
+
+### 10.1 The trigger for this section
+
+The operator wants a manual escape hatch: upload a CSV of newly-observed fault data at any
+time and have Tier 2 retrain on it, so the model doesn't go stale between whatever cadence
+HITL naturally produces confirmed `fault_events`. Two decisions were made in discussion,
+recorded here so they don't need re-litigating:
+
+- **Retrain always trains from scratch on the full accumulated corpus, not an incremental
+  fine-tune on just the new upload.** Fine-tuning-only risks catastrophic forgetting of older
+  fault patterns — the whole point of this feature is to *prevent* drift, and training only on
+  the newest data is itself a drift vector.
+- **A retrained candidate is evaluated against a held-out set and compared to the currently
+  live model before promotion — never auto-promoted.** A bad or mislabeled upload should
+  degrade nothing until it's shown to actually help. See §10.5.
+- **Model family stays Random Forest / XGBoost**, per the original scope in this doc's intro —
+  not a sequence model. This resolves what was initially framed as a "will the model be
+  confused by time gaps between faults" worry: see §10.2.
+
+### 10.2 Why the time gap between buffers is a feature-computation concern, not a modeling one
+
+Tier 2, as scoped, trains on **rows, not sequences** — one row per closed window, each row
+already collapsed into the `featureSnapshot` shape this plan's §3.3 defined
+(`precapFeaturesByMetric` + per-metric `metricStats`), with a label attached
+(`faultType`/`status`, or "normal" for a `NEGATIVE_SAMPLE`). Random Forest/XGBoost consume a
+shuffled bag of these rows — there is no notion of "the row before this one" unless a feature
+is explicitly engineered to carry it, which nothing here does. A row from a March bearing
+fault and a row from a July cavitation fault sit next to each other in the training set with
+no more consequence than two unrelated patients' unrelated lab results sitting next to each
+other in a medical dataset. **The model itself cannot be confused by a time gap between
+buffers under this design.**
+
+The gap only matters one step upstream, during **feature computation** — i.e. before a row
+becomes a training example. Any rolling-window/rate-of-change/gap-fill computation run to
+produce a window's features must never let its computation window span two different buffers'
+worth of samples (this was the earlier `bufferId`-as-partition-key discussion). Once that
+computation is done and each window has its finished, fixed-shape feature vector, the buffer
+boundary has served its purpose and the model no longer needs to know about it. Concretely:
+**`bufferId` (§10.3) partitions feature computation; it plays no role in how Random
+Forest/XGBoost consumes the finished rows.**
+
+If this ever moves to a sequence model (LSTM/Transformer/1D-CNN over raw samples) later, this
+conclusion reverses — buffer boundaries would become load-bearing for training itself, not
+just for feature computation, since a sequence model does learn from adjacency/order. Not a
+concern today; flagged here so a future reader doesn't assume this section's reasoning still
+holds if the model family ever changes.
+
+### 10.3 `bufferId` already exists — it's `fault_events.id`
+
+No new ID concept is needed. §3.3's schema already gives every buffer (fault period + 1h
+before + 1h after) a stable identity: `fault_events.id`, with `bufferStart`/`bufferEnd`
+delimiting its extent and `featureSnapshot` already computed per triggering window within it.
+For **internally-sourced** training examples (Tier 1 flags confirmed by HITL, plus
+`NEGATIVE_SAMPLE` rows), `fault_events.id` is the partition key feature computation already
+respects by construction — each row's `featureSnapshot` was computed from exactly one window,
+never spanning across a `fault_events` boundary, because `precapFeatures.js` operates on one
+closed window at a time regardless.
+
+The open question is what identity an **externally-uploaded** buffer gets (§10.4) — it has no
+natural `fault_events.id` unless the upload process is defined to create one.
+
+### 10.4 Resolved: raw sensor readings, Node keeps feature computation — and two separate entry points
+
+**Decided in discussion:** uploaded "new fault data" is raw sensor readings (the same
+6-metric-plus-status shape as `raw_telemetry`), not pre-aggregated features. Node stays the
+sole owner of feature computation (`precapFeatures.js`/`aggregateWindow`/`computeQuality`) —
+the same code already used for Tier 1, per §3.1's "don't recompute what Node already
+produces" reasoning. Python's ML ownership is training and evaluation on the finished,
+fixed-shape feature rows, not feature engineering itself. This resolves the "collides with
+Python-only" tension from the original framing of this question: feature engineering was
+arguably never an ML concern here anyway, since Tier 1's rules consume the exact same
+pipeline output.
+
+**Follow-up discussion surfaced that "new fault data" actually splits into two materially
+different cases, which should be built as two separate entry points into the same corpus
+rather than one upload feature trying to cover both:**
+
+**Entry point 1 — a fault already sitting in `raw_telemetry`, just never flagged or reviewed.**
+The pump was already running under this system's own ingest when the fault happened; Tier 1
+either missed it or wasn't tuned to catch it, or it simply never went through HITL. This data
+has *already* been validated once, at original ingest time (`validator.js`'s physics checks,
+`missing.js`'s gap-fill, `outlier.js`'s capping already ran on it). Re-uploading it as a CSV
+would mean re-parsing and re-validating data this system already trusts — wasted work and a
+second, redundant path next to something §3.3 already solved. Instead, this should be a
+**manual buffer entry** on top of the existing HITL/`fault_events` flow: an operator specifies
+a time range (or the system already has an unreviewed candidate sitting around), a
+`fault_events` row is created/confirmed over that range using the exact `SELECT * FROM
+raw_telemetry WHERE timestamp BETWEEN :bufferStart AND :bufferEnd` reconstruction §3.3 already
+defines, and feature computation runs against already-stored, already-trusted data. No file
+upload, no untrusted-content scanning needed for this path at all.
+
+**Entry point 2 — genuinely external data.** A fault from before this system was deployed,
+from a different site, captured by another tool, anything that never passed through this
+system's own ingest. This has never been validated by anything, so it needs the real
+scan/clean/preprocess/gate pipeline from the earlier upload-gate discussion — Node parses and
+validates the CSV, runs it through the same feature computation, and only the finished feature
+rows (in the identical fixed shape entry point 1 and live Tier 1 both produce) are eligible to
+join the training corpus.
+
+Both entry points should land in the same corpus (§10.5), each row tagged with its
+provenance (`sourceType: TIER1_FLAGGED | MANUAL_BUFFER | EXTERNAL_UPLOAD`) so a bad
+contribution from either path can be traced and excluded without touching the other.
+
+**Resolved: neither entry point goes through HITL's `PENDING_REVIEW` gate.** §3.2's "never
+fabricate confidence it doesn't have" reasoning is *why* Tier 1's automated flags need a human
+reviewer — the rule engine isn't a trustworthy source of ground truth on its own. Entry points
+1 and 2 are the opposite case: a human domain expert is directly asserting "this is a
+[faultType] fault, here is the buffer," not an automated system's guess. Requiring a *second*
+human to redundantly confirm the first human's assertion has little of the same safety value,
+so `MANUAL_BUFFER` and `EXTERNAL_UPLOAD` rows are created with `status = 'CONFIRMED'`
+immediately, `faultType`/`rootCause`/etc. supplied directly by the submitting operator at
+creation time rather than filled in later by a reviewer. `PENDING_REVIEW` stays exclusively
+for Tier 1's automated `FLAGGED` rows, where a genuine second opinion is the point.
+
+This does **not** remove the statistical validation gate from the original upload-gate
+discussion (excessive imputation, excessive outlier-capping, structural checks, etc.) — that
+gate checks data *hygiene* ("is this a clean, well-formed buffer"), which is an orthogonal
+question to "did a human confirm this is really a fault," and applies to both entry points
+regardless of the HITL decision above.
+
+### 10.5 Corpus, merge, and promotion
+
+Building on the earlier discussion (not yet reflected elsewhere in this doc):
+
+- **A persistent training corpus accumulates over time**, one row per window, sourced from (i)
+  confirmed `FLAGGED` `fault_events` rows, (ii) `NEGATIVE_SAMPLE` rows, and (iii) accepted
+  uploaded buffers (once §10.4 is resolved), each row uniformly shaped: `featureSnapshot` +
+  label + `bufferId` (`fault_events.id` for (i)/(ii); an upload-issued id for (iii), see below)
+  + provenance (`uploadId`/`uploadedAt`/`uploadedBy` for uploaded rows, so a bad batch can be
+  traced and excluded later without discarding the whole corpus).
+- **Dedup on `bufferId`**, not on row content — re-uploading a buffer that's already in the
+  corpus (by time range or an explicit re-upload) should update/replace, not duplicate-weight,
+  that buffer's contribution.
+- **Class balance must be watched across the whole corpus, not just within one upload.** If
+  operators only ever upload fault examples (the natural instinct — "here's a new fault"), the
+  corpus's fault:normal ratio drifts over successive retrains even though each individual
+  upload is internally fine. A rejection/warning check belongs at accept-time on the
+  **post-merge corpus balance**, not only on the uploaded file's own internal quality — this
+  is different from, and additional to, the earlier per-file statistical rejection criteria
+  (excessive imputation/capping) discussed for the upload gate itself.
+- **Retrain-and-evaluate, not retrain-and-replace.** A retrain produces a candidate model,
+  scored against a held-out split of the corpus — held out **by buffer**, not by row (splitting
+  individual rows from the same buffer across train/test would leak information, since rows
+  from the same fault period are correlated). This repo already has the right primitive for
+  this: `evaluation/episodes.js`'s `walkForwardSplit`/`checkEvaluationGate`
+  (`MIN_ONSET_EPISODES = 100`) was built for exactly this kind of buffer/episode-aware
+  splitting, currently used for a different evaluation purpose — worth reusing rather than
+  reinventing, once ported to (or called from) Python per whichever option §10.4 resolves to.
+- **Champion/challenger promotion gate.** The candidate's held-out metrics (precision/recall
+  per fault type at minimum, given class imbalance is expected) are compared against the
+  currently-deployed model's metrics on the same held-out split. Promote only if the
+  challenger is at least as good — never blindly promote just because a retrain completed.
+  The previous model artifact is retained so a bad promotion can be rolled back.
+- **Every retrained model artifact should be stamped with the corpus version it trained on**
+  (e.g. a monotonic corpus version or content hash), mirroring `thresholdsVersion`'s already-
+  established purpose in this doc (§3.1.1, §3.3) — reproducibility of "what data produced this
+  model" was already a design value here; retraining doesn't get an exception.
+
+### 10.6 Open questions carried forward
+
+1. ~~§10.4's (a)/(b)/resolution-option choice~~ — **resolved**: raw sensor readings, two
+   separate entry points (manual buffer over existing DB data, vs. external CSV upload)
+   feeding one corpus, neither requiring HITL confirmation (§10.4's later resolution —
+   `CONFIRMED` on creation, `PENDING_REVIEW` stays exclusive to Tier 1's automated flags).
+   **Superseded by §11: feature computation itself moves to Python**, so "Node keeps feature
+   computation" is no longer accurate as written here — see §11 for the corrected ownership.
+2. ~~Does Python gain its own persistent storage for the training corpus~~ — **resolved,
+   revised now that Postgres/TimescaleDB has actually landed (see the note at the top of §10):
+   Python gets a read-only Postgres role against the same database**, not its own storage and
+   not an HTTP export round-trip. §3.4's "stateless, no DB access" decision was reasoned from
+   SQLite's single-writer model specifically for the live, per-window `/score` path — neither
+   constraint applies to an occasional, read-only, batch training query under Postgres, which
+   handles concurrent readers safely. Node remains the **only writer** — `fault_events`,
+   `raw_telemetry`, and the corpus tables are never written by Python, only queried via a
+   role with SELECT-only grants — so §3.4's actual invariant ("Python never writes application
+   data") survives unchanged; only the narrower "no DB access at all" restriction is relaxed,
+   and only for this batch/read path. Whatever model artifacts/training-run metadata Python
+   *does* need to persist (trained model files, run metrics) are a separate concern from the
+   corpus and can live in Python's own store without touching Node's tables at all.
+3. **Statistical rejection thresholds for an uploaded file** (imputation rate, outlier-capping
+   rate, etc.) still need concrete numbers — same open item as the earlier upload-gate
+   discussion, unresolved here too.
+4. **What counts as the label** for supervised training — `fault_events.faultType`, `status`,
+   or something coarser/finer than either.
+5. **Corpus seed state** — there is currently no Tier 2 corpus at all (per §1, Tier 2 has never
+   been trained). The very first accepted upload and/or the first batch of HITL-confirmed
+   `fault_events` effectively *become* the seed corpus; worth being explicit that "merge" is a
+   no-op until a second contribution exists.
+
+---
+
+## 11. [Addendum — discussion only, not committed] Tier 1 feature computation moves to Python
+
+**Status: exploratory, and materially larger in scope than §10.** §10 was about how Tier 2
+gets retrained. This section is about who computes features **at all**, for **every**
+closed window, live — which reaches past PdM into code this doc's original scope (§1–§9)
+never touched: the dashboard, `forecastService`, `driftService`, `trendService`, all of which
+read the same `processed_telemetry` row PdM's `precapFeaturesByMetric` comes from. Decided in
+discussion: yes, move it, full pipeline, not just the PdM-relevant subset — see the reasoning
+trail below for why the narrower option was rejected.
+
+### 11.1 Why "just the PdM subset" was rejected
+
+`precapFeatures.js`, `validator.js`, `outlier.js`, `missing.js`, and `quality.js` aren't
+PdM-specific — they're stages of `preprocessing/pipeline.js`'s single pass over each closed
+window, producing **one** `processed_telemetry` row consumed by the dashboard, forecast,
+drift, and trend, in addition to Tier 1. Porting only "the PdM parts" to Python would mean two
+independently-computed physics-validity flags and two quality scores — one feeding what
+operators see on the dashboard, one feeding what PdM actually acts on, with no guarantee they
+agree. That's the same duplication problem §10.4 already rejected for uploaded data, just
+relocated to live data. The only way to actually eliminate it is for Python to own the whole
+pipeline output, not a slice of it.
+
+### 11.2 The new shape
+
+- **Node** still does raw ingestion (`POST /api/data` unchanged), hard-rejects impossible
+  values at the door (`middleware/validateReading.js`, unaffected — see §11.3), and still
+  buffers incoming samples into windows — grouping samples into "this closes window X" has to
+  happen near the wire regardless of where computation runs.
+- **On window close**, instead of running the pipeline stages locally, Node POSTs a
+  window-close payload to Python: the window's raw samples, plus the last sample of the
+  *previous* window (the one piece of cross-window context `missing.js`'s gap-fill needs for
+  continuity). This keeps Python stateless in the meaningful sense — no server-side memory
+  between requests, Node just hands over the one piece of context needed each time.
+- **Python** runs (ported) gap-fill → physics-validate → impute invalid runs → outlier-cap →
+  aggregate → `precapFeatures` → quality → Tier 1 rule evaluation, and returns both the full
+  `processed_telemetry` row shape and the Tier 1 verdict in one response.
+- **Node** persists the returned row exactly where it does today, and calls
+  forecast/drift/trend/`fault_events` exactly as before — those services don't change, they
+  just now receive a row Python computed instead of Node.
+
+This also strengthens §10: Tier 1 (live) and Tier 2 (training, from either entry point) now
+run through the *same* Python feature-computation function regardless of whether the input is
+a live window or a historical buffer — closing the reuse-analysis question §10 left open
+about whether the corpus needs its own separate re-derivation path. It doesn't, under this
+design; it's the same function, just called with different input.
+
+### 11.3 What this breaks, and needs an explicit decision — not silently accepted
+
+**Isolation is gone, and that was load-bearing on purpose.** §3.4 and §6's risk register
+protected the dashboard/ingestion from a PdM outage *specifically* — "PdM scoring call blocks
+or slows ingestion" and "Python service becomes a second DB writer" are both flagged High
+severity because Python was designed to never be able to take anything else down with it.
+Under this design, `processed_telemetry` itself isn't written without Python — a Python outage
+now stops the dashboard, forecasting, and drift detection too, not just fault-flagging. This
+needs one of:
+  1. **Accept the coupling outright** — Python's uptime becomes as operationally critical as
+     Node's, with monitoring to match, on the theory that eliminating duplication is worth it.
+  2. **Decouple `raw_telemetry` from `processed_telemetry`'s dependency on Python** — raw
+     ingestion keeps flowing regardless (it already doesn't touch Python), and window
+     processing queues/retries against Python rather than blocking, so `processed_telemetry`
+     falls behind during an outage and backfills once Python's back, rather than the whole
+     write path stalling. Closer in spirit to §3.4's original "ingestion must never be
+     blocked" principle, even though the *isolation* guarantee itself is gone either way.
+  3. A Node-side degraded-mode fallback computation used only during an outage — likely not
+     worth it, since it reintroduces exactly the second-implementation risk this migration
+     exists to eliminate, just conditionally.
+  No default is assumed here.
+
+**Ingest-path latency/synchronicity is now a real question.** Today, closing a window and
+computing its `processed_telemetry` row is in-process and synchronous — no network hop,
+cheap. Under this design it's an HTTP call to Python. Whether that call sits inline in the
+`POST /api/data` response path that happens to close a window (adding latency/failure
+exposure to roughly 1-in-60 ingest requests, at the 60-second window cadence) or is decoupled
+into an async job (preserving ingest latency, at the cost of a queue and a new "window pending
+processing" state) is an open design decision, not yet made.
+
+**`ingestLock.js`'s mutex was sized around a fast, synchronous in-process operation.** If
+window-close processing runs under that lock at all going forward, it needs re-evaluating
+against a slower, network-dependent operation — the same question as the point above, restated
+at the concurrency-mechanism level.
+
+**RANGES/physics constants need an actual canonical home now, not just a nice-to-have.**
+`server/utils/validation.js`'s `RANGES` is used by `validator.js` (moving to Python) *and* by
+`middleware/validateReading.js` (hard rejection at ingest, which must stay in Node — a bad
+reading can't wait on a Python round trip before being rejected at the door). So RANGES is
+needed in both languages regardless of this migration, not as a future possibility but as an
+immediate requirement — the "duplicate vs. shared config" question flagged earlier in this
+conversation (for the pump's physics ranges generally) is no longer optional to resolve.
+
+### 11.4 What doesn't change
+
+- Raw ingestion, `raw_telemetry` storage, and hard-rejection of impossible values
+  (`middleware/validateReading.js`) stay in Node — these happen at the point of ingest
+  regardless of where downstream feature computation lives.
+- `fault_events`' schema, the HITL flow, and event coalescing (§3.3) are unaffected — this
+  migration changes *who computes* `processed_telemetry`, not what gets stored about a fault.
+
+### 11.5 Open questions
+
+1. Sync-in-request vs. async/queued window-close processing (§11.3) — no default assumed.
+2. Isolation/degraded-mode strategy during a Python outage (§11.3) — leaning toward option 2
+   (raw ingestion keeps flowing, `processed_telemetry` backfills via retry) as most consistent
+   with this system's existing "ingestion must never be blocked" philosophy, but not committed.
+3. RANGES/physics-constant single source of truth, now unavoidable rather than optional
+   (§11.3).
+4. **Parity risk during the port itself.** Rewriting `missing.js`/`outlier.js`/
+   `aggregation.js`/`precapFeatures.js`/`quality.js`'s exact math in Python (even leaning on
+   `numpy`/`pandas`/`scipy` per the earlier "advantages of Python" discussion) needs to
+   produce bit-for-bit-comparable output to the current JS implementation before cutover —
+   e.g. golden-value test fixtures comparing both implementations on the same historical
+   windows — or this migration introduces the exact drift it exists to eliminate, just once,
+   at cutover, instead of continuously. Not yet scoped as a concrete test plan.
+5. This section, combined with §10, means the eventual work item list for this whole
+   PdM-in-Python effort is substantially larger than §4's original work items (§1–§9) — those
+   assumed Node-owned feature computation throughout and are now partially superseded. Not
+   rewritten here; flagged so a future reader implementing this doesn't work from §4 alone
+   without also reading §10 and §11.
