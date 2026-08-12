@@ -17,10 +17,10 @@ import { THRESHOLDS, SUMMARY_METRICS } from '../config/thresholds.js';
 // Series ranges → { sinceModifier, bucketSeconds }. Bucket sizes are chosen so
 // each range yields ≤ ~170 points: 1h/60=60, 8h/300≈96, 24h/900=96, 7d/3600=168.
 const SERIES_RANGES = {
-  '1h': { sinceModifier: '-1 hours', bucketSeconds: 60 },
-  '8h': { sinceModifier: '-8 hours', bucketSeconds: 300 },
-  '24h': { sinceModifier: '-24 hours', bucketSeconds: 900 },
-  '7d': { sinceModifier: '-7 days', bucketSeconds: 3600 },
+  '1h': { sinceModifier: '1 hours', bucketSeconds: 60 },
+  '8h': { sinceModifier: '8 hours', bucketSeconds: 300 },
+  '24h': { sinceModifier: '24 hours', bucketSeconds: 900 },
+  '7d': { sinceModifier: '7 days', bucketSeconds: 3600 },
 };
 const DEFAULT_SERIES_RANGE = '24h';
 
@@ -28,8 +28,8 @@ const DEFAULT_SERIES_RANGE = '24h';
 // tally. A finer bucket than the series charts use makes each excursion a
 // tighter, more event-like period without being expensive.
 const SUMMARY_RANGES = {
-  '24h': { sinceModifier: '-24 hours', excursionBucketSeconds: 60 },
-  '7d': { sinceModifier: '-7 days', excursionBucketSeconds: 300 },
+  '24h': { sinceModifier: '24 hours', excursionBucketSeconds: 60 },
+  '7d': { sinceModifier: '7 days', excursionBucketSeconds: 300 },
 };
 const DEFAULT_SUMMARY_RANGE = '24h';
 
