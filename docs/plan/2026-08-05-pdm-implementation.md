@@ -1146,11 +1146,33 @@ breakdown, per the "just the Python change for now" decision)
   The lock should guard only the in-memory buffering/classification step; the Python call and
   the resulting DB write happen after it's released. Needs explicit verification this is how
   it's actually implemented, not assumed.
-- `missing.js`, `validator.js`, `outlier.js`, `aggregation.js`, `precapFeatures.js`,
-  `quality.js` themselves are **not deleted** — `server/utils/validation.js`'s hard-rejection
-  path (`middleware/validateReading.js`) and this doc's own §3.1 threshold-sourcing still read
-  from some of this code/its constants; scope the removal precisely to what
-  `pipeline.js` calls for window-close processing, not the whole `preprocessing/` directory.
+- **Correction, verified against the actual import graph (`grep` for every importer of each
+  file) rather than assumed:** the original wording here claimed the whole six-file set (plus
+  their sub-dependencies) stays "because other Node code still reads from some of it." That's
+  only true for one of them. Checked file-by-file:
+  - **`missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`, `quality.js` — each has
+    exactly one importer in the entire codebase: `pipeline.js`.** No other file, and no test
+    file, imports any of them directly. Once Phase 3 removes `pipeline.js`'s local calls to
+    them, they are dead code, not "still legitimately depended on."
+  - **`transition.js`** — imported only by `validator.js` and `missing.js`, both themselves in
+    the orphaned set above. Dies transitively once those two are removed.
+  - **`faultClassifier.js`** — imported only by `missing.js`, likewise in the orphaned set.
+    Dies transitively too.
+  - **`aggregation.js`** is the one genuine exception: its `round2` helper is imported
+    independently by `historicalFeatures.js` (unrelated to PdM), and it has its own test file
+    (`aggregation.dominantFaultType.test.mjs`). This one actually stays, on its own merits —
+    not because of the original blanket reasoning.
+  - `server/utils/validation.js`'s `RANGES`/hard-rejection reasoning was correct as stated —
+    `middleware/validateReading.js` and `middleware/validateProcessed.js` both import it
+    directly, independent of `pipeline.js`. This file stays regardless, unchanged from the
+    original claim.
+  - **Corrected disposition:** delete `missing.js`, `validator.js`, `outlier.js`,
+    `precapFeatures.js`, `quality.js`, `transition.js`, and `faultClassifier.js` once the
+    golden-value parity suite (§11.6.5) has confirmed the Python port and the cutover has
+    landed — not before, since parity testing needs both implementations available to diff
+    against. Keep `aggregation.js` permanently. This replaces the blanket "not deleted" claim
+    with a concrete post-cutover cleanup step; see the new work item in §11.6.3 below and the
+    updated DoD line in §11.7.
 
 **11.6.4 Docker / compose**
 - `docker-compose.yml` / `docker-compose.backend.yml` / `docker-compose.pdm.yml`: no new
@@ -1196,10 +1218,14 @@ breakdown, per the "just the Python change for now" decision)
 - [ ] Backend survives `pdm` being fully stopped during a window close: no crash, no unhandled
       rejection, `raw_telemetry` keeps flowing, the next window processes normally once `pdm`
       is back (§11.6.5)
-- [ ] `missing.js`/`validator.js`/`outlier.js`/`aggregation.js`/`precapFeatures.js`/
-      `quality.js` remain in place for whatever still legitimately depends on them
-      (`middleware/validateReading.js`, this doc's own threshold-sourcing) — not blanket-deleted
-      as part of this migration
+- [ ] Post-cutover cleanup (only after the golden-value parity suite passes and `pipeline.js`
+      is confirmed calling `/process-window` in production): `missing.js`, `validator.js`,
+      `outlier.js`, `precapFeatures.js`, `quality.js`, `transition.js`, and
+      `faultClassifier.js` are deleted — each verified to have zero importers left
+      (`grep` for their filenames across `server/`) before removal. `aggregation.js`,
+      `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and
+      `preprocessing/config.js` remain, each with a verified independent caller outside
+      `pipeline.js`'s removed stage calls
 - [ ] Python unit tests pass for every ported module (§11.6.2)
 - [ ] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
       still holds — this migration adds a read path for §10's corpus, not a write path, and
