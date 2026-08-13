@@ -34,6 +34,22 @@ export async function insertFaultEvent(record) {
 
 /**
  * Try to extend an existing open row instead of inserting a new one.
+ *
+ * The `jsonb_typeof(...) = 'array'` guard exists because a small number of
+ * pre-existing rows in production have `triggeredRules` stored as a jsonb
+ * SCALAR (a bare string) rather than an array — likely inserted by an
+ * older version of faultEventService.js before it consistently
+ * JSON.stringify()'d an actual array before every insert (every current
+ * call site does; see faultEventService.js's recordFlaggedEvent). Without
+ * this guard, jsonb_array_elements_text() throws "cannot extract elements
+ * from a scalar" the moment this query's EXISTS subquery reaches one of
+ * those rows, which fails recordFlaggedEvent() for that window entirely —
+ * observed firing on nearly every flagged window in production. This
+ * guard only prevents the crash (a malformed row is correctly treated as
+ * "doesn't match, don't coalesce into it" rather than aborting the whole
+ * query); it does not repair the malformed data itself — a one-time
+ * backfill/cleanup of those specific rows is a separate follow-up that
+ * needs direct DB access to identify and fix.
  * @returns the extended row's id, or undefined if no open row matched.
  */
 export async function extendOpenEvent({ triggerWindowEnd, triggeredRules, lookbackBound }) {
@@ -46,6 +62,7 @@ export async function extendOpenEvent({ triggerWindowEnd, triggeredRules, lookba
        SELECT fe.id FROM fault_events fe
        WHERE fe.status = 'PENDING_REVIEW'
          AND fe."lastSeenWindowEnd" >= $2
+         AND jsonb_typeof(fe."triggeredRules") = 'array'
          AND EXISTS (
            SELECT 1 FROM jsonb_array_elements_text(fe."triggeredRules") existing
            JOIN jsonb_array_elements_text($3::jsonb) incoming ON existing = incoming

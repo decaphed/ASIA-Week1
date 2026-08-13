@@ -116,8 +116,15 @@ export async function saveProcessedReading(data) {
  * compat POST /api/processed endpoint (processedController.js), so the
  * four-step "save, forecast, drift, trend" sequence exists in exactly one
  * place.
+ *
+ * @param precomputedVerdict a Tier 1 verdict pdm's POST /process-window
+ *   already returned alongside `data` (pipeline.js's window-close call,
+ *   §11.6.3) — passed through so pdmService.js skips its own redundant
+ *   POST /score. The manual/back-compat POST /api/processed path never has
+ *   one, so it's omitted there and pdmService.js falls back to scoring it
+ *   itself, unchanged from before.
  */
-export async function saveAndTrigger(data) {
+export async function saveAndTrigger(data, precomputedVerdict = null) {
   const record = await saveProcessedReading(data);
   try {
     await forecastOnNewRecord(data);
@@ -139,7 +146,7 @@ export async function saveAndTrigger(data) {
     // value PdM needs, for fault_events.processedTelemetryId (§3.4). This
     // try/catch only guards a synchronous throw — pdmService.js's own
     // fire-and-forget POST attaches its own .catch() for the async path.
-    pdmOnNewRecord(data, record.id);
+    pdmOnNewRecord(data, record.id, precomputedVerdict);
   } catch (err) {
     logger.error(`pdmService.onNewProcessedRecord failed: ${err.stack || err.message}`);
   }

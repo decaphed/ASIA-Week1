@@ -149,8 +149,12 @@ async function processClosedWindowViaPython(win) {
   }
 
   try {
-    const { processedRecord } = await res.json();
-    await processedService.saveAndTrigger(processedRecord);
+    const { processedRecord, tier1Verdict } = await res.json();
+    // tier1Verdict: already computed by pdm in the same call — passed
+    // through so pdmService.js's downstream fault_events hook doesn't
+    // redundantly POST /score a second time for data it already scored
+    // (§11.6.3's deferred cleanup item, now done).
+    await processedService.saveAndTrigger(processedRecord, tier1Verdict);
   } catch (err) {
     logger.error(`pipeline: failed to persist Python-computed window (window ${win.windowStart}-${win.windowEnd}): ${err.stack || err.message}`);
   }

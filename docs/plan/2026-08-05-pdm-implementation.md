@@ -1241,19 +1241,16 @@ breakdown, per the "just the Python change for now" decision)
       is back (§11.6.5). Partially covered by the mocked network-failure test above (proves no
       crash/unhandled rejection and `raw_telemetry` writes are unaffected); the "next window
       processes normally once `pdm` is back" half still needs a real integration run.
-- [ ] Post-cutover cleanup (only after the golden-value parity suite passes and `pipeline.js`
-      is confirmed calling `/process-window` in production): `missing.js`, `validator.js`,
-      `outlier.js`, `precapFeatures.js`, `quality.js`, `transition.js`, `faultClassifier.js`,
-      AND `server/scripts/parity/run_js_pipeline.mjs` (plus `tests/parity/test_golden_values.py`/
-      `tests/parity/fixtures.py`, which have nothing left to compare against once the seven
-      files are gone — see the second correction above) are deleted together, in one pass —
-      each verified to have zero importers left (`grep` for their filenames across the whole
-      repo, not just `server/`) before removal. `aggregation.js`, `buffer.js`, `ingestLock.js`,
-      `server/utils/validation.js`, and `preprocessing/config.js` remain, each with a verified
-      independent caller outside `pipeline.js`'s removed stage calls. **Deliberately deferred**:
-      the code rewire above landed without this cleanup step, since deletion should only happen
-      once a real deployment has confirmed the cutover actually works — not from this session's
-      mocked verification alone.
+- [x] Post-cutover cleanup: `missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`,
+      `quality.js`, `transition.js`, `faultClassifier.js`, `server/scripts/parity/
+      run_js_pipeline.mjs`, and `tests/parity/` (`test_golden_values.py`/`fixtures.py`) all
+      deleted together, in one pass, after a real deployment confirmed the cutover working
+      live (multiple windows landing as `preprocessingVersion: 'v3-py'`, a pdm-outage-and-
+      recovery cycle verified against real traffic — not just this session's earlier mocked
+      verification). Zero-importer status re-verified via repo-wide `grep` immediately before
+      deletion. `aggregation.js`, `buffer.js`, `ingestLock.js`, `server/utils/validation.js`,
+      and `preprocessing/config.js` confirmed to remain, each with a verified independent
+      caller outside the deleted files' former call sites.
 - [ ] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
       design, not previously documented): Node's ingest path no longer computes these locally
       per-sample — every row Node writes directly now falls back to the DB defaults
