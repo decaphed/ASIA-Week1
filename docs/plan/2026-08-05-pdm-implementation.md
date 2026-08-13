@@ -1049,23 +1049,158 @@ conversation (for the pump's physics ranges generally) is no longer optional to 
 - `fault_events`' schema, the HITL flow, and event coalescing (§3.3) are unaffected — this
   migration changes *who computes* `processed_telemetry`, not what gets stored about a fault.
 
-### 11.5 Open questions
+### 11.5 Open questions — resolved
 
-1. Sync-in-request vs. async/queued window-close processing (§11.3) — no default assumed.
-2. Isolation/degraded-mode strategy during a Python outage (§11.3) — leaning toward option 2
-   (raw ingestion keeps flowing, `processed_telemetry` backfills via retry) as most consistent
-   with this system's existing "ingestion must never be blocked" philosophy, but not committed.
-3. RANGES/physics-constant single source of truth, now unavoidable rather than optional
-   (§11.3).
-4. **Parity risk during the port itself.** Rewriting `missing.js`/`outlier.js`/
-   `aggregation.js`/`precapFeatures.js`/`quality.js`'s exact math in Python (even leaning on
-   `numpy`/`pandas`/`scipy` per the earlier "advantages of Python" discussion) needs to
-   produce bit-for-bit-comparable output to the current JS implementation before cutover —
-   e.g. golden-value test fixtures comparing both implementations on the same historical
-   windows — or this migration introduces the exact drift it exists to eliminate, just once,
-   at cutover, instead of continuously. Not yet scoped as a concrete test plan.
-5. This section, combined with §10, means the eventual work item list for this whole
-   PdM-in-Python effort is substantially larger than §4's original work items (§1–§9) — those
-   assumed Node-owned feature computation throughout and are now partially superseded. Not
-   rewritten here; flagged so a future reader implementing this doesn't work from §4 alone
-   without also reading §10 and §11.
+1. **Sync-in-request, resolved.** Node calls Python inline, synchronously, when a window
+   closes — same short-timeout pattern already used for the existing PdM `/score` call
+   (§3.4's ~2s budget). No new queue/worker infrastructure.
+2. **On failure or timeout, skip the window — no retry queue, resolved.** The window is
+   logged and dropped: no `processed_telemetry` row is written for it, but `raw_telemetry` is
+   completely unaffected (it never depended on Python). This trades a durable-recovery
+   guarantee for staying at the lowest infrastructure cost — chosen deliberately, given this
+   migration is already being scoped as its own standalone piece of work (see the "just the
+   Python change" framing this section was written under), not bundled with new job/worker
+   infrastructure this codebase doesn't have yet (§4.5's note that no background-job pattern
+   exists here today still applies). A gap in `processed_telemetry` during a Python outage is
+   visible (dashboard shows missing data for that span, same as any other data gap this system
+   already has to tolerate) rather than silently wrong — acceptable for now. A durable
+   retry/backfill mechanism (the rejected "option 2" from §11.3) is a reasonable future
+   enhancement once real operational data shows how often Python actually goes down; not
+   built now.
+3. **RANGES/physics constants — resolved: shared YAML config file.** A single file (e.g.
+   `pump-physics.yaml`) checked into the repo, loaded by both Node and Python at startup —
+   same pattern `thresholds.yaml` already establishes for Tier 1's rule thresholds. No RPC, no
+   startup-order dependency between the two services, no duplicated hand-maintained constants.
+4. **Parity testing — resolved as a required work item, not an open decision.** Before
+   cutover: golden-value test fixtures running real/simulated raw windows through both the
+   current JS pipeline and the Python port, asserting matching output (within float tolerance)
+   across every field — aggregates, `precapFeatures`, quality scores, capped values, gap-fill
+   results. Goes into the work-item breakdown once this section is scoped for implementation.
+5. Scope note, not a decision: this section combined with §10 means the eventual work-item
+   list for the full PdM-in-Python effort is substantially larger than §4's original items
+   (§1–§9), which assumed Node-owned feature computation throughout and are now partially
+   superseded. A future reader implementing this should read §10 and §11 alongside §4, not
+   instead of it.
+
+### 11.6 Work items (§11 only — §10's retraining/upload feature is out of scope for this
+breakdown, per the "just the Python change for now" decision)
+
+**11.6.1 Shared config**
+- New `pump-physics.yaml` (repo root, or a location both `server/` and `pdm/` build contexts
+  can reach) — the physics `RANGES` (min/max per metric) currently hardcoded in
+  `server/utils/validation.js`, extracted into this file, in the same spirit as
+  `thresholds.yaml`'s existing "provisional, labeled, versioned" style.
+- `server/utils/validation.js`'s `RANGES` becomes populated by parsing this file at startup,
+  not a hardcoded object — needs a YAML parser added to Node's dependencies (`server` has none
+  today; `pdm` already depends on `pyyaml`).
+- Both `server/Dockerfile` and `pdm/Dockerfile` need a `COPY` step for this file into their
+  build context (or a shared bind-mount in `docker-compose.yml`, whichever this repo's existing
+  multi-service file-sharing convention favors — check `docker-compose.pdm.yml`/
+  `docker-compose.backend.yml` for precedent before picking).
+
+**11.6.2 Python service (`pdm/app/`)**
+- `pdm/app/preprocessing/` (new subpackage, mirroring `server/preprocessing/`'s module split
+  so the port is traceable file-for-file against the JS original):
+  - `missing.py` — port of `missing.js` (gap detection/fill; needs `prevSample` from the
+    request payload for cross-window continuity, per §11.2).
+  - `validator.py` — port of `validator.js`'s `validatePhysics`, reading `RANGES` from
+    `pump-physics.yaml` (§11.6.1).
+  - `outlier.py` — port of `outlier.js`'s Hampel-filter capping, including the
+    abnormal-operation exclude-mask logic (§10.5's reminder: real fault signal must not be
+    capped away).
+  - `aggregation.py` — port of `aggregation.js::aggregateWindow`.
+  - `precap_features.py` — port of `precapFeatures.js::computePrecapFeatures`.
+  - `quality.py` — port of `quality.js::computeQuality`.
+  - `pipeline.py` — new orchestration (not a port — `server/preprocessing/pipeline.js` is
+    live-stream-stateful per the earlier reuse analysis in this doc; this is a fresh, stateless
+    "run these stages in order over one window's samples" function) tying the above together
+    and calling the already-existing `rules.py` for the Tier 1 verdict.
+- `pdm/app/main.py` — new `POST /process-window` endpoint: body is `{windowSamples,
+  prevSample, dtSec, windowEnd, ...}` (exact shape mirrors what `buffer.js` currently hands to
+  `pipeline.js` internally — needs to be read directly off the current implementation, not
+  guessed); response is `{processedRecord: <full processed_telemetry row shape>, tier1Verdict:
+  {...}}` in one payload, replacing what `/score` did alone before. Whether `/score` is
+  retired or kept as an internal-only path is an implementation-time call, not decided here.
+- `pdm/app/schemas.py` — Pydantic request/response models for `/process-window`, so a shape
+  mismatch with Node fails loudly (same reasoning §3.5 already applies to `/score`).
+- `pdm/tests/` — unit tests per ported module (`test_missing.py`, `test_validator.py`,
+  `test_outlier.py`, `test_aggregation.py`, `test_precap_features.py`, `test_quality.py`),
+  independent of the parity tests in §11.6.5.
+
+**11.6.3 Node service layer**
+- `server/preprocessing/pipeline.js` — the local calls to `missing.js`/`validator.js`/
+  `outlier.js`/`aggregation.js`/`precapFeatures.js`/`quality.js` are replaced with one
+  synchronous HTTP call to `POST /process-window` (short timeout, ~2s, matching the existing
+  `/score` budget per §11.5 item 1). `buffer.js` keeps doing what it does today — grouping raw
+  samples into windows and knowing when one closes — only the *content* of window-close
+  processing moves.
+- **On failure/timeout: log and skip, no retry** (§11.5 item 2) — no `processed_telemetry`
+  insert for that window, and downstream `forecastOnNewRecord`/`driftOnNewRecord`/
+  `trendOnNewRecord`/PdM triggers for that window are skipped entirely (they have nothing to
+  read yet). `raw_telemetry` is written regardless, unaffected by this failure path, same as
+  every other PdM-related failure in this design.
+- **`ingestLock.js` review, called out explicitly because it's easy to get wrong:** the HTTP
+  call to Python must not execute while holding the lock that guards `buffer.js`'s state — if
+  it does, every concurrent ingest request serializes behind one window's Python round-trip,
+  which is a much worse regression than "the one request that closes a window gets slower."
+  The lock should guard only the in-memory buffering/classification step; the Python call and
+  the resulting DB write happen after it's released. Needs explicit verification this is how
+  it's actually implemented, not assumed.
+- `missing.js`, `validator.js`, `outlier.js`, `aggregation.js`, `precapFeatures.js`,
+  `quality.js` themselves are **not deleted** — `server/utils/validation.js`'s hard-rejection
+  path (`middleware/validateReading.js`) and this doc's own §3.1 threshold-sourcing still read
+  from some of this code/its constants; scope the removal precisely to what
+  `pipeline.js` calls for window-close processing, not the whole `preprocessing/` directory.
+
+**11.6.4 Docker / compose**
+- `docker-compose.yml` / `docker-compose.backend.yml` / `docker-compose.pdm.yml`: no new
+  services needed (both already exist from §4.4), but confirm `PDM_SERVICE_URL`'s existing
+  ~2s-timeout fetch call is reused for `/process-window`, not a second, differently-configured
+  HTTP client.
+- `pump-physics.yaml` distribution to both containers (§11.6.1).
+
+**11.6.5 Tests**
+- **Golden-value parity suite** (§11.5 item 4) — the load-bearing test for this whole
+  migration. A fixture set of raw windows (drawn from real `raw_telemetry` history and/or the
+  Node-RED simulator, covering: normal operation, a gap requiring fill, a physics violation, an
+  outlier requiring capping, an abnormal-operation window where capping must NOT occur) run
+  through both the current JS pipeline and the new Python `/process-window` path, asserting
+  matching output within float tolerance on every field — aggregates, `precapFeatures`,
+  quality scores, capped values, gap-filled values. This must pass before cutover, not after.
+- Integration test: force a window close while `pdm` is stopped — confirm `raw_telemetry`
+  still gets the samples, no `processed_telemetry` row is written for that window, no
+  unhandled rejection, and the *next* window (once `pdm` is back) processes normally.
+- Concurrency test: multiple overlapping ingest requests during a window close — confirm
+  ingest latency for requests *not* closing a window is unaffected by the Python round-trip
+  (validates the `ingestLock.js` scoping point above).
+- Confirm forecast/drift/trend/`fault_events` still fire correctly off a Python-sourced
+  `processedRecord`, unchanged from how they fire off a Node-computed one today.
+
+### 11.7 Definition of done
+
+- [ ] `pump-physics.yaml` exists; both Node and Python load `RANGES` from it, not a hardcoded
+      copy in either language (§11.6.1)
+- [ ] `pdm/app/preprocessing/` contains a Python port of every stage `pipeline.js` currently
+      runs (missing, physics validation, outlier capping, aggregation, precap features,
+      quality), plus a new stateless orchestration function (§11.6.2)
+- [ ] `POST /process-window` exists, Pydantic-validated request/response, returns both the
+      full `processed_telemetry` row shape and the Tier 1 verdict in one call (§11.6.2)
+- [ ] Golden-value parity suite passes: Python's output matches the current JS pipeline's
+      output within float tolerance across the fixture set described in §11.6.5, **before**
+      `pipeline.js`'s local stage calls are removed
+- [ ] `pipeline.js` calls `POST /process-window` synchronously in place of local computation;
+      on failure/timeout, logs and skips the window — no `processed_telemetry` row, no
+      downstream trigger calls, `raw_telemetry` unaffected (§11.6.3)
+- [ ] `ingestLock.js`'s critical section verified to exclude the Python HTTP call — confirmed
+      via the concurrency test in §11.6.5, not just code inspection
+- [ ] Backend survives `pdm` being fully stopped during a window close: no crash, no unhandled
+      rejection, `raw_telemetry` keeps flowing, the next window processes normally once `pdm`
+      is back (§11.6.5)
+- [ ] `missing.js`/`validator.js`/`outlier.js`/`aggregation.js`/`precapFeatures.js`/
+      `quality.js` remain in place for whatever still legitimately depends on them
+      (`middleware/validateReading.js`, this doc's own threshold-sourcing) — not blanket-deleted
+      as part of this migration
+- [ ] Python unit tests pass for every ported module (§11.6.2)
+- [ ] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
+      still holds — this migration adds a read path for §10's corpus, not a write path, and
+      doesn't touch this invariant at all for the live `/process-window` call)
