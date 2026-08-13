@@ -57,3 +57,138 @@ class ScoreResponse(BaseModel):
     # Required on every response, flagged or not (§3.2) — Node has no other
     # way to learn which thresholds.yaml revision was active for this verdict.
     thresholdsVersion: str
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /process-window (§11.6.2) — request/response models. WindowSampleIn
+# mirrors the flat raw-sample shape server/preprocessing/buffer.js's
+# WindowState.samples holds (6 metrics + status, plus the provenance/
+# physicsValid/unfilledMetrics annotations pipeline.py's internal audit-
+# window rows carry). extra="ignore": Node's payload may carry additional
+# bookkeeping fields the Python pipeline doesn't need.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class WindowSampleIn(BaseModel):
+    timestamp: str
+    status: Literal["RUNNING", "STOPPED", "FAULT"]
+    faultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING"]] = None
+    flowRate: Optional[float] = None
+    rpm: Optional[float] = None
+    vibration: Optional[float] = None
+    suctionPressure: Optional[float] = None
+    dischargePressure: Optional[float] = None
+    motorTemp: Optional[float] = None
+    provenance: Literal["MEASURED", "IMPUTED"] = "MEASURED"
+    # Only meaningful (and required to be non-None) on prevSample — the
+    # anchor sample's physicsValid must already be known from a prior
+    # window-close call for missing.py/validator.py's transition logic to
+    # be meaningful (§11's cross-window continuity requirement). A real
+    # windowSamples entry naturally omits this (Python computes it fresh).
+    physicsValid: Optional[bool] = None
+    physicsViolations: Optional[list[str]] = None
+    unfilledMetrics: Optional[list[str]] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ProcessWindowRequest(BaseModel):
+    windowSamples: list[WindowSampleIn]
+    prevSample: Optional[WindowSampleIn] = None
+    windowStart: str
+    windowEnd: str
+    mergedSampleCount: int = 0
+    duplicateSampleCount: int = 0
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ProcessedRecordOut(BaseModel):
+    """The full processed_telemetry row shape pipeline.py::process_window
+    builds — enumerated explicitly (not dict[str, Any]) so a field
+    added/renamed/dropped on the Python side fails loudly against this
+    contract, same reasoning as ProcessedRecordIn above."""
+
+    windowStart: str
+    windowEnd: str
+    timestamp: str
+    dominantStatus: Literal["RUNNING", "STOPPED", "FAULT"]
+    dominantFaultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING"]] = None
+    runningSeconds: int
+    faultSeconds: int
+    stoppedSeconds: int
+    sampleCount: int
+    expectedSampleCount: int
+    missingSampleCount: int
+    imputedSampleCount: int
+    physicsImputedCount: int
+    outlierCount: int
+    outliersByMetric: dict[str, int]
+    precapFeaturesByMetric: dict[str, PrecapMetricFeatures]
+    physicsViolationCount: int
+    violationsByMetric: dict[str, int]
+    missingRate: float
+    imputationRate: float
+    physicsImputationRate: float
+    outlierRate: float
+    physicsPassRate: float
+    qualityScore: float
+    qualityLabel: Literal["GOOD", "FAIR", "POOR"]
+    isImputed: bool
+    lateSampleCount: int
+    mergedSampleCount: int
+    duplicateSampleCount: int
+    partiallyImputedCount: int
+    partiallyImputedRate: float
+    abnormalOperationSampleCount: int
+    preprocessingVersion: str
+    preprocessingTimestamp: str
+
+    flowRateMean: float
+    flowRateMedian: float
+    flowRateMin: float
+    flowRateMax: float
+    flowRateStdDev: float
+    flowRateLast: Optional[float] = None
+
+    rpmMean: float
+    rpmMedian: float
+    rpmMin: float
+    rpmMax: float
+    rpmStdDev: float
+    rpmLast: Optional[float] = None
+
+    vibrationMean: float
+    vibrationMedian: float
+    vibrationMin: float
+    vibrationMax: float
+    vibrationStdDev: float
+    vibrationLast: Optional[float] = None
+
+    suctionPressureMean: float
+    suctionPressureMedian: float
+    suctionPressureMin: float
+    suctionPressureMax: float
+    suctionPressureStdDev: float
+    suctionPressureLast: Optional[float] = None
+
+    dischargePressureMean: float
+    dischargePressureMedian: float
+    dischargePressureMin: float
+    dischargePressureMax: float
+    dischargePressureStdDev: float
+    dischargePressureLast: Optional[float] = None
+
+    motorTempMean: float
+    motorTempMedian: float
+    motorTempMin: float
+    motorTempMax: float
+    motorTempStdDev: float
+    motorTempLast: Optional[float] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ProcessWindowResponse(BaseModel):
+    processedRecord: ProcessedRecordOut
+    tier1Verdict: ScoreResponse

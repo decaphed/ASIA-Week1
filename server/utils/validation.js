@@ -12,17 +12,28 @@
 // database.
 // ─────────────────────────────────────────────────────────────────────────
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 // Plausible physical ranges for a pump. Anything outside is almost certainly
 // a bad reading or a bug, so we refuse it. Ranges are wider than the
 // simulator's normal output so occasional fault-condition spikes still pass.
-export const RANGES = {
-  flowRate: { min: 0, max: 500 }, // L/min
-  rpm: { min: 0, max: 5000 }, // revolutions/minute
-  vibration: { min: 0, max: 25 }, // mm/s
-  suctionPressure: { min: 0, max: 10 }, // bar
-  dischargePressure: { min: 0, max: 25 }, // bar
-  motorTemp: { min: 0, max: 150 }, // °C
-};
+// Loaded once at startup from the repo-root pump-physics.yaml — the single
+// source of truth also read by pdm/app/preprocessing/validator.py (docs/plan/
+// 2026-08-05-pdm-implementation.md §11.5 item 3 / §11.6.1) — not a hardcoded
+// copy in this file anymore.
+const PUMP_PHYSICS_PATH = path.join(__dirname, '..', '..', 'pump-physics.yaml');
+
+function loadRanges(filePath = PUMP_PHYSICS_PATH) {
+  const doc = yaml.load(fs.readFileSync(filePath, 'utf8'));
+  return doc.metrics;
+}
+
+export const RANGES = loadRanges();
 
 const NUMERIC_FIELDS = Object.keys(RANGES);
 const VALID_STATUSES = ['RUNNING', 'STOPPED', 'FAULT'];

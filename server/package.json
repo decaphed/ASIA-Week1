@@ -29,10 +29,11 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "js-yaml": "^4.3.1",
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9",
-    "node-pg-migrate": "^7.9.1"
+    "node-pg-migrate": "^7.9.1",
+    "nodemon": "^3.1.9"
   }
 }
