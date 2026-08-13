@@ -19,19 +19,24 @@ const STEP_HOURS = 0.25;
 
 // ─────────────────────────────────────────────────────────────────────────
 // projectForecast — /api/forecast publishes one damped-trend step ahead per
-// metric (level, trend, forecast, lower/upperBound). The design asks for a
-// 4-hour fan, so extrapolate level + trend across the horizon and widen the
-// interval with the square root of the horizon, the standard random-walk
-// growth for an ETS prediction interval.
+// metric (level, trend, forecast, lower/upperBound). entry.trend is the
+// ETS model's per-MINUTE rate (forecastService.js advances level/trend once
+// per minute, on every new processed record — see that file's header). The
+// design asks for a 4-hour fan plotted in HORIZON_STEPS of STEP_HOURS each,
+// so each step is STEP_HOURS*60 minutes of trend, not 1 minute — extrapolate
+// level + trend across the horizon in those units, and widen the interval
+// with the square root of the horizon, the standard random-walk growth for
+// an ETS prediction interval.
 // ─────────────────────────────────────────────────────────────────────────
 function projectForecast(entry) {
   if (!entry || entry.forecast == null) return null;
   const halfWidth = entry.upperBound != null ? entry.upperBound - entry.forecast : 0;
+  const minutesPerStep = STEP_HOURS * 60;
   const median = [];
   const upper = [];
   const lower = [];
   for (let i = 0; i <= HORIZON_STEPS; i++) {
-    const value = entry.forecast + (entry.trend ?? 0) * i;
+    const value = entry.forecast + (entry.trend ?? 0) * i * minutesPerStep;
     const w = halfWidth * Math.sqrt(i + 1);
     median.push(value);
     upper.push(value + w);
@@ -85,7 +90,7 @@ function Tabs({ tab, setTab, pendingCount }) {
   );
 }
 
-function ForecastTab({ forecast, points, metricKey, setMetricKey, goReview }) {
+function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey, goReview }) {
   const metric = METRIC_BY_KEY[metricKey];
   const th = THRESHOLDS[metricKey];
   const projection = useMemo(() => projectForecast(forecast?.[metricKey]), [forecast, metricKey]);
@@ -97,7 +102,15 @@ function ForecastTab({ forecast, points, metricKey, setMetricKey, goReview }) {
     let [mn, mx] = range(all, 0.12);
     if (th?.alarmHigh != null && th.alarmHigh < mx * 1.35) mx = Math.max(mx, th.alarmHigh * 1.04);
 
-    const histW = FW * (history.length / (history.length + HORIZON_STEPS));
+    // Both segments must get width proportional to the real time they span,
+    // not their point count — history points are bucketSeconds apart (5 min
+    // for the 8h series this tab polls) while forecast steps are
+    // STEP_HOURS*60 minutes apart, so an equal-count split would badly
+    // misrepresent which segment covers more real time.
+    const bucketMinutes = (bucketSeconds ?? 300) / 60;
+    const histMinutes = history.length * bucketMinutes;
+    const forecastMinutes = HORIZON_STEPS * STEP_HOURS * 60;
+    const histW = FW * (histMinutes / (histMinutes + forecastMinutes));
     const hp = pts(history, X0, Y0, histW, FH, mn, mx);
     const fp = pts(projection.median, X0 + histW, Y0, FW - histW, FH, mn, mx);
     const up = pts(projection.upper, X0 + histW, Y0, FW - histW, FH, mn, mx);
@@ -106,7 +119,7 @@ function ForecastTab({ forecast, points, metricKey, setMetricKey, goReview }) {
     const ci = crossingIndex(projection.median, th?.alarmHigh);
     const nowValue = history[history.length - 1];
     const hasThresh = th?.alarmHigh != null && th.alarmHigh <= mx && th.alarmHigh >= mn;
-    const spanHours = (history.length * 15) / 60;
+    const spanHours = histMinutes / 60;
     return {
       histPath: line(hp),
       medPath: line(fp),
@@ -130,7 +143,7 @@ function ForecastTab({ forecast, points, metricKey, setMetricKey, goReview }) {
       crosses: ci >= 0 && nowValue < th.alarmHigh,
       crossPoint: ci >= 0 ? fp[ci] : null,
     };
-  }, [points, metricKey, metric, th, projection]);
+  }, [points, bucketSeconds, metricKey, metric, th, projection]);
 
   // Per-channel outlook cards plus the alert copy shown beside the hero chart.
   const outlook = useMemo(() => METRICS.map((m) => {
@@ -696,6 +709,7 @@ function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goRev
           <ForecastTab
             forecast={forecastRes?.data}
             points={points}
+            bucketSeconds={seriesRes?.data?.bucketSeconds}
             metricKey={metricKey}
             setMetricKey={setMetricKey}
             goReview={goReview}
