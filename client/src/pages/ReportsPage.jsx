@@ -300,16 +300,16 @@ function AuditTrail({ audit }) {
           </span>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '90px 120px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', marginTop: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '90px 175px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', marginTop: 8 }}>
         <span>Event</span><span>Outcome</span><span>Fault type</span><span>Root cause</span><span>Resolution</span><span>Reviewed by</span><span>Reviewed at</span>
       </div>
       {rows.length === 0 && <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>No reviews recorded yet.</div>}
       {rows.map((a) => {
         const pill = pillFor(a.status);
         return (
-          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '90px 120px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 13, padding: '12px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '90px 175px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 13, padding: '12px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
             <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: '#33475a' }}>{eventId(a)}</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: pill.color }} />{pill.label}
               </span>
