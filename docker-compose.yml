@@ -39,6 +39,13 @@ services:
     build: ./pdm
     restart: unless-stopped
     # No ports: — internal only.
+    volumes:
+      # Shared physics RANGES (§11.6.1) — pdm/app/physics.py resolves this
+      # to /pump-physics.yaml (three parents up from /app/app/physics.py in
+      # the image). Build-context COPY can't reach this file since it lives
+      # at the repo root, outside ./pdm's build context — bind-mount instead,
+      # same convention as db/init and node-red/flow.json below.
+      - ./pump-physics.yaml:/pump-physics.yaml:ro
     mem_limit: 512m
     cpus: 1.0
     cap_drop:
@@ -63,6 +70,11 @@ services:
       DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://dashboard.home}
       PDM_SERVICE_URL: http://pdm:8000
+    volumes:
+      # Shared physics RANGES (§11.6.1) — server/utils/validation.js resolves
+      # this to /pump-physics.yaml (__dirname/../.. from /app/utils in the
+      # image). Same reasoning as the pdm service's mount above.
+      - ./pump-physics.yaml:/pump-physics.yaml:ro
     restart: unless-stopped
     # Renamed from "server" — see §2/§3. Directory stays ./server.
     # No ports: — Node-RED now runs internally (see node-red service below)
