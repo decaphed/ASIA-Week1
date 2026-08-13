@@ -3,7 +3,7 @@ import Card, { CardLabel, buttonReset } from '../components/Card.jsx';
 import ReviewDrawer from '../components/ReviewDrawer.jsx';
 import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
-import { METRICS, METRIC_BY_KEY, THRESHOLDS, pillFor, fmt } from '../utils/constants.js';
+import { METRICS, METRIC_BY_KEY, THRESHOLDS, pillFor, fmt, AUTO_LABEL_BADGE } from '../utils/constants.js';
 import { pts, line, bandPath, range } from '../utils/geometry.js';
 import {
   eventId, eventTitle, metricsLabel, modelLine, severityOf, sevPill,
@@ -475,10 +475,18 @@ function DetectTab({ queue, audit, stats }) {
               </span>
               <span style={{ color: '#5f6f7e', fontSize: 12 }}>{metricsLabel(d)}</span>
               <span style={{ color: '#5f6f7e', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{shortStamp(d.detectedAt)}</span>
-              <span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '3px 10px', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: pill.color }} />{pill.label}
                 </span>
+                {d.autoLabeled && (
+                  <span
+                    title={`Auto-labeled from fault event #${d.autoLabeledFromEventId}`}
+                    style={{ fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: AUTO_LABEL_BADGE.bg, color: AUTO_LABEL_BADGE.color, border: `1px solid ${AUTO_LABEL_BADGE.border}` }}
+                  >
+                    {AUTO_LABEL_BADGE.label}
+                  </span>
+                )}
               </span>
             </div>
           );
@@ -552,7 +560,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
             </button>
           )}
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '4px 11px', background: '#FBF3E0', color: '#8a5f00', border: '1px solid #ecd9a8' }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B27400' }} />{queue.length} PENDING_REVIEW
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B27400' }} />{queue.length} Pending Review
           </span>
         </div>
       </div>

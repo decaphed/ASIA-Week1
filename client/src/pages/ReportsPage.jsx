@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import Card, { CardLabel, buttonReset } from '../components/Card.jsx';
 import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
-import { METRICS, METRIC_BY_KEY, pillFor, fmt } from '../utils/constants.js';
+import { METRICS, METRIC_BY_KEY, pillFor, fmt, AUTO_LABEL_BADGE } from '../utils/constants.js';
 import { eventId, eventTitle, faultTypeLabel, dotStamp, severityOf, metricsLabel } from '../utils/faultEvents.js';
 
 const RANGES = [
@@ -293,10 +293,10 @@ function AuditTrail({ audit }) {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '3px 10px', background: '#E4F3EB', color: '#177E4D', border: '1px solid #bfe0cd' }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#177E4D' }} />CONFIRMED
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#177E4D' }} />Confirmed
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '3px 10px', background: '#eef1f4', color: '#5f6f7e', border: '1px solid #dde4ea' }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#8a99a8' }} />REJECTED
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#8a99a8' }} />Rejected
           </span>
         </div>
       </div>
@@ -309,15 +309,25 @@ function AuditTrail({ audit }) {
         return (
           <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '90px 120px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 13, padding: '12px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
             <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: '#33475a' }}>{eventId(a)}</span>
-            <span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: pill.color }} />{pill.label}
               </span>
+              {a.autoLabeled && (
+                <span
+                  title={`Auto-labeled from fault event #${a.autoLabeledFromEventId}`}
+                  style={{ fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: AUTO_LABEL_BADGE.bg, color: AUTO_LABEL_BADGE.color, border: `1px solid ${AUTO_LABEL_BADGE.border}` }}
+                >
+                  {AUTO_LABEL_BADGE.label}
+                </span>
+              )}
             </span>
             <span style={{ fontWeight: 500 }}>{faultTypeLabel(a)}</span>
             <span style={{ color: '#5f6f7e', fontSize: 12.5, paddingRight: 10 }}>{a.rootCause || '—'}</span>
             <span style={{ color: '#5f6f7e', fontSize: 12.5, paddingRight: 10 }}>{a.resolution || '—'}</span>
-            <span style={{ fontWeight: 500, fontSize: 12.5 }}>{a.reviewedBy || '—'}</span>
+            <span style={{ fontWeight: 500, fontSize: 12.5 }} title={a.autoLabeled ? `Source: fault event #${a.autoLabeledFromEventId}` : undefined}>
+              {a.autoLabeled ? 'Auto-labeled' : (a.reviewedBy || '—')}
+            </span>
             <span style={{ color: '#5f6f7e', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>{dotStamp(a.reviewedAt)}</span>
           </div>
         );

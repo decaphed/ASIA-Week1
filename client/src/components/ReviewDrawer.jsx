@@ -220,7 +220,7 @@ export default function ReviewDrawer({ event, points, reviewer, onClose, onRevie
               <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 14, fontWeight: 600, color: '#33475a' }}>{eventId(event)}</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 600, borderRadius: 4, padding: '3px 9px', background: sp.bg, color: sp.color }}>{sev}</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: '#FBF3E0', color: '#8a5f00', border: '1px solid #ecd9a8' }}>
-                <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: '50%', background: '#B27400' }} />PENDING_REVIEW
+                <span aria-hidden="true" style={{ width: 5, height: 5, borderRadius: '50%', background: '#B27400' }} />Pending Review
               </span>
             </div>
             <h2 id={titleId} style={{ margin: 0, fontSize: 16, fontWeight: 600, marginTop: 8 }}>{eventTitle(event)}</h2>

@@ -50,16 +50,42 @@ function lookbackBound(windowEndIso) {
   return new Date(Date.parse(windowEndIso) - COALESCE_LOOKBACK_WINDOWS * WINDOW_SECONDS * 1000).toISOString();
 }
 
+/** True if a and b contain exactly the same rule strings, order-independent. */
+function sameRuleSet(a, b) {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((rule) => setB.has(rule));
+}
+
+/**
+ * Auto-labeling: if triggeredRules is an exact-set match for a rule
+ * signature a human has already reviewed and CONFIRMED, a newly-flagged
+ * event can inherit that label instead of going to PENDING_REVIEW (the
+ * user's request — same fault signature shouldn't need re-classifying by
+ * hand every time it recurs). Only matches against human-reviewed rows
+ * ("autoLabeled" = false, enforced in the model query) so a label can never
+ * propagate through a chain of prior auto-labels.
+ * @returns the most recently reviewed exact match, or null.
+ */
+async function findAutoLabelSource(triggeredRules) {
+  if (!triggeredRules.length) return null;
+  const candidates = await model.findRecentConfirmedByRuleCount(triggeredRules.length);
+  return candidates.find((c) => sameRuleSet(triggeredRules, c.triggeredRules)) ?? null;
+}
+
 /**
  * Record a Tier 1 flag: extend an already-open matching event (§3.3.2), or
- * insert a new PENDING_REVIEW row if none is open.
+ * insert a new row if none is open — CONFIRMED and auto-labeled if this
+ * exact rule signature has been human-reviewed before, otherwise
+ * PENDING_REVIEW as usual.
  * @param data flat processedRecord (same shape POSTed to pdm/'s /score)
  * @param processedTelemetryId the triggering window's processed_telemetry.id
  * @param verdict { confidence, triggeredRules, thresholdsVersion }
  */
 export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
   const triggerWindowEnd = data.windowEnd;
-  const triggeredRulesJson = JSON.stringify(verdict.triggeredRules ?? []);
+  const triggeredRules = verdict.triggeredRules ?? [];
+  const triggeredRulesJson = JSON.stringify(triggeredRules);
   const bound = lookbackBound(triggerWindowEnd);
 
   const extendedId = await model.extendOpenEvent({
@@ -68,16 +94,19 @@ export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
     lookbackBound: bound,
   });
   if (extendedId) {
-    return { id: extendedId, coalesced: true };
+    return { id: extendedId, coalesced: true, autoLabeled: false };
   }
 
   const faultStart = triggerWindowEnd;
   const bufferStart = new Date(Date.parse(faultStart) - ONE_HOUR_MS).toISOString();
 
-  const info = await model.insertFaultEvent({
+  const autoLabelSource = await findAutoLabelSource(triggeredRules);
+  const nowIso = new Date().toISOString();
+
+  const record = {
     processedTelemetryId,
     eventType: 'FLAGGED',
-    detectedAt: new Date().toISOString(),
+    detectedAt: nowIso,
     triggerWindowEnd,
     lastSeenWindowEnd: triggerWindowEnd,
     triggeredRules: triggeredRulesJson,
@@ -89,8 +118,24 @@ export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
     bufferStart,
     bufferEnd: null,
     status: 'PENDING_REVIEW',
-  });
-  return { id: Number(info.lastInsertRowid), coalesced: false };
+  };
+
+  if (autoLabelSource) {
+    record.status = 'CONFIRMED';
+    record.faultType = autoLabelSource.faultType;
+    record.rootCause = autoLabelSource.rootCause;
+    record.resolution = autoLabelSource.resolution;
+    record.reviewedBy = 'auto-label';
+    record.reviewedAt = nowIso;
+    record.bufferEnd = new Date(Date.parse(triggerWindowEnd) + ONE_HOUR_MS).toISOString();
+    record.notes = `Auto-labeled: identical trigger signature to fault event #${autoLabelSource.id}`;
+    record.autoLabeled = true;
+    record.autoLabeledFromEventId = autoLabelSource.id;
+    logger.info(`faultEventService: auto-labeled new event from fault event #${autoLabelSource.id} (${record.faultType})`);
+  }
+
+  const info = await model.insertFaultEvent(record);
+  return { id: Number(info.lastInsertRowid), coalesced: false, autoLabeled: !!autoLabelSource };
 }
 
 /**
