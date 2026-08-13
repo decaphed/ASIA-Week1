@@ -1173,6 +1173,19 @@ breakdown, per the "just the Python change for now" decision)
     against. Keep `aggregation.js` permanently. This replaces the blanket "not deleted" claim
     with a concrete post-cutover cleanup step; see the new work item in §11.6.3 below and the
     updated DoD line in §11.7.
+  - **Second correction, found while actually implementing the Phase 3 cutover (not caught by
+    the import-graph grep above, which only checked `server/` source, not `server/scripts/`):**
+    `server/scripts/parity/run_js_pipeline.mjs` — the golden-value parity suite's JS reference
+    harness (§11.6.5), built to run the pre-cutover comparison — imports `validator.js` and
+    `missing.js` directly, and transitively requires `outlier.js`/`precapFeatures.js`/
+    `quality.js`/`transition.js`/`faultClassifier.js` through its own orchestration. **This
+    file is NOT zero-importer just because `pipeline.js` stops calling the seven files
+    directly** — deleting them without also retiring or rewriting `run_js_pipeline.mjs` breaks
+    the parity suite with import errors. It must be removed (its one-time pre-cutover purpose
+    is already served once cutover is confirmed) in the SAME cleanup pass as the seven
+    preprocessing files, not treated as a separate/later step. `tests/parity/
+    test_golden_values.py` and `tests/parity/fixtures.py` should be retired alongside it —
+    once the seven files are gone there is nothing left for this suite to compare against.
 
 **11.6.4 Docker / compose**
 - `docker-compose.yml` / `docker-compose.backend.yml` / `docker-compose.pdm.yml`: no new
@@ -1210,22 +1223,46 @@ breakdown, per the "just the Python change for now" decision)
 - [ ] Golden-value parity suite passes: Python's output matches the current JS pipeline's
       output within float tolerance across the fixture set described in §11.6.5, **before**
       `pipeline.js`'s local stage calls are removed
-- [ ] `pipeline.js` calls `POST /process-window` synchronously in place of local computation;
+- [x] `pipeline.js` calls `POST /process-window` synchronously in place of local computation;
       on failure/timeout, logs and skips the window — no `processed_telemetry` row, no
-      downstream trigger calls, `raw_telemetry` unaffected (§11.6.3)
-- [ ] `ingestLock.js`'s critical section verified to exclude the Python HTTP call — confirmed
-      via the concurrency test in §11.6.5, not just code inspection
+      downstream trigger calls, `raw_telemetry` unaffected (§11.6.3). **Implemented**; verified
+      via `server/scripts/tests/pipelineProcessWindow.test.mjs` (mocked `sensorService`/
+      `processedService`/`fetch`, no live Postgres/pdm needed) — NOT yet verified against a
+      real deployed `pdm` service or a live Postgres integration run; that verification still
+      needs to happen once actually deployed.
+- [x] `ingestLock.js`'s critical section verified to exclude the Python HTTP call — confirmed
+      via the concurrency test in §11.6.5, not just code inspection. **Verified**, but via the
+      mocked test above (a slow mocked `fetch` proven not to block a concurrent non-window-
+      closing `processSample()` call), not the live-traffic concurrency test §11.6.5 originally
+      envisioned. `ingestLock.js` itself was not modified — only what `pipeline.js` places
+      inside vs. outside `withLock()` changed.
 - [ ] Backend survives `pdm` being fully stopped during a window close: no crash, no unhandled
       rejection, `raw_telemetry` keeps flowing, the next window processes normally once `pdm`
-      is back (§11.6.5)
+      is back (§11.6.5). Partially covered by the mocked network-failure test above (proves no
+      crash/unhandled rejection and `raw_telemetry` writes are unaffected); the "next window
+      processes normally once `pdm` is back" half still needs a real integration run.
 - [ ] Post-cutover cleanup (only after the golden-value parity suite passes and `pipeline.js`
       is confirmed calling `/process-window` in production): `missing.js`, `validator.js`,
-      `outlier.js`, `precapFeatures.js`, `quality.js`, `transition.js`, and
-      `faultClassifier.js` are deleted — each verified to have zero importers left
-      (`grep` for their filenames across `server/`) before removal. `aggregation.js`,
-      `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and
-      `preprocessing/config.js` remain, each with a verified independent caller outside
-      `pipeline.js`'s removed stage calls
+      `outlier.js`, `precapFeatures.js`, `quality.js`, `transition.js`, `faultClassifier.js`,
+      AND `server/scripts/parity/run_js_pipeline.mjs` (plus `tests/parity/test_golden_values.py`/
+      `tests/parity/fixtures.py`, which have nothing left to compare against once the seven
+      files are gone — see the second correction above) are deleted together, in one pass —
+      each verified to have zero importers left (`grep` for their filenames across the whole
+      repo, not just `server/`) before removal. `aggregation.js`, `buffer.js`, `ingestLock.js`,
+      `server/utils/validation.js`, and `preprocessing/config.js` remain, each with a verified
+      independent caller outside `pipeline.js`'s removed stage calls. **Deliberately deferred**:
+      the code rewire above landed without this cleanup step, since deletion should only happen
+      once a real deployment has confirmed the cutover actually works — not from this session's
+      mocked verification alone.
+- [ ] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
+      design, not previously documented): Node's ingest path no longer computes these locally
+      per-sample — every row Node writes directly now falls back to the DB defaults
+      (`physicsValid=TRUE`, `provenance='MEASURED'`), regardless of what Python later
+      determines for that sample within its audit window. Verified (via repo-wide grep) that
+      nothing outside the now-orphaned preprocessing files reads either column today — no
+      dashboard/API consumer — so this is not an observed regression, but it is a real,
+      permanent narrowing of `raw_telemetry`'s audit fidelity worth being aware of if a future
+      feature ever wants real per-row physics-validity from the raw table itself.
 - [ ] Python unit tests pass for every ported module (§11.6.2)
 - [ ] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
       still holds — this migration adds a read path for §10's corpus, not a write path, and

@@ -2,260 +2,225 @@
 // pipeline.js — the single public entry point for the preprocessing
 // pipeline: processSample(sample).
 //
+// Cutover (docs/plan/2026-08-05-pdm-implementation.md §11.6.3): window-close
+// computation (gap-fill, physics validation, physics-invalid-run repair,
+// Hampel-filtered outlier capping, aggregation, precap features, quality
+// scoring) no longer runs locally — it's a single synchronous HTTP call to
+// the Python pdm/ service's POST /process-window (§11.2), which returns
+// both the full processed_telemetry row shape and the Tier 1 verdict.
+// Node's job here is now: raw ingestion, event-time windowing/buffering
+// (unchanged, still buffer.js), and persisting whatever Python computed.
+//
+// This means Node no longer generates IMPUTED gap-fill rows at ingest time,
+// and no longer computes physicsValid/physicsViolations locally —
+// raw_telemetry rows Node writes directly fall back to the DB's own
+// defaults (physicsValid=TRUE, provenance='MEASURED'; see
+// server/database/migrations/001_init.up.sql) rather than reflecting a
+// real per-row Node-computed value. Nothing outside the now-retired local
+// preprocessing modules reads those two raw_telemetry columns today
+// (verified against the import graph during Phase 3's design), so this is
+// an accepted, intentional semantic narrowing, not an oversight.
+//
 // Workflow:
 //   1. Classify the incoming sample's timestamp -> buffer.js::classify()
 //      (ACCEPTED | DUPLICATE | MERGED | REJECTED_STALE)
-//   2. Validate physics (with transition context) -> validator.js
-//   3. Store raw sample, tagged with its classification -> sensorService.saveReading
-//   4. DUPLICATE/REJECTED_STALE stop here — stored for audit, never buffered.
-//   5. ACCEPTED/MERGED: gap-fill against the true last accepted sample,
-//      commit into the event-time-windowed buffer -> buffer.js
-//   6. Any window(s) that just closed (0, 1, or several on a multi-boundary
-//      jump) get fully processed: missing-data detection, physics-invalid
-//      run classification/repair, Hampel-filtered outlier capping,
-//      one-minute aggregation, quality scoring, persistence, and
-//      forecast/drift/trend triggers.
+//   2. Store raw sample as-is -> sensorService.saveReading
+//   3. DUPLICATE/REJECTED_STALE stop here — stored for audit, never buffered.
+//   4. ACCEPTED/MERGED: commit into the event-time-windowed buffer ->
+//      buffer.js.
+//   5. Any window(s) that just closed (0, 1, or several on a multi-boundary
+//      jump) get handed to Python via POST /process-window; a successful
+//      response is persisted + triggers forecast/drift/trend/PdM exactly as
+//      a Node-computed row did before this cutover.
 //
 // A background sweep (see runBackgroundSweep(), wired into server.js) force-
 // closes any window whose event-time boundary has passed even with no new
 // sample arriving, since ingestion is otherwise entirely push-driven.
 //
-// CONCURRENCY: DB calls are async now (Postgres, not synchronous SQLite),
-// so processSample()/runBackgroundSweep() are wrapped in withLock()
-// (ingestLock.js) — a single global mutex that serializes every call to
-// either entry point. Without it, two concurrent POST /api/data requests
-// (or a request racing a background sweep) could interleave
-// getLastSample()/commit() calls and corrupt the in-memory window buffer.
-// The lock wraps ONLY the two exported entry points — ingestSample() and
-// processClosedWindow() are private and only ever run from inside an
-// already-locked call, so they must never call withLock() themselves
-// (that would deadlock against the outer call still holding the lock).
+// CONCURRENCY / LOCK SCOPING (§11.6.3's explicit call-out, easy to get
+// wrong): withLock() (ingestLock.js) wraps ONLY the in-memory
+// classify+commit step below — never the POST /process-window HTTP call,
+// never the resulting processed_telemetry DB write. If the Python call ran
+// inside the lock, every concurrent POST /api/data request would serialize
+// behind one window's ~2s Python round-trip, a much worse regression than
+// "the one request that closes a window gets slower." processSampleLocked()/
+// runBackgroundSweepLocked() are private and only ever run from inside an
+// already-locked call; processClosedWindowViaPython() runs strictly AFTER
+// the lock is released, in the public processSample()/runBackgroundSweep()
+// entry points below.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { validatePhysics } from './validator.js';
-import { classify, commit, getLastSample, getRecentTail, closeExpiredWindows } from './buffer.js';
-import { detectMissing, generateFillSamples, imputeInvalidRuns } from './missing.js';
-import { hampelCap } from './outlier.js';
-import { computePrecapFeatures } from './precapFeatures.js';
-import { aggregateWindow } from './aggregation.js';
-import { computeQuality } from './quality.js';
-import { EXPECTED_SAMPLE_COUNT } from './config.js';
-import { METRICS } from '../services/forecastService.js';
+import { classify, commit, closeExpiredWindows } from './buffer.js';
 import * as sensorService from '../services/sensorService.js';
 import * as processedService from '../services/processedService.js';
 import { logger } from '../utils/logger.js';
-import { validateFillRow } from '../utils/validation.js';
 import { withLock } from './ingestLock.js';
 
+const PDM_SERVICE_URL = process.env.PDM_SERVICE_URL || 'http://localhost:8000';
+// Matches pdmService.js's existing /score budget (§11.5 item 1) — reusing
+// the same env var and timeout convention, not a second, differently-
+// configured HTTP client (§11.6.4).
+const PROCESS_WINDOW_TIMEOUT_MS = 2000;
+
+/** Strip a stored raw-reading row down to the flat shape pdm/app/schemas.py's
+ * WindowSampleIn expects — no id/provenance/physicsValid/etc.; Python
+ * computes all of that fresh per window (pdm/app/preprocessing/pipeline.py's
+ * _build_audit_window). extra fields would be ignored by Pydantic's
+ * extra="ignore" regardless, but sending exactly the intended shape keeps
+ * the contract explicit rather than relying on that as a safety net. */
+function toWindowSampleIn(sample) {
+  return {
+    timestamp: sample.timestamp,
+    status: sample.status,
+    faultType: sample.faultType ?? null,
+    flowRate: sample.flowRate,
+    rpm: sample.rpm,
+    vibration: sample.vibration,
+    suctionPressure: sample.suctionPressure,
+    dischargePressure: sample.dischargePressure,
+    motorTemp: sample.motorTemp,
+  };
+}
+
 /**
- * Fully process one closed window: missing-data detection, classifier-gated
- * physics-invalid-run repair, Hampel-filtered outlier capping (exempting
- * abnormal-operation samples), aggregation, quality scoring, persistence,
- * and forecast/drift/trend triggers.
+ * Send one closed window to Python, and persist+trigger on success.
  *
- * Runs in its own try/catch: every sample in the window is already safely
- * stored in raw_telemetry by the time this runs, so a failure here (e.g. a
- * downstream DB error, or the aggregation invariant-violation throw) must
- * not lose the raw audit trail — it's logged and the window is skipped.
+ * Runs entirely OUTSIDE withLock() — see this file's header comment. On any
+ * failure (network error/timeout, non-2xx response, or a downstream
+ * persistence error), logs and returns: no processed_telemetry insert, no
+ * forecast/drift/trend/PdM trigger calls for this window. raw_telemetry is
+ * completely unaffected either way — every sample in `win` was already
+ * saved by ingestSample() before this ever runs.
+ *
+ * @param {object} win a closed WindowState (buffer.js). Its own
+ *   `win.prevSample` (captured by buffer.js at the moment this window was
+ *   FIRST created, before its own first sample was ever committed) is the
+ *   cross-window continuity context Python's gap-fill needs (§11.2) — NOT
+ *   something computed here. Reading the live getLastSample() pointer at
+ *   window-CLOSE time would return this window's own last sample instead
+ *   of its true predecessor, since that pointer advances on every
+ *   ACCEPTED commit including this window's own — a real bug caught
+ *   during Phase 3's review; buffer.js now owns this bookkeeping per
+ *   window instead.
  */
-async function processClosedWindow(win) {
-  const window = win.samples;
-  if (window.length === 0) return;
+async function processClosedWindowViaPython(win) {
+  if (win.samples.length === 0) return;
+
+  const payload = {
+    windowSamples: win.samples.map(toWindowSampleIn),
+    prevSample: win.prevSample ? toWindowSampleIn(win.prevSample) : null,
+    windowStart: win.windowStart,
+    windowEnd: win.windowEnd,
+    mergedSampleCount: win.mergedSampleCount || 0,
+    // buffer.js never actually sets a duplicateCount field on WindowState
+    // (only mergedSampleCount is mutated in commit()) — this is a
+    // pre-existing no-op inherited unchanged from the prior local-
+    // computation code, not introduced by this cutover; always 0 today.
+    duplicateSampleCount: win.duplicateCount || 0,
+  };
+
+  let res;
+  try {
+    res = await fetch(`${PDM_SERVICE_URL}/process-window`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(PROCESS_WINDOW_TIMEOUT_MS),
+    });
+  } catch (err) {
+    logger.error(`pipeline: /process-window call failed for window ${win.windowStart}-${win.windowEnd}: ${err.stack || err.message}`);
+    return;
+  }
+
+  if (!res.ok) {
+    // Covers both a malformed-request 422 (Pydantic validation) and an
+    // all-samples-invalid 422 (AllSamplesInvalidError) — both collapse to
+    // the same "nothing to process, skip this window" outcome here; see
+    // pdm/app/main.py's process_window_endpoint docstring for the
+    // full detail-shape distinction, not needed by this skip-logic.
+    let detail = '';
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      // response body wasn't JSON — ignore, status code alone is enough context.
+    }
+    logger.warn(`pipeline: /process-window responded ${res.status} for window ${win.windowStart}-${win.windowEnd} — skipping. ${detail}`);
+    return;
+  }
 
   try {
-    const missingCount = detectMissing(win);
-    const imputedSampleCount = window.filter((s) => s.provenance === 'IMPUTED').length;
-    const partiallyImputedCount = window.filter((s) => Array.isArray(s.unfilledMetrics) && s.unfilledMetrics.length > 0).length;
-    const mergedSampleCount = win.mergedSampleCount || 0;
-    const lateSampleCount = mergedSampleCount; // MERGED covers both late and out-of-order reinsertion under the trimmed 4-way classification.
-    const duplicateSampleCount = win.duplicateCount || 0;
-
-    // Physics-invalid samples are still stored/counted (see quality.js).
-    // validWindow itself is only used below to detect the all-invalid-window
-    // case; for stats/forecast/trend, invalid runs get classified and either
-    // repaired (SENSOR_FAULT) or preserved (NOT_SENSOR_FAULT) instead of
-    // dropped (see statsWindow below), so they don't leave a hole.
-    const validWindow = window.filter((s) => s.physicsValid !== false);
-
-    if (validWindow.length === 0) {
-      logger.warn(`Preprocessing: entire window failed physics validation (window ${win.windowStart} - ${win.windowEnd}) — skipping processed_telemetry for this window.`);
-      return;
-    }
-
-    const statsWindow = imputeInvalidRuns(window, METRICS, getRecentTail());
-    const physicsImputedCount = statsWindow.filter((s) => s.imputedForPhysics === true).length;
-    const abnormalOperationSampleCount = statsWindow.filter((s) => s.abnormalOperation === true).length;
-
-    // Hampel-filter outliers, per metric — evaluated over statsWindow only,
-    // with abnormal-operation samples exempted from both being capped AND
-    // from polluting a neighbor's median/MAD baseline (see outlier.js).
-    const excludeMask = statsWindow.map((s) => s.abnormalOperation === true);
-
-    const cappedByMetric = {};
-    const outliersByMetric = {};
-    const precapFeaturesByMetric = {};
-    let outlierCount = 0;
-    for (const metric of METRICS) {
-      const raw = statsWindow.map((s) => s[metric]);
-      const { capped, outlierCount: metricOutliers } = hampelCap(raw, 3, excludeMask);
-      cappedByMetric[metric] = capped;
-      outliersByMetric[metric] = metricOutliers;
-      outlierCount += metricOutliers;
-      precapFeaturesByMetric[metric] = computePrecapFeatures(raw);
-    }
-
-    const agg = aggregateWindow(window, statsWindow, cappedByMetric);
-
-    const quality = computeQuality({
-      window,
-      missingCount,
-      outlierCount,
-      metricCount: METRICS.length,
-      evaluatedSampleCount: statsWindow.length,
-      imputedSampleCount,
-      physicsImputedCount,
-      lateSampleCount,
-      mergedSampleCount,
-      duplicateSampleCount,
-      partiallyImputedCount,
-    });
-
-    const processedRecord = {
-      windowStart: agg.windowStart,
-      windowEnd: agg.windowEnd,
-      timestamp: agg.windowEnd, // canonical timestamp = end of window
-      dominantStatus: agg.dominantStatus,
-      dominantFaultType: agg.dominantFaultType,
-      runningSeconds: agg.runningSeconds,
-      faultSeconds: agg.faultSeconds,
-      stoppedSeconds: agg.stoppedSeconds,
-      sampleCount: agg.sampleCount,
-      expectedSampleCount: EXPECTED_SAMPLE_COUNT,
-      missingSampleCount: missingCount,
-      imputedSampleCount: quality.imputedSampleCount,
-      physicsImputedCount: quality.physicsImputedCount,
-      outlierCount,
-      outliersByMetric,
-      precapFeaturesByMetric,
-      physicsViolationCount: quality.physicsViolationCount,
-      violationsByMetric: quality.violationsByMetric,
-      missingRate: quality.missingRate,
-      imputationRate: quality.imputationRate,
-      physicsImputationRate: quality.physicsImputationRate,
-      outlierRate: quality.outlierRate,
-      physicsPassRate: quality.physicsPassRate,
-      qualityScore: quality.qualityScore,
-      qualityLabel: quality.qualityLabel,
-      isImputed: quality.isImputed,
-      lateSampleCount: quality.lateSampleCount,
-      mergedSampleCount: quality.mergedSampleCount,
-      duplicateSampleCount: quality.duplicateSampleCount,
-      partiallyImputedCount: quality.partiallyImputedCount,
-      partiallyImputedRate: quality.partiallyImputedRate,
-      abnormalOperationSampleCount,
-      preprocessingVersion: 'v2',
-      preprocessingTimestamp: new Date().toISOString(),
-    };
-
-    for (const metric of METRICS) {
-      processedRecord[`${metric}Mean`] = agg.stats[metric].mean;
-      processedRecord[`${metric}Median`] = agg.stats[metric].median;
-      processedRecord[`${metric}Min`] = agg.stats[metric].min;
-      processedRecord[`${metric}Max`] = agg.stats[metric].max;
-      processedRecord[`${metric}StdDev`] = agg.stats[metric].stdDev;
-      processedRecord[`${metric}Last`] = agg.stats[metric].last;
-    }
-
+    const { processedRecord } = await res.json();
     await processedService.saveAndTrigger(processedRecord);
   } catch (err) {
-    logger.error(`Preprocessing: failed to aggregate/store processed window (window ${win.windowStart} - ${win.windowEnd}): ${err.message}`);
+    logger.error(`pipeline: failed to persist Python-computed window (window ${win.windowStart}-${win.windowEnd}): ${err.stack || err.message}`);
   }
 }
 
 /**
- * Validate, annotate, store, and (for ACCEPTED/MERGED only) buffer ONE
- * sample, processing any window(s) that close as a result.
+ * Validate (hard-reject already happened in middleware), store, and (for
+ * ACCEPTED/MERGED only) buffer ONE sample. No local gap-fill or physics
+ * validation — see this file's header comment.
  *
  * @param {object} rawSample metrics + status + timestamp.
- * @param {'MEASURED'|'IMPUTED'} provenance
  * @param {'ACCEPTED'|'DUPLICATE'|'MERGED'|'REJECTED_STALE'} classification
  * @returns the saved reading (API shape).
  */
-async function ingestSample(rawSample, provenance, classification) {
-  const prevSample = getLastSample();
-  const dtSec = prevSample ? (Date.parse(rawSample.timestamp) - Date.parse(prevSample.timestamp)) / 1000 : null;
-
-  const { physicsValid, physicsViolations } = validatePhysics(rawSample, { prevSample, dtSec });
-  const annotated = { ...rawSample, provenance, physicsValid, physicsViolations };
-
-  if (provenance === 'IMPUTED') {
-    const fillErrors = validateFillRow(annotated);
-    if (fillErrors.length) {
-      logger.warn(`Preprocessing: internally-generated fill row failed validation, storing anyway for audit: ${fillErrors.join('; ')}`);
-    }
-  }
-
-  // Store every sample, unconditionally, real or reconstructed — including
-  // DUPLICATE/REJECTED_STALE, so raw_telemetry keeps a complete audit trail
-  // even for samples that never enter a window.
-  const savedReading = await sensorService.saveReading(annotated);
+async function ingestSample(rawSample, classification) {
+  // Store every sample, unconditionally — including DUPLICATE/
+  // REJECTED_STALE, so raw_telemetry keeps a complete audit trail even for
+  // samples that never enter a window.
+  const savedReading = await sensorService.saveReading(rawSample);
 
   if (classification === 'DUPLICATE' || classification === 'REJECTED_STALE') {
-    return savedReading;
+    return { savedReading, closedWindows: [] };
   }
 
   const closedWindows = commit(savedReading, classification);
-  for (const win of closedWindows) {
-    await processClosedWindow(win);
-  }
-  return savedReading;
+  return { savedReading, closedWindows };
 }
 
 async function processSampleLocked(sample) {
   const tsMs = Date.parse(sample.timestamp);
   const classification = classify(tsMs);
-
-  if (classification === 'REJECTED_STALE') {
-    const savedReading = await ingestSample(sample, 'MEASURED', classification);
-    return { ...savedReading, accepted: false, reason: 'STALE' };
-  }
-  if (classification === 'DUPLICATE') {
-    const savedReading = await ingestSample(sample, 'MEASURED', classification);
-    return { ...savedReading, accepted: true, duplicate: true };
-  }
-
-  // ACCEPTED / MERGED: gap-fill against the true last accepted/merged
-  // sample, then store the real sample itself.
-  const fillSamples = generateFillSamples(getLastSample(), sample, METRICS);
-  for (const fill of fillSamples) {
-    const fillClassification = classify(Date.parse(fill.timestamp));
-    await ingestSample(fill, 'IMPUTED', fillClassification);
-  }
-  return ingestSample(sample, 'MEASURED', classification);
+  const { savedReading, closedWindows } = await ingestSample(sample, classification);
+  return { savedReading, classification, closedWindows };
 }
 
 /**
  * Process one incoming raw telemetry sample: classify it against the
- * event-time windowed buffer, backfill any gap since the last accepted
- * sample (per-metric ceilings, via linear interpolation — see missing.js),
- * then validate/store/buffer the real sample itself.
+ * event-time windowed buffer, store it, and hand off any window(s) that
+ * close as a result to Python for computation — see this file's header
+ * comment for the full lock-scoping rationale.
  *
  * @param {object} sample raw sample as POSTed to /api/data.
- * @returns the saved raw reading for `sample` (same shape dataController has
- *   always returned), plus `accepted`/`reason`/`duplicate` flags for
- *   DUPLICATE/REJECTED_STALE outcomes — these are business-logic outcomes
- *   ("received and understood, but not used"), not protocol errors, so they
- *   no longer throw an HTTP 400 the way a reordered timestamp used to.
+ * @returns the saved raw reading for `sample` (same shape dataController.js
+ *   has always returned), plus accepted/reason/duplicate flags for
+ *   DUPLICATE/REJECTED_STALE outcomes.
  */
 export async function processSample(sample) {
-  return withLock(() => processSampleLocked(sample));
+  const { savedReading, classification, closedWindows } =
+    await withLock(() => processSampleLocked(sample));
+
+  // Unlocked phase: one Python round-trip (+ persistence) per closed
+  // window, entirely outside the mutex. Each WindowState already carries
+  // its own correct `prevSample` (buffer.js captured it at that window's
+  // creation time) — no threading needed here, including for a multi-
+  // boundary-jump batch where several windows close at once.
+  for (const win of closedWindows) {
+    await processClosedWindowViaPython(win);
+  }
+
+  if (classification === 'REJECTED_STALE') {
+    return { ...savedReading, accepted: false, reason: 'STALE' };
+  }
+  if (classification === 'DUPLICATE') {
+    return { ...savedReading, accepted: true, duplicate: true };
+  }
+  return savedReading;
 }
 
 async function runBackgroundSweepLocked() {
-  const closedWindows = closeExpiredWindows(Date.now());
-  for (const win of closedWindows) {
-    await processClosedWindow(win);
-  }
+  return closeExpiredWindows(Date.now());
 }
 
 /**
@@ -265,5 +230,8 @@ async function runBackgroundSweepLocked() {
  * silent stream would otherwise never close its last window.
  */
 export async function runBackgroundSweep() {
-  return withLock(() => runBackgroundSweepLocked());
+  const closedWindows = await withLock(() => runBackgroundSweepLocked());
+  for (const win of closedWindows) {
+    await processClosedWindowViaPython(win);
+  }
 }

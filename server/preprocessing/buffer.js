@@ -39,7 +39,7 @@ function windowStartMsFor(tsMs) {
   return Math.floor(tsMs / WINDOW_DURATION_MS) * WINDOW_DURATION_MS;
 }
 
-function makeWindowState(windowStartMs) {
+function makeWindowState(windowStartMs, prevSample) {
   return {
     windowStart: new Date(windowStartMs).toISOString(),
     windowEnd: new Date(windowStartMs + WINDOW_DURATION_MS).toISOString(),
@@ -50,13 +50,23 @@ function makeWindowState(windowStartMs) {
     mergedSampleCount: 0,
     closed: false,
     closedAtMs: null,
+    // The last accepted/merged sample BEFORE this window's own first
+    // sample ever arrived — captured once, at window-creation time, not
+    // read fresh when the window later closes. This is the "prevSample"
+    // pdm's POST /process-window needs for cross-window gap-fill/physics-
+    // transition continuity (docs/plan/2026-08-05-pdm-implementation.md
+    // §11.2). Reading the live `lastSample` pointer at CLOSE time instead
+    // would return this window's own last sample (since `lastSample`
+    // advances on every ACCEPTED commit, including this window's), not its
+    // true predecessor — a real bug caught during Phase 3's review.
+    prevSample,
   };
 }
 
 function getOrCreateWindow(windowStartMs) {
   let w = windows.get(windowStartMs);
   if (!w) {
-    w = makeWindowState(windowStartMs);
+    w = makeWindowState(windowStartMs, lastSample);
     windows.set(windowStartMs, w);
   }
   return w;
