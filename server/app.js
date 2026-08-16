@@ -24,6 +24,14 @@ import { logger } from './utils/logger.js';
 export function createApp() {
   const app = express();
 
+  // Trust exactly one hop (client's nginx, the only reverse proxy in front
+  // of backend) so req.ip reflects the real client from X-Forwarded-For
+  // instead of collapsing every proxied request onto nginx's own container
+  // IP — matters for rateLimit.js (middleware/rateLimit.js) once it's ever
+  // applied to a route nginx proxies. node-red's direct POSTs to backend
+  // don't go through nginx, so this doesn't change how those are seen.
+  app.set('trust proxy', 1);
+
   const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
   app.use(cors({ origin: clientOrigin }));
   // Explicit, sized to a single sensor reading/aggregate payload (a handful

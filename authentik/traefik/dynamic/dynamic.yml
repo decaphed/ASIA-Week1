@@ -85,6 +85,34 @@ http:
         period: 1m
         burst: 80
 
+    # Baseline browser hardening headers, applied to both gated apps. No CSP
+    # here on purpose — see dashboard-csp below for why that's split out.
+    security-headers:
+      headers:
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: "same-origin"
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: false
+
+    # CSP only for the dashboard SPA — it's our own self-contained React
+    # build with no external script/style/font sources (see client/src), so
+    # a strict allowlist is safe. NOT applied to Node-RED: its editor is a
+    # Monaco-based code editor that relies on inline scripts and dynamically
+    # loaded node modules, and would likely break under this policy.
+    dashboard-csp:
+      headers:
+        contentSecurityPolicy: >-
+          default-src 'self';
+          script-src 'self';
+          style-src 'self' 'unsafe-inline';
+          img-src 'self' data:;
+          connect-src 'self';
+          frame-ancestors 'none';
+          base-uri 'self';
+          form-action 'self'
+
   routers:
     # Outpost callback path (login redirect target, logout, etc). Highest
     # priority: must win over the dashboard catch-all or the callback gets
@@ -142,6 +170,8 @@ http:
       service: client
       middlewares:
         - rl-app
+        - security-headers
+        - dashboard-csp
         - authentik-auth
 
     # The gated Node-RED flow editor. Same forward-auth pattern as
@@ -157,4 +187,5 @@ http:
       service: node-red
       middlewares:
         - rl-app
+        - security-headers
         - authentik-auth

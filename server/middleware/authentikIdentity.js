@@ -29,6 +29,7 @@ export function authentikIdentity(req, res, next) {
   const proxySecret = process.env.INTERNAL_PROXY_SECRET;
   const trusted = Boolean(proxySecret) && req.get('X-Internal-Proxy-Secret') === proxySecret;
 
+  req.trustedProxy = trusted;
   req.identity = trusted
     ? {
         username: req.get('X-authentik-username') || null,
@@ -58,4 +59,17 @@ export function requireGroup(group) {
     }
     next();
   };
+}
+
+// Applied to every read route that isn't ingestion (/data, /processed) or a
+// container-internal healthcheck (/health — Docker's own HEALTHCHECK curls
+// this from inside the backend container itself, never through nginx, so it
+// can never carry the proxy secret). Without this, a request that skipped
+// Traefik/Authentik entirely (e.g. node-red, or any other container later
+// added to the `edge` network) could still read every route that doesn't
+// separately call requireGroup() — which, before this, was all of them
+// except the PATCH review endpoint.
+export function requireTrustedProxy(req, res, next) {
+  if (req.trustedProxy || DEV_ENVS.includes(process.env.NODE_ENV)) return next();
+  return res.status(403).json({ success: false, error: 'forbidden' });
 }

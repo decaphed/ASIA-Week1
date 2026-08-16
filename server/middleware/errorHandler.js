@@ -21,8 +21,10 @@ export function notFound(req, res) {
 // eslint-disable-next-line no-unused-vars  (Express needs the 4-arg signature)
 export function errorHandler(err, req, res, next) {
   logger.error(`${req.method} ${req.originalUrl} → ${err.message}`);
-  res.status(err.status || 500).json({
-    success: false,
-    error: err.message || 'Internal Server Error',
-  });
+  const status = err.status || 500;
+  // 5xx means something we didn't anticipate — don't echo err.message back
+  // to the client, since a raw DB/FS error could leak internal detail.
+  // Below 500 (validation etc.) err.message is our own deliberate text.
+  const message = status >= 500 ? 'Internal Server Error' : err.message || 'Bad Request';
+  res.status(status).json({ success: false, error: message });
 }

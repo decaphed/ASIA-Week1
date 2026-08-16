@@ -13,7 +13,7 @@ function escapeCell(value) {
   // all numeric/enum/timestamp fields, so this never fires today, but if a
   // free-text field is ever added to that allowlist, a leading =/+/-/@ would
   // otherwise be interpreted as a formula by Excel/Sheets on open.
-  if (/^[=+\-@]/.test(s)) s = `'${s}`;
+  if (/^\s*[=+\-@]/.test(s)) s = `'${s}`;
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
