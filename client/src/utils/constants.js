@@ -78,6 +78,10 @@ export const FAULT_TYPES = [
   { value: 'CAVITATION', label: 'Cavitation' },
   { value: 'BEARING', label: 'Bearing wear' },
   { value: 'THERMAL', label: 'Motor overheating' },
+  { value: 'IMPELLER_WEAR', label: 'Impeller wear/damage' },
+  { value: 'SEAL_LEAK', label: 'Seal leak' },
+  { value: 'MISALIGNMENT', label: 'Shaft misalignment' },
+  { value: 'DRY_RUN', label: 'Dry run / loss of prime' },
   { value: 'OTHER', label: 'Other' },
 ];
 

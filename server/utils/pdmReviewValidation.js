@@ -20,7 +20,9 @@
 // records who cleared it — see validateReviewPatch below.
 export const REVIEW_STATUSES = ['PENDING_REVIEW', 'CONFIRMED', 'REJECTED', 'DISMISSED', 'N/A'];
 
-export const FAULT_EVENT_FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING', 'OTHER'];
+export const FAULT_EVENT_FAULT_TYPES = [
+  'THERMAL', 'CAVITATION', 'BEARING', 'IMPELLER_WEAR', 'SEAL_LEAK', 'MISALIGNMENT', 'DRY_RUN', 'OTHER',
+];
 
 // Statuses that represent a completed review, requiring the reviewer to
 // have actually recorded a finding rather than just flipping a flag.

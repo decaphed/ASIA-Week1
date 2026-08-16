@@ -72,7 +72,7 @@ class ScoreResponse(BaseModel):
 class WindowSampleIn(BaseModel):
     timestamp: str
     status: Literal["RUNNING", "STOPPED", "FAULT"]
-    faultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING"]] = None
+    faultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING", "IMPELLER_WEAR", "SEAL_LEAK", "MISALIGNMENT", "DRY_RUN"]] = None
     flowRate: Optional[float] = None
     rpm: Optional[float] = None
     vibration: Optional[float] = None
@@ -113,7 +113,7 @@ class ProcessedRecordOut(BaseModel):
     windowEnd: str
     timestamp: str
     dominantStatus: Literal["RUNNING", "STOPPED", "FAULT"]
-    dominantFaultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING"]] = None
+    dominantFaultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING", "IMPELLER_WEAR", "SEAL_LEAK", "MISALIGNMENT", "DRY_RUN"]] = None
     runningSeconds: int
     faultSeconds: int
     stoppedSeconds: int

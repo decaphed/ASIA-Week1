@@ -881,6 +881,68 @@ gate checks data *hygiene* ("is this a clean, well-formed buffer"), which is an 
 question to "did a human confirm this is really a fault," and applies to both entry points
 regardless of the HITL decision above.
 
+### 10.4.1 Column mapping for external uploads (Entry point 2 only)
+
+**Trigger for this subsection:** external candidate datasets evaluated during planning (a
+diesel-engine CSV with `Engine_RPM`/`Lub_Oil_Pressure`/etc., and an anonymized 50-sensor pump
+dataset with a `rul` column) both turned out to use different column names — and in one case,
+no recoverable column identity at all — than this system's six metrics. Entry point 1 (manual
+buffer over existing `raw_telemetry`, §10.4) never hits this problem, since that data is
+already in this system's schema. Entry point 2 is the only path where an uploaded file's
+column names won't match `flowRate/rpm/vibration/suctionPressure/dischargePressure/motorTemp`
+out of the box, so mapping is scoped as part of Entry point 2's upload gate, not a separate
+feature.
+
+**Order of operations, before a file is eligible for the statistical rejection gate (§10.6
+item 3) or feature computation (§10.4's "same feature-computation function" reuse):**
+
+1. **Time-series precondition, checked first, before any mapping is offered.** Confirm the
+   file has a real timestamp column with regular-enough sampling to window. A file of
+   independent snapshot rows with no time axis is rejected outright at this step — column
+   mapping cannot manufacture a time axis that doesn't exist, and offering a mapping UI on a
+   file that will fail this check wastes the operator's effort. This is the same defect that
+   ruled out the diesel-engine CSV evaluated during planning: renaming its columns would not
+   have fixed the missing time axis.
+2. **Header extraction, mapped manually, not inferred.** Node parses the uploaded file's
+   header row and presents the raw column names to the operator. The operator explicitly
+   assigns each source column to one of the six known metrics, or marks it unused. No
+   automatic name-similarity guessing (e.g. fuzzy-matching `Vbr` to `vibration`) — the mapping
+   is only as trustworthy as the human asserting it, consistent with §10.4's reasoning that a
+   domain expert is directly asserting ground truth for this entry point, not a second
+   automated inference layer.
+3. **Unmapped source columns are dropped, not guessed.** Any column the operator doesn't
+   explicitly map is excluded from feature computation entirely — never silently folded in as
+   an extra, uncalibrated dimension alongside the six metrics `precapFeaturesByMetric`/
+   `metricStats` expect (§3.3's fixed composition). This is also why an anonymized-sensor file
+   with no recoverable column identity (e.g. `sensor_00`...`sensor_51`, no data dictionary)
+   fails this step for every column — an operator cannot honestly map a column they cannot
+   identify, and a forced guess here is indistinguishable from fabricating a label.
+4. **Unit declared and converted per mapped column, not inferred from the name match alone.**
+   Each mapping also carries a declared source unit (from a short fixed list per metric — e.g.
+   vibration in mm/s vs g, pressure in psi vs bar/kPa, temperature in °C vs °F). Node converts
+   to this system's internal units at parse time, before feature computation. A correct name
+   match with an unconverted unit mismatch is just as corrupting to the corpus as a wrong name
+   match would be — both produce a `featureSnapshot` that doesn't mean what the rest of the
+   corpus means by that field.
+5. **Range sanity-check against `pump-physics.yaml`, after mapping and unit conversion.**
+   Mapped, converted values are checked against the same `RANGES` `middleware/
+   validateReading.js`/`validator.py` already use (§11.6.1). Values far outside
+   physically-reasoned bounds are a signal the mapping or declared unit is wrong, not that the
+   source pump behaved impossibly — flagged back to the operator for re-confirmation, not
+   silently accepted or silently dropped.
+6. **Mapping-confidence tag persisted per column on the upload record.** Alongside the
+   upload's existing `sourceType: EXTERNAL_UPLOAD` provenance (§10.4), store how each column
+   was resolved — e.g. `EXACT_NAME_MATCH` (source header text already matched a known metric
+   name/alias) vs `OPERATOR_OVERRIDE` (manually assigned, unverifiable from the name alone). A
+   later investigation into a corpus-quality problem should be able to tell "this batch leaned
+   on three operator overrides" apart from "this batch was self-evidently named," without
+   re-opening the original file.
+
+**Not covered by this addendum:** the operator-facing form/screen for presenting extracted
+headers and collecting the mapping. This subsection specifies the backend mechanism and
+ordering only, consistent with §1's "no dashboard UI changes beyond what's needed" scoping for
+the rest of this document.
+
 ### 10.5 Corpus, merge, and promotion
 
 Building on the earlier discussion (not yet reflected elsewhere in this doc):
@@ -949,6 +1011,12 @@ Building on the earlier discussion (not yet reflected elsewhere in this doc):
    been trained). The very first accepted upload and/or the first batch of HITL-confirmed
    `fault_events` effectively *become* the seed corpus; worth being explicit that "merge" is a
    no-op until a second contribution exists.
+6. **Column-mapping UI — mechanism resolved, screen not designed.** §10.4.1 specifies the
+   backend ordering (time-series check → manual header mapping → unit conversion → range
+   sanity-check → confidence tagging) for Entry point 2 uploads whose column names don't match
+   this system's six metrics. The operator-facing form for presenting extracted headers and
+   collecting the mapping is out of scope here, same as the rest of this document's UI
+   deferrals (§1).
 
 ---
 
@@ -1264,3 +1332,99 @@ breakdown, per the "just the Python change for now" decision)
 - [ ] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
       still holds — this migration adds a read path for §10's corpus, not a write path, and
       doesn't touch this invariant at all for the live `/process-window` call)
+
+---
+
+## 12. Expanded fault taxonomy, and a correction: the simulator must not emit `faultType`
+
+**Status: decided and implemented**, not exploratory like §9–§11. Two changes, made together
+because the second was caught while implementing the first.
+
+### 12.1 Four new fault types
+
+The original three (`THERMAL`, `CAVITATION`, `BEARING`) were never meant to be exhaustive —
+they were what the simulator happened to ship with. Four more are added, chosen specifically
+because they produce a distinguishable signature using only this system's existing 6 metrics
+(no new sensors required):
+
+- **`IMPELLER_WEAR`** — erosion/damage/partial clog: flow and discharge pressure drop for the
+  *same* rpm (efficiency loss, not a speed change); suction pressure ticks **up** slightly
+  (flow backs up) — the opposite direction from `CAVITATION`'s suction collapse, which is what
+  keeps the two distinguishable.
+- **`SEAL_LEAK`** — mechanical seal wear/failure: almost entirely a discharge-pressure story,
+  with negligible vibration/thermal signal. Deliberately the "quiet" fault — none of the
+  original three produce a pressure-only signature, so without it a real seal failure would
+  look like unexplained noise to Tier 1.
+- **`MISALIGNMENT`** — shaft/coupling misalignment: vibration-dominant like `BEARING`, but a
+  different ratio (smaller flow/pressure hit, temp rises from mechanical strain rather than
+  friction). **Flagged as genuinely ambiguous against `BEARING`** with only these 6 scalar
+  metrics (no vibration frequency spectrum, no motor current) — don't expect Tier 2 to cleanly
+  separate the two without richer instrumentation eventually; this is a known, accepted
+  limitation, not an oversight.
+- **`DRY_RUN`** — pump loses prime / runs with no or partial fluid: the most severe,
+  fastest-onset fault — flow/pressure collapse almost completely, rpm *rises* (no fluid load
+  resisting the motor), temp climbs fast (no fluid to cool bearings/seals). Distinct from
+  `CAVITATION` by rpm direction and speed of onset.
+
+Per-metric deltas (applied at `faultSeverity = 1`, scaling linearly like the original three)
+are in `node-red/flow.json`'s `gen_reading` function, `FAULT_PROFILES` object — kept in sync
+by hand with this section if either changes.
+
+**Files updated**, all enumerating the same set of fault type strings:
+- `node-red/flow.json` (`gen_reading`'s `FAULT_PROFILES`) — drives the simulator's per-metric
+  deviation shape for each type.
+- `server/utils/validation.js` (`VALID_FAULT_TYPES`) — raw/processed telemetry ingest
+  validation (`middleware/validateReading.js`/`validateProcessed.js`).
+- `pdm/app/schemas.py` (`WindowSampleIn.faultType`, `ProcessedRecordOut.dominantFaultType`
+  `Literal`s) — Python-side schema contract, §3.5/§11.6.2.
+- `server/utils/pdmReviewValidation.js` (`FAULT_EVENT_FAULT_TYPES`) — HITL review PATCH
+  validation, keeps `OTHER` as the trailing catch-all (§1's original reasoning for `OTHER`
+  unchanged).
+- `client/src/utils/constants.js` (`FAULT_TYPES` dropdown options) — HITL reviewer-facing
+  labels in the review UI.
+- `server/database/migrations/002_fault_events.up.sql`'s `faultType` column comment (no schema
+  change needed — always been a plain `TEXT` column, no `CHECK` constraint enumerating values,
+  per the note already in that migration).
+
+No change needed to `pdm/app/preprocessing/fault_classifier.py` (SENSOR_FAULT vs
+NOT_SENSOR_FAULT heuristic, §3.3) or `server/preprocessing/aggregation.js`'s
+`dominantFaultType` tally — both already treat `faultType` as an opaque string keyed by
+whatever's present, not a hardcoded three-value set.
+
+### 12.2 Correction: the simulator was leaking ground truth into the live stream
+
+**Caught while wiring in §12.1, but a pre-existing issue, not introduced by it.**
+`gen_reading`'s `msg.payload` previously included `faultType: state.regime === 'FAULT' ?
+state.faultType : null` — i.e. the simulator told the ingest pipeline exactly which fault type
+was active, live, on every sample. That's not realistic: a real pump's sensors report readings
+and operational status (`RUNNING`/`STOPPED`/`FAULT`), never a diagnosis — nothing in a real
+system knows "this is a `BEARING` fault" until a human (or a trained model) says so. Leaking
+the label into the raw stream also made Tier 1/Tier 2 trivial for simulator-sourced faults,
+which defeats the point of building them.
+
+**Fixed:** `gen_reading` still uses `FAULT_PROFILES` internally to pick which per-metric
+deviation shape drives a given episode (so different fault episodes are still physically
+distinct from each other), but `msg.payload` now only reports `status`, never `faultType`.
+The diagnosis path is exactly what this doc already specifies elsewhere and needed no new
+design:
+
+1. Tier 1 (`pdm/app/rules.py`) flags a candidate window from the (now-undiagnosed) abnormal
+   readings alone, same as always (§3.2).
+2. A human reviewer confirms it via HITL and assigns the real `faultType` from the expanded
+   set in §12.1 (§3.6's `PATCH /api/pdm/fault-events/:id`) — this is genuinely the first place
+   a `faultType` should ever be assigned for simulator/live data, not the sensor stream.
+3. **"Auto-labeled if it appears again"** — the operator's stated expectation for a repeat
+   occurrence — is exactly what Tier 2 exists to do (§10): a reviewed `fault_events` row's
+   `featureSnapshot` becomes a training example, and a trained Tier 2 model classifying a new
+   candidate against that learned signature *is* the auto-labeling. No separate mechanism is
+   being proposed here — this is a restatement of the plan's existing Tier 2 purpose, called
+   out explicitly because it was raised as if it were a new requirement. Until Tier 2 is
+   trained (§1: not yet), every occurrence — repeat or not — still goes through HITL review
+   per (2); there is no nearer-term signature-matching shortcut in scope.
+
+**`dominantFaultType` (aggregation.js) and `fault_classifier.py`'s upstream-diagnosed-fault
+short-circuit are both affected, harmlessly.** Both already treat a missing/falsy `faultType`
+as "unknown," not an error (`sample.status === 'FAULT' && sample.faultType` short-circuits
+cleanly; `fault_classifier.py`'s explicit-diagnosis check simply never fires for
+simulator-sourced runs now) — verified by reading both call sites, not assumed. This is the
+correct behavior now: raw ingest genuinely has no diagnosis to offer, matching real telemetry.

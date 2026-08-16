@@ -37,7 +37,9 @@ export const RANGES = loadRanges();
 
 const NUMERIC_FIELDS = Object.keys(RANGES);
 const VALID_STATUSES = ['RUNNING', 'STOPPED', 'FAULT'];
-export const VALID_FAULT_TYPES = ['THERMAL', 'CAVITATION', 'BEARING'];
+export const VALID_FAULT_TYPES = [
+  'THERMAL', 'CAVITATION', 'BEARING', 'IMPELLER_WEAR', 'SEAL_LEAK', 'MISALIGNMENT', 'DRY_RUN',
+];
 
 /**
  * Validate a reading body.
