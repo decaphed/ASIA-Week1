@@ -24,6 +24,7 @@ import { getWhoami } from '../controllers/whoamiController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 import { validateProcessedMiddleware } from '../middleware/validateProcessed.js';
 import { requireGroup } from '../middleware/authentikIdentity.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 // Authentik group allowed to submit HITL fault-event reviews (§3.6). Only
 // enforced for requests that actually carry an Authentik identity — see
@@ -35,12 +36,12 @@ const router = Router();
 // Ingestion + preprocessing entry point. validateReadingMiddleware runs
 // first (hard reject on malformed shape); createReading then runs the full
 // preprocessing pipeline (preprocessing/pipeline.js) on every valid body.
-router.post('/data', validateReadingMiddleware, createReading);
+router.post('/data', rateLimit, validateReadingMiddleware, createReading);
 
 // One-minute aggregate ingestion. Manual/back-compat path now that the
 // preprocessing pipeline produces and stores processed records itself —
 // validateProcessedMiddleware guards the same way /data does.
-router.post('/processed', validateProcessedMiddleware, createProcessedReading);
+router.post('/processed', rateLimit, validateProcessedMiddleware, createProcessedReading);
 
 // Retrieval.
 router.get('/live', getLive);

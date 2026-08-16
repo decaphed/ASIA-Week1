@@ -26,7 +26,10 @@ export function createApp() {
 
   const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
   app.use(cors({ origin: clientOrigin }));
-  app.use(express.json());
+  // Explicit, sized to a single sensor reading/aggregate payload (a handful
+  // of numeric fields + timestamp) — was previously Express's implicit
+  // 100kb default, which is defensible but accidental rather than chosen.
+  app.use(express.json({ limit: '64kb' }));
   app.use(requestTimer);
   app.use(authentikIdentity);
 

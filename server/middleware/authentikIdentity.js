@@ -5,12 +5,20 @@
 // authentik/traefik/dynamic/dynamic.yml) and exposes it as req.identity.
 //
 // backend publishes no port (docker-compose.yml), but it's NOT network-
-// isolated from other containers — everything shares the default Compose
+// isolated from other containers — everything shares the `edge` Compose
 // network, and node-red (which runs arbitrary flow JS by design) already
-// talks to backend:3000 directly for ingestion. So "no identity headers"
-// doesn't just mean "a trusted local dev/test run" — it can also mean "a
-// request from another container on the network, bypassing Traefik and
-// Authentik entirely." requireGroup() below fails closed on that case.
+// talks to backend:3000 directly for ingestion. That means the raw
+// X-authentik-* headers alone are NOT trustworthy: any container reachable
+// on `edge` could set them itself and impersonate an authenticated user/
+// group, bypassing Traefik and Authentik entirely. So identity headers are
+// only honored when paired with INTERNAL_PROXY_SECRET, a value only
+// client's nginx (client/nginx.conf.template) and backend know — nginx is
+// the one hop that both terminates real browser traffic (which already went
+// through Traefik's forwardAuth) and re-stamps the identity headers itself,
+// so a client-forged header can't ride along with the correct secret.
+// Requests without a matching secret (e.g. node-red's direct POSTs, or any
+// other container on `edge`) are treated as fully anonymous — same as the
+// old "headers absent" case, so requireGroup() below still fails closed.
 //
 // authentik-server joins multi-value response headers with "|" by default
 // — reverify against a real outpost response if group-gating stops working
@@ -18,11 +26,16 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 export function authentikIdentity(req, res, next) {
-  req.identity = {
-    username: req.get('X-authentik-username') || null,
-    email: req.get('X-authentik-email') || null,
-    groups: (req.get('X-authentik-groups') || '').split('|').filter(Boolean),
-  };
+  const proxySecret = process.env.INTERNAL_PROXY_SECRET;
+  const trusted = Boolean(proxySecret) && req.get('X-Internal-Proxy-Secret') === proxySecret;
+
+  req.identity = trusted
+    ? {
+        username: req.get('X-authentik-username') || null,
+        email: req.get('X-authentik-email') || null,
+        groups: (req.get('X-authentik-groups') || '').split('|').filter(Boolean),
+      }
+    : { username: null, email: null, groups: [] };
   next();
 }
 

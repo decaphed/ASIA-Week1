@@ -70,6 +70,11 @@ services:
       DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://dashboard.home}
       PDM_SERVICE_URL: http://pdm:8000
+      # Only trusted when paired with the matching secret client/nginx.conf.template
+      # stamps on requests it proxies — see server/middleware/authentikIdentity.js
+      # for why X-authentik-* headers alone aren't enough (node-red and any other
+      # container on the edge network can reach backend:3000 directly).
+      INTERNAL_PROXY_SECRET: ${INTERNAL_PROXY_SECRET:?INTERNAL_PROXY_SECRET must be set}
     volumes:
       # Shared physics RANGES (§11.6.1) — server/utils/validation.js resolves
       # this to /pump-physics.yaml (__dirname/../.. from /app/utils in the
@@ -98,6 +103,10 @@ services:
       context: ./client
       args:
         VITE_API_URL: /api
+    environment:
+      # Read by nginx.conf.template's envsubst pass at container start (see
+      # client/Dockerfile) — must match backend's copy of the same var.
+      INTERNAL_PROXY_SECRET: ${INTERNAL_PROXY_SECRET:?INTERNAL_PROXY_SECRET must be set}
     depends_on:
       backend:
         condition: service_healthy
