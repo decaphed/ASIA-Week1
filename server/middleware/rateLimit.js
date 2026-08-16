@@ -8,6 +8,17 @@
 // docker-compose.yml's backend service comment and
 // middleware/authentikIdentity.js. Every other route is only reachable
 // through Traefik, which already rate-limits it.
+//
+// app.js sets `trust proxy` so req.ip honors X-Forwarded-For — necessary so
+// browser submissions (client/src/api/client.js's postReading, proxied
+// through nginx) aren't all collapsed onto nginx's container IP. But that
+// same trust-proxy setting means a caller hitting backend:3000 directly
+// (node-red, or anything else on `edge`) can forge X-Forwarded-For to get a
+// fresh req.ip every request and dodge the window entirely. req.trustedProxy
+// (middleware/authentikIdentity.js) tells us whether the request actually
+// came through nginx with the internal secret — only trust the
+// X-Forwarded-For-derived req.ip then. Otherwise key on the raw socket
+// address, which nothing running on `edge` can spoof.
 // ─────────────────────────────────────────────────────────────────────────
 
 const WINDOW_MS = 10_000;
@@ -18,7 +29,7 @@ const MAX_PER_WINDOW = 30;
 const hits = new Map();
 
 export function rateLimit(req, res, next) {
-  const key = req.ip;
+  const key = req.trustedProxy ? req.ip : req.socket.remoteAddress;
   const now = Date.now();
   const entry = hits.get(key);
 
