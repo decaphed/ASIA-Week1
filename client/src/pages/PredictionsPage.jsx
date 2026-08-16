@@ -14,7 +14,7 @@ const X0 = 52;
 const FW = 834;
 const Y0 = 20;
 const FH = 252;
-const HORIZON_STEPS = 16; // 16 × 15 min = the design's 4-hour horizon
+const HORIZON_STEPS = 4; // 4 × 15 min = a 1-hour horizon
 const STEP_HOURS = 0.25;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@ const STEP_HOURS = 0.25;
 // metric (level, trend, forecast, lower/upperBound). entry.trend is the
 // ETS model's per-MINUTE rate (forecastService.js advances level/trend once
 // per minute, on every new processed record — see that file's header). The
-// design asks for a 4-hour fan plotted in HORIZON_STEPS of STEP_HOURS each,
+// design asks for a 1-hour fan plotted in HORIZON_STEPS of STEP_HOURS each,
 // so each step is STEP_HOURS*60 minutes of trend, not 1 minute — extrapolate
 // level + trend across the horizon in those units, and widen the interval
 // with the square root of the horizon, the standard random-walk growth for
@@ -235,7 +235,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
         <Card style={{ padding: '22px 24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{metric.label} forecast, next 4 hours</h2>
+              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{metric.label} forecast, next 1 hour</h2>
               <div style={{ fontSize: 12, color: '#8a99a8', marginTop: 3 }}>
                 Projection from recent readings · shaded area shows where the reading will most likely stay · {metric.unit}
               </div>
@@ -303,7 +303,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
             <div style={{ background: '#E4F3EB', border: '1px solid #bfe0cd', borderRadius: 8, padding: '18px 20px' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#177E4D' }}>No crossings predicted</div>
               <div style={{ fontSize: 12.5, color: '#2c6e4c', lineHeight: 1.55, marginTop: 8 }}>
-                No channel&apos;s median forecast crosses an alarm limit within the 4-hour horizon.
+                No channel&apos;s median forecast crosses an alarm limit within the 1-hour horizon.
               </div>
             </div>
           )}
@@ -312,7 +312,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
 
       <Card style={{ padding: '20px 22px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <CardLabel>4-hour outlook · all channels</CardLabel>
+          <CardLabel>1-hour outlook · all channels</CardLabel>
           <div style={{ fontSize: 11.5, color: '#8a99a8' }}>shaded = likely range · dashed = expected path</div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
@@ -323,7 +323,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
               className="hover-chip"
               onClick={() => setMetricKey(o.key)}
               aria-pressed={metricKey === o.key}
-              aria-label={`${o.label}: ${o.chip}. Now ${o.now}, in 4 hours ${o.proj} ${o.unit}`}
+              aria-label={`${o.label}: ${o.chip}. Now ${o.now}, in 1 hour ${o.proj} ${o.unit}`}
               style={{
                 ...buttonReset,
                 display: 'block', width: '100%',

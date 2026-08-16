@@ -1428,3 +1428,83 @@ as "unknown," not an error (`sample.status === 'FAULT' && sample.faultType` shor
 cleanly; `fault_classifier.py`'s explicit-diagnosis check simply never fires for
 simulator-sourced runs now) — verified by reading both call sites, not assumed. This is the
 correct behavior now: raw ingest genuinely has no diagnosis to offer, matching real telemetry.
+
+---
+
+## 13. Synthetic Tier 2 training corpus (`data/pump-telemetry/`)
+
+**Status: generated and independently validated.** This resolves the open problem §10 was
+originally written against: HITL-confirmed `fault_events` alone cannot produce enough labeled
+fault examples to train Tier 2 in any reasonable timeframe, and every public dataset evaluated
+as an alternative (a diesel-engine CSV, an anonymized 50-sensor pump dataset, a
+loosely-pump-shaped CSV with only single-tick fault spikes, and a real but burst-sampled/
+differently-instrumented academic pump rig — none checked into this repo) failed at least one
+of: a real time axis, this system's exact 6 named metrics, or realistic multi-window fault
+episodes. A synthetic corpus generated from this system's own fault physics (§12.1's
+`FAULT_PROFILES`) is the only source that can satisfy all three by construction.
+
+### 13.1 What exists
+
+- `scripts/generate_pump_telemetry.py` — generates the corpus, seeded (`SEED = 20260816`),
+  reproducible bit-for-bit on re-run (verified).
+- `scripts/validate_pump_telemetry.py` — re-derives every invariant from the *written files*,
+  not the generator's in-memory state, so a generator bug can't hide behind a shared
+  assumption. Independently re-run (not just read from its own output) as part of accepting
+  this corpus — see §13.2.
+- `data/pump-telemetry/date=YYYY-MM-DD/part-000.parquet` — **the training corpus itself.**
+  7,776,000 rows, 90 days (`2026-05-01` to `2026-07-29`), 1 Hz, UTC, Hive-partitioned by day,
+  zstd Parquet, ~73 MB on disk. This is the file to actually train Tier 2 against — read all
+  90 partitions together (`pd.read_parquet("data/pump-telemetry")`).
+- `data/pump-telemetry-episodes.csv` — companion manifest, one row per fault episode
+  (`episodeId, faultType, startTimestamp, endTimestamp, durationSeconds, peakSeverity`). Used
+  for evaluation (precision/recall/lead-time against known ground-truth fault windows,
+  matching §10.5's champion/challenger held-out-by-buffer approach) and for validating the
+  corpus itself without re-scanning 7.8M rows — not a training input on its own.
+- `data/pump-telemetry-sample.csv` — a 3,284-row plain-CSV excerpt (one `DRY_RUN` episode),
+  for eyeballing without a Parquet reader only. Too small and single-type to train on.
+- `data/pump-telemetry-meta.json` — generation summary (seed, counts, bad weeks, per-type
+  totals). Reference only, not a data input.
+- `data/README.md` — full schema, generation methodology, and known-characteristics
+  documentation for the corpus; see that file for details not repeated here.
+
+### 13.2 Validation actually performed, not just claimed
+
+`scripts/validate_pump_telemetry.py` was re-run directly (not assumed from `data/README.md`'s
+self-reported figures) and every check passed:
+
+- Structural: strictly-increasing 1-second timestamps, no gaps/duplicates, exactly 7,776,000
+  rows, full 90-day coverage, no missing metric values, `status` always one of the three valid
+  values.
+- Values: every metric within its `pump-physics.yaml` range, exactly 1 decimal place
+  throughout, `rpm` never falsely reads `0` outside `STOPPED`.
+- Labels: `faultType` non-null iff `status = FAULT`, always a valid type, exactly one type per
+  episode.
+- Episodes: **zero isolated single-tick FAULT rows** — the exact failure mode that ruled out
+  `pump_sensor_data_large.csv` earlier in this process does not occur here; 180 contiguous
+  episodes; all 7 fault types present with ≥20 episodes each (`BEARING=26, CAVITATION=23,
+  DRY_RUN=27, IMPELLER_WEAR=33, MISALIGNMENT=23, SEAL_LEAK=26, THERMAL=22`); every episode
+  duration inside its band; a full ≥1-hour RUNNING buffer immediately before and after every
+  episode, including inside bad weeks.
+- Shutdowns: 61 `STOPPED` episodes, 20–299 s.
+- Mix: `RUNNING` 96.87%, `FAULT` 3.06%, `STOPPED` 0.07%.
+- Continuity: worst adjacent-second jump on any metric during steady `RUNNING` is 2.46% of
+  full scale — no teleporting values, momentum is real.
+- Manifest agreement: 180 manifest rows for 180 episodes, 0 mismatches against the telemetry.
+- Bad-week clustering: weeks 1, 2, and 13 carry 28/28/24 episodes against a 10/week baseline
+  in quiet weeks (mean 13.8/week) — matches §12's "roughly double" bad-week spec.
+
+### 13.3 How to use this corpus, and what it doesn't replace
+
+- **Train Tier 2 against `data/pump-telemetry/` directly.** Evaluate against
+  `pump-telemetry-episodes.csv`'s known episode boundaries, not just aggregate accuracy.
+- **This does not remove the need for real HITL-confirmed `fault_events`** (§3, §10) once real
+  operational data exists — synthetic data teaches the model this system's own modeled fault
+  *physics*; it cannot teach it anything a real fault looks like that the simulator doesn't
+  already encode. Treat this corpus as the way to get Tier 2 off the ground now, and real
+  HITL data as the long-run source that should eventually dominate the corpus, per §10.5's
+  provenance tracking (`sourceType`) — a future retrain-quality review should be able to see
+  how much of the corpus is still synthetic vs. real.
+- **`MISALIGNMENT` vs `BEARING` separability is a real, accepted limitation carried over from
+  §12.1** — both are vibration-dominant with only these 6 scalar metrics, and no amount of
+  additional synthetic data fixes that; it needs richer instrumentation (vibration spectrum or
+  motor current) to resolve, not more rows.
