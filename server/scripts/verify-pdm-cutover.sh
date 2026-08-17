@@ -63,8 +63,34 @@ for VAR in INTERNAL_PROXY_SECRET POSTGRES_SUPERUSER_PASSWORD PDM_APP_PASSWORD \
   sed -i "s/^${VAR}=.*/${VAR}=${SECRET}/" "$ENV_FILE"
 done
 
-echo "--- building and starting postgres, pdm, backend ---"
-docker compose --env-file "$ENV_FILE" up -d --build postgres pdm backend
+echo "--- building and starting postgres, pdm (NOT backend yet) ---"
+# backend must NOT start here: server.js queries processed_telemetry during
+# its own boot sequence, so it can never pass its healthcheck before the
+# schema exists — bringing it up alongside postgres/pdm is a chicken-and-egg
+# deadlock. Migrations have to run first, against a bare Postgres, via a
+# one-off container rather than `docker compose exec backend` (backend
+# isn't running yet to exec into).
+docker compose --env-file "$ENV_FILE" up -d --build postgres pdm
+
+echo "--- waiting for postgres and pdm to report healthy ---"
+for SERVICE in postgres pdm; do
+  for i in $(seq 1 60); do
+    STATUS="$(docker compose --env-file "$ENV_FILE" ps "$SERVICE" --format '{{.Health}}' 2>/dev/null || true)"
+    [ "$STATUS" = "healthy" ] && break
+    sleep 2
+  done
+  [ "$STATUS" = "healthy" ] || { echo "$SERVICE never became healthy" >&2; docker compose --env-file "$ENV_FILE" logs "$SERVICE" | tail -60; exit 1; }
+done
+
+echo "--- running migrations (one-off container, backend not started yet) ---"
+# node-pg-migrate is a devDependency; the backend image's production build
+# doesn't ship it (NODE_ENV=production would otherwise no-op the install).
+# --no-save so this doesn't touch the container's committed lockfile/image.
+docker compose --env-file "$ENV_FILE" run --rm --no-deps --entrypoint sh backend \
+  -c "NODE_ENV=development npm install --no-save node-pg-migrate >/dev/null 2>&1 && npm run migrate:up"
+
+echo "--- starting backend ---"
+docker compose --env-file "$ENV_FILE" up -d backend
 
 echo "--- waiting for backend to report healthy ---"
 for i in $(seq 1 60); do
@@ -73,9 +99,6 @@ for i in $(seq 1 60); do
   sleep 2
 done
 [ "$STATUS" = "healthy" ] || { echo "backend never became healthy" >&2; docker compose --env-file "$ENV_FILE" logs backend | tail -60; exit 1; }
-
-echo "--- running migrations ---"
-docker compose --env-file "$ENV_FILE" exec -T backend npm run migrate:up
 
 # --- helper: post one sample via node's built-in fetch inside the backend
 # container (backend publishes no host port by design — see docker-
@@ -139,16 +162,46 @@ echo "=== TEST 2: ingestLock.js doesn't serialize behind the Python round-trip =
 # Fire 20 concurrent non-window-closing POSTs while pdm is up; if the lock
 # scoping regressed (Python call moved inside withLock()), these would
 # queue up behind whichever request happens to close a window.
-START=$(date +%s%N)
-for i in $(seq 1 20); do
-  TS="$(date -u -d "$RECOVER_BASE +$((200+i)) seconds" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
-        || date -u -j -v+$((200+i))S -f "%Y-%m-%dT%H:%M:%S.000Z" "$RECOVER_BASE" +%Y-%m-%dT%H:%M:%S.000Z)"
-  post_sample "$TS" &
-done
-wait
-END=$(date +%s%N)
-ELAPSED_MS=$(( (END - START) / 1000000 ))
-echo "20 concurrent non-window-closing requests took ${ELAPSED_MS}ms total"
+#
+# Deliberately issued from a SINGLE Node process (one docker exec) using
+# Promise.all, not 20 separate `docker compose exec ... node -e` calls in
+# a shell loop. An earlier version of this test spawned 20 independent
+# `docker exec` + cold Node-process-start invocations against `backend`,
+# which is `cpus: 1.0`-capped (docker-compose.yml) — 20 concurrent V8
+# cold starts contending for one core trivially burns >5s on their own,
+# with zero relation to app-level request concurrency. That's OS/process
+# overhead, not what this test is meant to measure. One process issuing
+# 20 concurrent fetches isolates the thing we actually care about:
+# whether the app itself serializes request handling behind the pdm
+# round-trip.
+RESULT="$(docker compose --env-file "$ENV_FILE" exec -T backend node -e "
+  const base = new Date('$RECOVER_BASE');
+  const start = Date.now();
+  const requests = Array.from({ length: 20 }, (_, i) => {
+    const ts = new Date(base.getTime() + (200 + i) * 1000).toISOString();
+    return fetch('http://127.0.0.1:3000/api/data', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        timestamp: ts, status: 'RUNNING',
+        flowRate: 200, rpm: 1500, vibration: 2.1,
+        suctionPressure: 3.0, dischargePressure: 8.0, motorTemp: 60.0,
+      }),
+    });
+  });
+  Promise.all(requests)
+    .then((responses) => {
+      const elapsedMs = Date.now() - start;
+      const allOk = responses.every((r) => r.ok);
+      console.log('RESULT_JSON:' + JSON.stringify({ elapsedMs, allOk }));
+      process.exit(allOk ? 0 : 1);
+    })
+    .catch((e) => { console.error(e); process.exit(2); });
+")"
+echo "$RESULT"
+ELAPSED_MS="$(echo "$RESULT" | grep -o 'RESULT_JSON:.*' | sed -E 's/.*"elapsedMs":([0-9]+).*/\1/')"
+[ -n "$ELAPSED_MS" ] || { echo "FAIL: couldn't parse TEST 2 result (see output above)" >&2; exit 1; }
+echo "20 concurrent non-window-closing requests (single process, Promise.all) took ${ELAPSED_MS}ms total"
 # Generous threshold — this isn't a tight perf assertion, just a guard
 # against gross serialization (which would show up as roughly N * pdm's
 # ~2s timeout budget, i.e. tens of seconds, not a couple hundred ms).

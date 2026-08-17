@@ -1,13 +1,15 @@
--- 002_fault_events.up.sql — the PdM HITL review table, deferred out of
--- 001_init.up.sql ("a later, separate PdM phase") and never actually
+-- Up Migration
+
+-- 002_fault_events.sql — the PdM HITL review table, deferred out of
+-- 001_init.sql ("a later, separate PdM phase") and never actually
 -- written until now. Reconstructed from the original SQLite schema.sql
 -- (deleted in commit 3648784's SQLite -> Postgres/TimescaleDB migration;
 -- retrieved via `git show 3648784~1:server/database/schema.sql`), ported to
--- this repo's Postgres conventions the same way 001_init.up.sql ported
+-- this repo's Postgres conventions the same way 001_init.sql ported
 -- raw_telemetry/processed_telemetry: TEXT ISO-timestamp columns become
 -- TIMESTAMPTZ, JSON-text columns become JSONB, INTEGER PRIMARY KEY
 -- AUTOINCREMENT becomes BIGSERIAL. Every mixed-case column is double-quoted
--- for the same reason given in 001_init.up.sql's header — one rule, applied
+-- for the same reason given in 001_init.sql's header — one rule, applied
 -- uniformly.
 --
 -- NOT a hypertable — this is a low-volume HITL review table (one row per
@@ -19,7 +21,7 @@
 -- real FK here ("FK enforcement" per commit 95febd7's message), but
 -- processed_telemetry is a TimescaleDB hypertable whose PRIMARY KEY/UNIQUE
 -- constraints are required to include the "timestamp" partitioning column
--- (see 001_init.up.sql's own comment on this) — there is no unique
+-- (see 001_init.sql's own comment on this) — there is no unique
 -- constraint on processed_telemetry(id) alone for a single-column FK to
 -- reference. faultEventModel.js/faultEventService.js only ever pass the id,
 -- not a companion timestamp, so enforcing this for real would mean adding a
@@ -80,3 +82,9 @@ CREATE TABLE fault_events (
 CREATE INDEX idx_fault_events_status ON fault_events ("status");
 CREATE INDEX idx_fault_events_buffer ON fault_events ("bufferStart", "bufferEnd");
 CREATE INDEX idx_fault_events_processed ON fault_events ("processedTelemetryId");
+
+
+-- Down Migration
+
+-- 002_fault_events.down.sql — reverse of 002_fault_events.sql.
+DROP TABLE IF EXISTS fault_events;

@@ -4,7 +4,7 @@
 // Same convention as processedModel.js: every camelCase column name is
 // double-quoted, values are always bound as $1, $2, … (never concatenated).
 //
-// fault_events is created by server/database/migrations/002_fault_events.up.sql
+// fault_events is created by server/database/migrations/002_fault_events.sql
 // (deferred out of 001_init, then genuinely forgotten until it started
 // failing every query at runtime — see docs/plan/2026-08-11-hardening.md's
 // bugfix note). This file is converted from better-sqlite3 to `pg`, matching

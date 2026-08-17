@@ -15,7 +15,7 @@
 // and no longer computes physicsValid/physicsViolations locally —
 // raw_telemetry rows Node writes directly fall back to the DB's own
 // defaults (physicsValid=TRUE, provenance='MEASURED'; see
-// server/database/migrations/001_init.up.sql) rather than reflecting a
+// server/database/migrations/001_init.sql) rather than reflecting a
 // real per-row Node-computed value. Nothing outside the now-retired local
 // preprocessing modules reads those two raw_telemetry columns today
 // (verified against the import graph during Phase 3's design), so this is

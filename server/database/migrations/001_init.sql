@@ -1,8 +1,10 @@
--- 001_init.up.sql — initial TimescaleDB schema.
+-- Up Migration
+
+-- 001_init.sql — initial TimescaleDB schema.
 --
 -- Ported 1:1 from the former SQLite schema.sql (raw_telemetry +
 -- processed_telemetry only — fault_events is a later, separate PdM phase,
--- added in 002_fault_events.up.sql once it was actually needed). Column names, NOT NULL
+-- added in 002_fault_events.sql once it was actually needed). Column names, NOT NULL
 -- constraints, and DEFAULTs are preserved exactly; comments are carried
 -- over so the *why* behind each column travels with the schema, not just
 -- the *what*.
@@ -176,3 +178,13 @@ CREATE INDEX idx_processed_telemetry_timestamp
   ON processed_telemetry ("timestamp" DESC);
 CREATE INDEX idx_processed_telemetry_window
   ON processed_telemetry ("windowStart", "windowEnd");
+
+
+-- Down Migration
+
+-- 001_init.down.sql — reverse of 001_init.sql.
+-- No FK between the two tables (see comment in 001_init.sql), so drop
+-- order is not load-bearing; processed_telemetry first purely because it's
+-- the "downstream" table.
+DROP TABLE IF EXISTS processed_telemetry;
+DROP TABLE IF EXISTS raw_telemetry;
