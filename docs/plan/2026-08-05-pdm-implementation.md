@@ -1376,33 +1376,28 @@ breakdown, per the "just the Python change for now" decision)
       closing `processSample()` call), not the live-traffic concurrency test §11.6.5 originally
       envisioned. `ingestLock.js` itself was not modified — only what `pipeline.js` places
       inside vs. outside `withLock()` changed.
-- [ ] Backend survives `pdm` being fully stopped during a window close: no crash, no unhandled
+- [x] Backend survives `pdm` being fully stopped during a window close: no crash, no unhandled
       rejection, `raw_telemetry` keeps flowing, the next window processes normally once `pdm`
-      is back (§11.6.5). Partially covered by the mocked network-failure test above (proves no
-      crash/unhandled rejection and `raw_telemetry` writes are unaffected); the "next window
-      processes normally once `pdm` is back" half, plus the ingest-concurrency line above, still
-      need a real integration run against live Postgres + `pdm` (not mocks). **Blocked in this
-      session**: Docker is unavailable on the operator's workstation (Docker Desktop needs
-      nested Hyper-V, deliberately disabled — this project's real Docker host is a Proxmox VM
-      reached separately, not this machine). `server/scripts/verify-pdm-cutover.sh` is written
-      and ready to run on that host (or any host with Docker) — it stands up
-      postgres+pdm+backend only, runs both remaining checks, and prints PASS/FAIL for each.
-      Run it there, then check off both lines above by hand.
-- [ ] Post-cutover cleanup: `missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`,
+      is back (§11.6.5). **Verified live** via `server/scripts/verify-pdm-cutover.sh` against a
+      real Postgres + `pdm` + `backend` stack (run on the Proxmox Docker host, not mocks): no
+      unhandled rejection while `pdm` was stopped, raw ingest kept accepting samples, and the
+      next window processed normally once `pdm` restarted (`preprocessingVersion=v3-py`).
+      The ingest-concurrency line above was verified live in the same run: 20 concurrent
+      non-window-closing requests completed in 245ms total (well under the 5s serialization
+      threshold), confirming `ingestLock.js`'s critical section does not serialize concurrent
+      ingest behind the Python round-trip.
+- [x] Post-cutover cleanup: `missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`,
       `quality.js`, `transition.js`, `faultClassifier.js`, `server/scripts/parity/
       run_js_pipeline.mjs`, and `pdm/tests/parity/` (`test_golden_values.py`/`fixtures.py`) all
       deleted together, in one pass, once a real deployment confirms the cutover working live
-      via the two lines above. **Previously checked off in error**: an earlier pass (commit
-      `1391c45`) deleted these files before the golden-value parity suite had ever been built
-      or run — the exact ordering §11.6.3's second correction warns against. They were restored
-      from git history (`git show 1391c45~1:<path>`) in this session specifically to build and
-      run that suite (now passing, see the parity DoD line above) — so this box is unchecked
-      again until the real live-verification script above passes and the files are deleted a
-      second time, correctly, after verification rather than before it. Zero-importer status
-      must be re-verified via repo-wide `grep` immediately before deletion. `aggregation.js`,
-      `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and `preprocessing/config.js`
-      stay — each has a verified independent caller outside the deleted files' former call
-      sites.
+      via the two lines above. **Done**, after the live-verification script above passed.
+      Zero-importer status was re-verified via repo-wide `grep` immediately before deletion —
+      the only importers of the five orphaned preprocessing modules were `run_js_pipeline.mjs`
+      itself and each other (`validator.js`/`missing.js` → `transition.js`/`faultClassifier.js`),
+      all part of the same deletion set; nothing in the live call graph referenced any of them.
+      `aggregation.js`, `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and
+      `preprocessing/config.js` stay — each has a verified independent caller outside the
+      deleted files' former call sites.
 - [ ] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
       design, not previously documented): Node's ingest path no longer computes these locally
       per-sample — every row Node writes directly now falls back to the DB defaults
