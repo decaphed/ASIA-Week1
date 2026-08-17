@@ -82,6 +82,24 @@ CREATE INDEX idx_training_corpus_source_type ON training_corpus ("sourceType");
 CREATE INDEX idx_training_corpus_fault_event ON training_corpus ("faultEventId");
 CREATE INDEX idx_training_corpus_window_end ON training_corpus ("windowEnd");
 
+-- pdm/app/corpus.py's read-only role (db/init/03-create-pdm-corpus-
+-- readonly-role.sh) needs SELECT on this table — but that role can't be
+-- granted on a table until the table exists, so this can't live in the
+-- init script itself (which runs before any migration, including this
+-- one). Conditional on the role actually existing: on a fresh deployment
+-- where the init script already ran, this grants immediately; on an
+-- existing deployment where the role hasn't been created yet (e.g. it
+-- predates this migration), this is a harmless no-op — re-run
+-- `GRANT SELECT ON training_corpus TO pdm_corpus_readonly;` by hand once
+-- the role exists.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pdm_corpus_readonly') THEN
+    GRANT SELECT ON training_corpus TO pdm_corpus_readonly;
+  END IF;
+END
+$$;
+
 -- training_runs: retrain/promotion bookkeeping (§10.5's "every retrained
 -- model artifact stamped with the corpus version it trained on" +
 -- champion/challenger promotion gate). Lives in Postgres, not a separate
