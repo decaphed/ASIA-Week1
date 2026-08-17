@@ -852,6 +852,27 @@ raw_telemetry WHERE timestamp BETWEEN :bufferStart AND :bufferEnd` reconstructio
 defines, and feature computation runs against already-stored, already-trusted data. No file
 upload, no untrusted-content scanning needed for this path at all.
 
+**Status: implemented and live-verified** (backend/API only, per §1's UI scoping — no
+screen was built). `POST /api/pdm/fault-events/manual-buffer`, gated on the same
+`requireTrustedProxy` + `requireGroup(PDM_REVIEWER_GROUP)` boundary as the PATCH-confirm
+endpoint, plus a mandatory `notes` justification field (a deliberate escalation over the PATCH
+endpoint's optional `notes` — this action skips HITL review entirely, so the audit trail is
+the only check left). Migration `004_fault_events_source_type.sql` added the `sourceType`
+column (`TIER1_FLAGGED | NEGATIVE_SAMPLE | MANUAL_BUFFER | EXTERNAL_UPLOAD`) this paragraph's
+provenance tagging needed. `faultEventService.js::createManualBufferEvent` resolves the
+trigger window via an existing `processed_telemetry` row when one covers the range (Path A) or
+reconstructs one through the same `POST /process-window` call live ingest uses when it doesn't
+(Path B — e.g. `pdm` was down at the time), persisting via `saveProcessedReading` rather than
+`saveAndTrigger` so a historical backfill doesn't re-fire forecast/drift/trend. A pre-write
+overlap check against existing `fault_events` rows (409) and a resolved-window bounds check
+against `[faultStart, faultEnd]` (400) guard against corrupting the corpus with a duplicate or
+semantically-wrong entry — `processedTelemetryId` still has no enforced FK (§3.3's original
+note), so these are the only things standing between a query bug and a silently-wrong row.
+Tested: `server/scripts/tests/pdmManualBufferValidation.test.mjs` (13 cases, pure validation)
+and `server/scripts/tests/faultEventService.manualBuffer.test.mjs` (5 cases, mocked model
+layer — Path A, Path B, 409/422/400) both pass; a live smoke test against a real Postgres +
+`pdm` stack (migration applied, real HTTP request through the running backend) also passed.
+
 **Entry point 2 — genuinely external data.** A fault from before this system was deployed,
 from a different site, captured by another tool, anything that never passed through this
 system's own ingest. This has never been validated by anything, so it needs the real
@@ -988,6 +1009,101 @@ ordering only, consistent with §1's "no dashboard UI changes beyond what's need
 the rest of this document.
 
 ### 10.5 Corpus, merge, and promotion
+
+**Status: implemented.** Backend/data-pipeline infrastructure only (no UI, no Tier 2 model —
+`pdm/app/model.py` stays a stub, deliberately, per this session's own priority order). Design
+went through a code-architect blueprint, then an ecc:code-reviewer pass (software-engineering
+soundness) and an ecc:mle-reviewer pass (ML-methodology soundness) in parallel, both against
+the actual current schema — not the SQLite-era assumptions this section's original text below
+still describes. The mle-reviewer pass returned a BLOCK verdict on the original sketch; three
+HIGH-severity fixes were made before implementation, recorded here as decisions D1-D9:
+
+- **D1 (§10.6 item 4, resolved):** label = `fault_events.faultType` for a `CONFIRMED` row
+  (`TIER1_FLAGGED`/`MANUAL_BUFFER`/`EXTERNAL_UPLOAD`), or `'NORMAL'` for a `NEGATIVE_SAMPLE`
+  row. `PENDING_REVIEW`/`REJECTED`/null-`faultType` rows are never materialized — status is
+  eligibility, not label content. `'OTHER'` is a legitimate trainable label but is
+  **structurally excluded from the promotion gate** (D8), not just optionally flaggable — a
+  catch-all bucket is the worst combination of low-support and low-coherence for a per-class
+  floor.
+- **D2 (feature-recomputation, mle-review HIGH finding, fixed):** every window in a buffer is
+  recomputed **uniformly** at materialization time — no "keep the trigger window's stored
+  snapshot verbatim, recompute the rest" special case. Mixing a live-captured snapshot for one
+  row with after-the-fact-recomputed snapshots for its buffer-mates was a silent intra-buffer
+  feature-version skew risk (same physical event, different feature-code vintage, nothing to
+  catch it). Every corpus row now carries its own `featureCodeVersion`
+  (`processed_telemetry.preprocessingVersion`) so a discrepancy is at least detectable.
+- **D3:** corpus lives in Postgres (`training_corpus`), Node-owned writes
+  (`server/services/corpusMaterializationService.js`), Python reads via a read-only role
+  (§10.6 item 2's already-settled resolution).
+- **D4 (reproducibility, mle-review MEDIUM finding, fixed):** the content hash alone (computed
+  at training kickoff) can't answer "what corpus produced this model" once `training_corpus`'s
+  upsert-in-place rows have moved on — `training_runs.corpusRowManifest` now persists the exact
+  `(bufferId, windowEnd, corpusRowVersion)` tuples the hash was computed over, not just the hash.
+- **D5 (run/artifact metadata store):** originally sketched as Python's own SQLite store;
+  code-reviewer flagged this as a second DB technology introduced for no real benefit once
+  Python already needs a Postgres connection for D3's corpus read. **Changed to Postgres**
+  (`training_runs` table, same migration as `training_corpus`) per explicit project-owner
+  choice. Python still never writes it — `pdm/app/retrain.py` emits a JSON result to stdout;
+  `server/scripts/recordTrainingRun.js` does the actual `INSERT`, keeping §3.4's "Python never
+  writes application data" invariant unchanged even though pdm/ now has a live DB connection.
+- **D6:** whole-corpus class-balance check (`corpusMaterializationService.js::checkClassBalance`)
+  is warn-only for HITL-confirm/manual-buffer/negative-sample paths — discarding a
+  human-confirmed real fault to preserve balance would mean throwing away real ground truth.
+  Hard-block mode exists in the same function for the not-yet-built external-upload path, which
+  already has its own per-file quality gate (§10.4.1 Stage C) capable of bouncing a bad batch.
+- **D7 (split correctness, mle-review HIGH finding, fixed):** `evaluation/episodes.js` is
+  ported to Python (`pdm/app/evaluation/episodes.py`), re-targeted at `bufferId` grouping
+  instead of `dominantStatus` run-detection (corpus rows carry no `dominantStatus`). The port
+  is **not** a literal transliteration: the JS original's per-row timestamp-cutoff split is only
+  safe because detected runs are guaranteed non-overlapping; `fault_events` buffer time ranges
+  are **not** guaranteed non-overlapping the same way (two different fault_events rows can have
+  overlapping `[faultStart, faultEnd]` windows). The port assigns **whole buffers** to train/test
+  by each buffer's own start timestamp, never per-row — this makes buffer-window overlap
+  irrelevant to split safety by construction, with a defensive post-split assertion (no
+  `bufferId` split across both sides) as a second line of defense. `NORMAL`/`NEGATIVE_SAMPLE`
+  rows are routed by the exact same chronological cutoff as fault episodes, confirmed correct in
+  review — an independent/random split for negatives would leak "future-relative-to-test-cutoff"
+  normal examples into training.
+- **D8 (promotion criterion, mle-review HIGH finding, fixed):** the original per-class floor
+  used `tolerance=0.0` — candidate must beat champion on every fault label with sufficient
+  held-out support, no slack. mle-review found this would likely block promotion indefinitely:
+  at `min_support_per_class=5`, a single flipped held-out example swings recall by 20 points, so
+  zero tolerance treats sampling noise as a permanent regression once real per-class support
+  stays thin (which it will, for a long time — real confirmed faults arrive far slower than the
+  synthetic corpus's). **Fixed with a support-scaled tolerance** (project-owner's choice among
+  the reviewed options): wide at low support (~0.22 at n=5), tight at high support (~0.02 at
+  n=500), approximating one standard error of a proportion estimate. The per-class floor itself
+  (no averaging across classes — the whole point of D8) is unchanged.
+- **D9:** `bufferId` is namespaced TEXT (`"fault_events:<id>"` today, `"upload:<id>:<n>"`
+  reserved for the not-yet-built external-upload path); a separate `faultEventId` column carries
+  a real enforced FK to `fault_events(id)` (unlike `processedTelemetryId`'s deliberately-
+  unenforced FK elsewhere — `fault_events` is a plain `BIGSERIAL`, not a hypertable, so the
+  TimescaleDB obstacle doesn't apply here). A `CHECK` constraint ties the two encodings together
+  (code-reviewer MEDIUM finding, fixed) so they can never silently disagree.
+
+**Files:** `server/database/migrations/005_training_corpus.sql` (`training_corpus` +
+`training_runs`), `server/models/corpusModel.js`, `server/models/trainingRunModel.js`,
+`server/services/corpusMaterializationService.js` (`resolveLabel`, `materializeBuffer`,
+`materializeNegativeSample`, `checkClassBalance`, `onFaultEventConfirmed`,
+`onFaultEventRejectedOrExcluded`), `server/utils/featureSnapshot.js` (extracted from
+`faultEventService.js` to avoid a circular import once it started calling back into the new
+corpus service), `server/scripts/recordTrainingRun.js`, `pdm/app/evaluation/episodes.py`,
+`pdm/app/corpus.py`, `pdm/app/promotion.py`, `pdm/app/retrain.py`. Wired into
+`faultEventService.js`'s `reviewFaultEvent` (explicit CONFIRMED-vs-correction branch, a
+code-reviewer LOW finding fixed during implementation), `createManualBufferEvent`, and
+`recordNegativeSample` — always fire-and-forget-but-caught, matching this repo's existing
+Node↔Python/negative-sampling discipline (§3.3.1, §3.4).
+
+**Tested:** 26 Node tests (`corpusMaterializationService.test.mjs` — `resolveLabel`'s 8 cases;
+plus the pre-existing manual-buffer/validation suites, confirmed still green after the
+`faultEventService.js` changes) and 26 Python tests (`test_episodes.py` — including the D7a
+buffer-overlap and D7b NORMAL-routing regression tests; `test_promotion.py` — including the
+"single flipped example at low support doesn't block" and "real regression at high support
+still blocks" cases; `test_retrain.py` — end-to-end orchestration with a fake connection and
+fixture `predict_fn`), all passing. No live-stack integration test was run for this pass (would
+need real Postgres + a populated corpus, similar to §11's `verify-pdm-cutover.sh`) — the
+model/service layer is exercised via mocks, same trust level as §10.4's implementation before
+its own live verification.
 
 Building on the earlier discussion (not yet reflected elsewhere in this doc):
 

@@ -13,8 +13,9 @@ import * as model from '../models/faultEventModel.js';
 import * as processedModel from '../models/processedModel.js';
 import * as sensorModel from '../models/sensorModel.js';
 import * as processedService from './processedService.js';
-import { METRICS } from './forecastService.js';
 import { WINDOW_DURATION_SECONDS } from '../preprocessing/config.js';
+import { buildFeatureSnapshot } from '../utils/featureSnapshot.js';
+import * as corpusMaterializationService from './corpusMaterializationService.js';
 import { logger } from '../utils/logger.js';
 
 // §3.3.2: a PENDING_REVIEW row is only eligible to extend while its
@@ -27,31 +28,6 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 const WINDOW_MS = WINDOW_DURATION_SECONDS * 1000;
 const PDM_SERVICE_URL = process.env.PDM_SERVICE_URL || 'http://localhost:8000';
 const PROCESS_WINDOW_TIMEOUT_MS = 2000;
-
-/** Full per-metric mean/median/min/max/stdDev/last off the flat processedRecord shape. */
-function buildMetricStats(data) {
-  const metricStats = {};
-  for (const metric of METRICS) {
-    metricStats[metric] = {
-      mean: data[`${metric}Mean`],
-      median: data[`${metric}Median`],
-      min: data[`${metric}Min`],
-      max: data[`${metric}Max`],
-      stdDev: data[`${metric}StdDev`],
-      last: data[`${metric}Last`],
-    };
-  }
-  return metricStats;
-}
-
-// §3.3: fixed, eventType-independent composition — full precapFeaturesByMetric
-// (all six metrics) + full per-metric metricStats, never a per-metric subset.
-function buildFeatureSnapshot(data) {
-  return JSON.stringify({
-    precapFeaturesByMetric: data.precapFeaturesByMetric ?? {},
-    metricStats: buildMetricStats(data),
-  });
-}
 
 function lookbackBound(windowEndIso) {
   return new Date(Date.parse(windowEndIso) - COALESCE_LOOKBACK_WINDOWS * WINDOW_SECONDS * 1000).toISOString();
@@ -176,7 +152,15 @@ export async function recordNegativeSample(data, processedTelemetryId, threshold
       bufferEnd: null,
       status: 'N/A',
     });
-    return Number(info.lastInsertRowid);
+    const eventId = Number(info.lastInsertRowid);
+    try {
+      await corpusMaterializationService.materializeNegativeSample(eventId);
+    } catch (corpusErr) {
+      // Must never propagate up and affect ingestion (§3.3.1) — same
+      // discipline as the outer try/catch this sits inside.
+      logger.error(`corpusMaterializationService.materializeNegativeSample failed for fault_events#${eventId}: ${corpusErr.stack || corpusErr.message}`);
+    }
+    return eventId;
   } catch (err) {
     // Must never propagate up and affect ingestion (§3.3.1).
     logger.error(`faultEventService.recordNegativeSample failed: ${err.stack || err.message}`);
@@ -364,7 +348,15 @@ export async function createManualBufferEvent(body, reviewedBy) {
   };
 
   const info = await model.insertFaultEvent(record);
-  return getFaultEvent(Number(info.lastInsertRowid));
+  const eventId = Number(info.lastInsertRowid);
+  try {
+    await corpusMaterializationService.onFaultEventConfirmed(eventId);
+  } catch (corpusErr) {
+    // Must never block the manual-buffer HTTP response (same fire-and-
+    // forget-but-caught discipline as §3.3.1/§3.4 elsewhere in this file).
+    logger.error(`corpusMaterializationService.onFaultEventConfirmed failed for fault_events#${eventId}: ${corpusErr.stack || corpusErr.message}`);
+  }
+  return getFaultEvent(eventId);
 }
 
 /** @returns fault_events rows, optionally filtered by status. */
@@ -449,9 +441,11 @@ export async function reviewFaultEvent(id, patch) {
   const faultEnd = patch.faultEnd ?? existing.faultEnd;
   const bufferEnd = faultEnd ? new Date(Date.parse(faultEnd) + ONE_HOUR_MS).toISOString() : existing.bufferEnd;
 
+  const newStatus = patch.status ?? existing.status;
+
   await model.updateFaultEventReview({
     id,
-    status: patch.status ?? existing.status,
+    status: newStatus,
     faultType: patch.faultType ?? existing.faultType,
     rootCause: patch.rootCause ?? existing.rootCause,
     resolution: patch.resolution ?? existing.resolution,
@@ -461,6 +455,25 @@ export async function reviewFaultEvent(id, patch) {
     faultEnd,
     bufferEnd,
   });
+
+  // §10.5 corpus materialization — explicit branch, not a blanket call:
+  // a PATCH that CONFIRMS materializes/re-materializes the buffer (the
+  // upsert dedup in corpusModel.js handles the "already materialized,
+  // fields changed" case correctly); a PATCH that moves a PREVIOUSLY
+  // CONFIRMED row away from CONFIRMED (a correction) removes whatever was
+  // materialized for it. Any other transition (e.g. PENDING_REVIEW ->
+  // REJECTED, which never touched the corpus) is a no-op here. Own
+  // try/catch — must never block the HITL PATCH response (§3.4's pattern).
+  try {
+    if (newStatus === 'CONFIRMED') {
+      await corpusMaterializationService.onFaultEventConfirmed(id);
+    } else if (existing.status === 'CONFIRMED') {
+      await corpusMaterializationService.onFaultEventRejectedOrExcluded(id);
+    }
+  } catch (corpusErr) {
+    logger.error(`corpusMaterializationService hook failed for fault_events#${id} (status ${existing.status} -> ${newStatus}): ${corpusErr.stack || corpusErr.message}`);
+  }
+
   return getFaultEvent(id);
 }
 

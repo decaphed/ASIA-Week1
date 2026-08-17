@@ -90,6 +90,12 @@ export async function getProcessedByWindowRange(start, end) {
   return result.rows.map(mapRow);
 }
 
+/** @returns the single processed_telemetry row with this id, or undefined. */
+export async function getById(id) {
+  const result = await pool.query('SELECT * FROM processed_telemetry WHERE id = $1', [id]);
+  return mapRow(result.rows[0]);
+}
+
 /** @returns the single processed_telemetry row with this exact windowEnd, or undefined. */
 export async function getProcessedByWindowEnd(windowEnd) {
   const result = await pool.query('SELECT * FROM processed_telemetry WHERE "windowEnd" = $1', [windowEnd]);
