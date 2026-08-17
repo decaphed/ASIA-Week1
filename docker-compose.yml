@@ -7,6 +7,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD must be set}
       PDM_APP_PASSWORD: ${PDM_APP_PASSWORD:?PDM_APP_PASSWORD must be set}
       AUTHENTIK_PG_PASSWORD: ${AUTHENTIK_PG_PASSWORD:?AUTHENTIK_PG_PASSWORD must be set}
+      # db/init/03-create-pdm-corpus-readonly-role.sh substitutes this into
+      # the CREATE ROLE statement — without it here, that script creates
+      # pdm_corpus_readonly with an empty-string password (the var is
+      # simply unset in the container, not a hard failure, since this
+      # script has no :? guard of its own).
+      PDM_CORPUS_READONLY_PASSWORD: ${PDM_CORPUS_READONLY_PASSWORD:?PDM_CORPUS_READONLY_PASSWORD must be set}
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -38,6 +44,12 @@ services:
   pdm:
     build: ./pdm
     restart: unless-stopped
+    environment:
+      # §10.5/§10.6 item 2 — read-only role scoped to training_corpus only
+      # (see pdm/app/corpus.py's module docstring and db/init/03-create-
+      # pdm-corpus-readonly-role.sh). Never DATABASE_URL/pdm_app — that
+      # role is backend's, not pdm's.
+      PDM_CORPUS_DB_URL: postgresql://pdm_corpus_readonly:${PDM_CORPUS_READONLY_PASSWORD:?PDM_CORPUS_READONLY_PASSWORD must be set}@postgres:5432/pump_telemetry
     # No ports: — internal only.
     volumes:
       # Shared physics RANGES (§11.6.1) — pdm/app/physics.py resolves this
