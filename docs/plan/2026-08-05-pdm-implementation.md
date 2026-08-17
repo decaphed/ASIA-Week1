@@ -893,50 +893,94 @@ column names won't match `flowRate/rpm/vibration/suctionPressure/dischargePressu
 out of the box, so mapping is scoped as part of Entry point 2's upload gate, not a separate
 feature.
 
-**Order of operations, before a file is eligible for the statistical rejection gate (§10.6
-item 3) or feature computation (§10.4's "same feature-computation function" reuse):**
+**Two-stage gate, resolved this way because physics-aware validation is impossible before
+mapping — a range check against `pump-physics.yaml` needs to know a column *is*
+`suctionPressure` before it can ask whether a value is a valid `suctionPressure` reading. So
+the gate splits into what can be checked before mapping (structural/statistical hygiene, no
+semantic knowledge required) and what can only be checked after (physical validity,
+imputation, capping — all metric-specific).**
 
-1. **Time-series precondition, checked first, before any mapping is offered.** Confirm the
-   file has a real timestamp column with regular-enough sampling to window. A file of
-   independent snapshot rows with no time axis is rejected outright at this step — column
-   mapping cannot manufacture a time axis that doesn't exist, and offering a mapping UI on a
-   file that will fail this check wastes the operator's effort. This is the same defect that
-   ruled out the diesel-engine CSV evaluated during planning: renaming its columns would not
-   have fixed the missing time axis.
-2. **Header extraction, mapped manually, not inferred.** Node parses the uploaded file's
+#### Stage A — structural gate, before the operator ever sees a mapping screen
+
+Cheap, semantics-free checks that reject an obviously-unusable file before burdening the
+operator with mapping it:
+
+1. **Time-series precondition, checked first.** Confirm the file has a real timestamp column
+   with regular-enough sampling to window. A file of independent snapshot rows with no time
+   axis is rejected outright at this step — column mapping cannot manufacture a time axis that
+   doesn't exist, and offering a mapping UI on a file that will fail this check wastes the
+   operator's effort. This is the same defect that ruled out the diesel-engine CSV evaluated
+   during planning: renaming its columns would not have fixed the missing time axis.
+2. **Raw missing-value rate per column**, before any column has a known identity — a column
+   that's mostly empty is a red flag regardless of what it turns out to represent. Reject
+   above a threshold (concrete number still open, same status as item 3 below).
+3. **Duplicate timestamp / duplicate row detection**, and a **minimum row count** floor — a
+   file too short or too full of exact duplicates isn't worth mapping.
+
+A file that fails Stage A never reaches the mapping screen at all.
+
+#### Stage B — mapping (only reached once Stage A passes)
+
+4. **Header extraction, mapped manually, not inferred.** Node parses the uploaded file's
    header row and presents the raw column names to the operator. The operator explicitly
    assigns each source column to one of the six known metrics, or marks it unused. No
    automatic name-similarity guessing (e.g. fuzzy-matching `Vbr` to `vibration`) — the mapping
    is only as trustworthy as the human asserting it, consistent with §10.4's reasoning that a
    domain expert is directly asserting ground truth for this entry point, not a second
    automated inference layer.
-3. **Unmapped source columns are dropped, not guessed.** Any column the operator doesn't
+5. **Unmapped source columns are dropped, not guessed.** Any column the operator doesn't
    explicitly map is excluded from feature computation entirely — never silently folded in as
    an extra, uncalibrated dimension alongside the six metrics `precapFeaturesByMetric`/
    `metricStats` expect (§3.3's fixed composition). This is also why an anonymized-sensor file
    with no recoverable column identity (e.g. `sensor_00`...`sensor_51`, no data dictionary)
    fails this step for every column — an operator cannot honestly map a column they cannot
    identify, and a forced guess here is indistinguishable from fabricating a label.
-4. **Unit declared and converted per mapped column, not inferred from the name match alone.**
+6. **Unit declared and converted per mapped column, not inferred from the name match alone.**
    Each mapping also carries a declared source unit (from a short fixed list per metric — e.g.
    vibration in mm/s vs g, pressure in psi vs bar/kPa, temperature in °C vs °F). Node converts
    to this system's internal units at parse time, before feature computation. A correct name
    match with an unconverted unit mismatch is just as corrupting to the corpus as a wrong name
    match would be — both produce a `featureSnapshot` that doesn't mean what the rest of the
    corpus means by that field.
-5. **Range sanity-check against `pump-physics.yaml`, after mapping and unit conversion.**
-   Mapped, converted values are checked against the same `RANGES` `middleware/
-   validateReading.js`/`validator.py` already use (§11.6.1). Values far outside
-   physically-reasoned bounds are a signal the mapping or declared unit is wrong, not that the
-   source pump behaved impossibly — flagged back to the operator for re-confirmation, not
-   silently accepted or silently dropped.
-6. **Mapping-confidence tag persisted per column on the upload record.** Alongside the
-   upload's existing `sourceType: EXTERNAL_UPLOAD` provenance (§10.4), store how each column
-   was resolved — e.g. `EXACT_NAME_MATCH` (source header text already matched a known metric
-   name/alias) vs `OPERATOR_OVERRIDE` (manually assigned, unverifiable from the name alone). A
-   later investigation into a corpus-quality problem should be able to tell "this batch leaned
-   on three operator overrides" apart from "this batch was self-evidently named," without
-   re-opening the original file.
+7. **Quick range sanity-check against `pump-physics.yaml`, immediately after mapping and unit
+   conversion.** A fast, cheap pass over the mapped, converted values against the same
+   `RANGES` `middleware/validateReading.js`/`validator.py` already use (§11.6.1) — this is a
+   reasonableness check on the *mapping/unit choice itself*, not the full quality gate. Values
+   wildly outside physically-reasoned bounds at this stage are a signal the mapping or declared
+   unit is wrong, not that the source pump behaved impossibly — flagged back to the operator
+   for re-confirmation before they move on, rather than waiting until Stage C to surface an
+   obviously bad mapping.
+
+#### Stage C — full physics-aware quality gate, after mapping is confirmed
+
+This is where the operator's original ask lives: **reject the whole upload if too much of the
+data is physically invalid, imputed, or capped, based on a quality score** — the thing that
+was impossible before mapping (Stage A) but is now well-defined, because every column has a
+known metric identity and unit.
+
+8. **Run the mapped, converted data through the same preprocessing pipeline live ingest
+   uses** — `pdm/app/preprocessing/missing.py` (gap-fill), `validator.py` (physics validity
+   per sample), `outlier.py` (Hampel-filter capping), `quality.py` (`computeQuality`), per
+   §11.6.2. Not a separate, upload-specific implementation — the exact same functions Tier 1
+   scores live windows with, so an uploaded buffer's quality is measured on identical terms to
+   what "clean data" already means everywhere else in this system.
+9. **Compute an aggregate quality score for the file** from the same ingredients
+   `computeQuality` already produces per window (physically-invalid rate, imputed-value rate,
+   outlier-capped rate), rolled up across the whole upload rather than one 60-second window.
+   **Reject the upload outright if the score falls below a threshold** — concrete numbers still
+   open, this is what resolves §10.6 item 3 ("statistical rejection thresholds for an uploaded
+   file... still need concrete numbers") as a real mechanism rather than a placeholder: the
+   thresholds are stated in terms of the same physicsValid/imputed/capped rates
+   `computeQuality` already tracks, not a new, upload-specific metric invented from scratch.
+   A rejected file gets the score and the three underlying rates shown back to the operator, so
+   "why was this rejected" is never a black box.
+10. **Mapping-confidence tag persisted per column on the accepted upload's record.** Alongside
+    the upload's existing `sourceType: EXTERNAL_UPLOAD` provenance (§10.4), store how each
+    column was resolved — e.g. `EXACT_NAME_MATCH` (source header text already matched a known
+    metric name/alias) vs `OPERATOR_OVERRIDE` (manually assigned, unverifiable from the name
+    alone). A later investigation into a corpus-quality problem should be able to tell "this
+    batch leaned on three operator overrides" apart from "this batch was self-evidently named,"
+    without re-opening the original file.
 
 **Not covered by this addendum:** the operator-facing form/screen for presenting extracted
 headers and collecting the mapping. This subsection specifies the backend mechanism and
@@ -1002,9 +1046,12 @@ Building on the earlier discussion (not yet reflected elsewhere in this doc):
    and only for this batch/read path. Whatever model artifacts/training-run metadata Python
    *does* need to persist (trained model files, run metrics) are a separate concern from the
    corpus and can live in Python's own store without touching Node's tables at all.
-3. **Statistical rejection thresholds for an uploaded file** (imputation rate, outlier-capping
-   rate, etc.) still need concrete numbers — same open item as the earlier upload-gate
-   discussion, unresolved here too.
+3. **Statistical rejection thresholds for an uploaded file — mechanism resolved (§10.4.1 Stage
+   C), concrete numbers still open.** The gate now runs the mapped upload through the same
+   `computeQuality` pipeline live windows use and rejects below a quality-score threshold
+   framed in terms of the same physicsValid/imputed/capped rates already tracked elsewhere in
+   this system — what's still undecided is the actual cutoff values, not the shape of the
+   check.
 4. **What counts as the label** for supervised training — `fault_events.faultType`, `status`,
    or something coarser/finer than either.
 5. **Corpus seed state** — there is currently no Tier 2 corpus at all (per §1, Tier 2 has never
@@ -1281,16 +1328,41 @@ breakdown, per the "just the Python change for now" decision)
 
 ### 11.7 Definition of done
 
-- [ ] `pump-physics.yaml` exists; both Node and Python load `RANGES` from it, not a hardcoded
-      copy in either language (§11.6.1)
-- [ ] `pdm/app/preprocessing/` contains a Python port of every stage `pipeline.js` currently
+- [x] `pump-physics.yaml` exists; both Node and Python load `RANGES` from it, not a hardcoded
+      copy in either language (§11.6.1). **Verified**: `server/utils/validation.js` and
+      `pdm/app/physics.py` both load from the repo-root file.
+- [x] `pdm/app/preprocessing/` contains a Python port of every stage `pipeline.js` currently
       runs (missing, physics validation, outlier capping, aggregation, precap features,
-      quality), plus a new stateless orchestration function (§11.6.2)
-- [ ] `POST /process-window` exists, Pydantic-validated request/response, returns both the
-      full `processed_telemetry` row shape and the Tier 1 verdict in one call (§11.6.2)
-- [ ] Golden-value parity suite passes: Python's output matches the current JS pipeline's
+      quality), plus a new stateless orchestration function (§11.6.2). **Verified** present.
+- [x] `POST /process-window` exists, Pydantic-validated request/response, returns both the
+      full `processed_telemetry` row shape and the Tier 1 verdict in one call (§11.6.2).
+      **Verified** in `pdm/app/main.py`.
+- [x] Golden-value parity suite passes: Python's output matches the current JS pipeline's
       output within float tolerance across the fixture set described in §11.6.5, **before**
-      `pipeline.js`'s local stage calls are removed
+      `pipeline.js`'s local stage calls are removed. **Implemented and passing**
+      (`pdm/tests/parity/`, 6 fixtures including one sourced from `data/pump-telemetry/` real
+      corpus data, all green). **Process-gap note:** the seven JS reference modules and the
+      JS harness this suite diffs against (`missing.js`, `validator.js`, `outlier.js`,
+      `precapFeatures.js`, `quality.js`, `transition.js`, `faultClassifier.js`,
+      `server/scripts/parity/run_js_pipeline.mjs`) had already been deleted in commit
+      `1391c45`, before this suite was ever built or run — exactly the ordering §11.6.3's
+      second correction warns against. They were restored from git history
+      (`git show 1391c45~1:<path>`) specifically to build and run this suite, and remain
+      reference-only (not reintegrated into `pipeline.js`'s live call graph). Delete them
+      again, together with `pdm/tests/parity/`, once a live deployment separately confirms
+      the cutover working end-to-end (the remaining unchecked lines below) — not before.
+      **Real bug found and fixed by this suite:** the `real_running_window` fixture (sourced
+      from real corpus data, not hand-synthesized) caught a genuine divergence —
+      `aggregation.py`/`precap_features.py` used Python's builtin `sum()`, which on CPython
+      3.12+ uses compensated (Neumaier) summation for floats, more accurate than JS's naive
+      `.reduce((a,b) => a+b, 0)`. On this real window the true mean landed within float-noise
+      of an exact `.xx5` rounding boundary, so the two implementations rounded to different
+      values (JS 4.90, Python 4.91) — the exact class of divergence `FLOAT_TOLERANCE = 0.005`
+      was tuned to catch. Fixed by adding `js_sum()` (naive left-to-right summation) to
+      `_stats.py` and using it in both modules' mean/variance accumulation in place of the
+      builtin. All 5 synthetic fixtures had already passed without this fix — only the real
+      corpus-derived fixture exposed it, underscoring why §11.6.5 calls for a real-data
+      fixture and not only hand-built edge cases.
 - [x] `pipeline.js` calls `POST /process-window` synchronously in place of local computation;
       on failure/timeout, logs and skips the window — no `processed_telemetry` row, no
       downstream trigger calls, `raw_telemetry` unaffected (§11.6.3). **Implemented**; verified
@@ -1308,17 +1380,29 @@ breakdown, per the "just the Python change for now" decision)
       rejection, `raw_telemetry` keeps flowing, the next window processes normally once `pdm`
       is back (§11.6.5). Partially covered by the mocked network-failure test above (proves no
       crash/unhandled rejection and `raw_telemetry` writes are unaffected); the "next window
-      processes normally once `pdm` is back" half still needs a real integration run.
-- [x] Post-cutover cleanup: `missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`,
+      processes normally once `pdm` is back" half, plus the ingest-concurrency line above, still
+      need a real integration run against live Postgres + `pdm` (not mocks). **Blocked in this
+      session**: Docker is unavailable on the operator's workstation (Docker Desktop needs
+      nested Hyper-V, deliberately disabled — this project's real Docker host is a Proxmox VM
+      reached separately, not this machine). `server/scripts/verify-pdm-cutover.sh` is written
+      and ready to run on that host (or any host with Docker) — it stands up
+      postgres+pdm+backend only, runs both remaining checks, and prints PASS/FAIL for each.
+      Run it there, then check off both lines above by hand.
+- [ ] Post-cutover cleanup: `missing.js`, `validator.js`, `outlier.js`, `precapFeatures.js`,
       `quality.js`, `transition.js`, `faultClassifier.js`, `server/scripts/parity/
-      run_js_pipeline.mjs`, and `tests/parity/` (`test_golden_values.py`/`fixtures.py`) all
-      deleted together, in one pass, after a real deployment confirmed the cutover working
-      live (multiple windows landing as `preprocessingVersion: 'v3-py'`, a pdm-outage-and-
-      recovery cycle verified against real traffic — not just this session's earlier mocked
-      verification). Zero-importer status re-verified via repo-wide `grep` immediately before
-      deletion. `aggregation.js`, `buffer.js`, `ingestLock.js`, `server/utils/validation.js`,
-      and `preprocessing/config.js` confirmed to remain, each with a verified independent
-      caller outside the deleted files' former call sites.
+      run_js_pipeline.mjs`, and `pdm/tests/parity/` (`test_golden_values.py`/`fixtures.py`) all
+      deleted together, in one pass, once a real deployment confirms the cutover working live
+      via the two lines above. **Previously checked off in error**: an earlier pass (commit
+      `1391c45`) deleted these files before the golden-value parity suite had ever been built
+      or run — the exact ordering §11.6.3's second correction warns against. They were restored
+      from git history (`git show 1391c45~1:<path>`) in this session specifically to build and
+      run that suite (now passing, see the parity DoD line above) — so this box is unchecked
+      again until the real live-verification script above passes and the files are deleted a
+      second time, correctly, after verification rather than before it. Zero-importer status
+      must be re-verified via repo-wide `grep` immediately before deletion. `aggregation.js`,
+      `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and `preprocessing/config.js`
+      stay — each has a verified independent caller outside the deleted files' former call
+      sites.
 - [ ] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
       design, not previously documented): Node's ingest path no longer computes these locally
       per-sample — every row Node writes directly now falls back to the DB defaults

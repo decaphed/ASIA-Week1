@@ -15,6 +15,13 @@ must use, not numpy/pandas equivalents):
   - variance is POPULATION variance (ddof=0) — numpy.var(..., ddof=0)
     matches; pandas.Series.var() defaults to ddof=1 (sample variance) and
     would silently diverge if ever substituted here.
+  - mean/variance accumulation uses `js_sum` (naive left-to-right float
+    addition), not the builtin `sum()` — CPython 3.12+'s builtin `sum()`
+    uses compensated summation for floats, which is MORE accurate than JS's
+    `.reduce((a,b) => a+b, 0)` and can round a `.xx5`-boundary mean
+    differently as a result. Caught by the golden-value parity suite
+    (§11.6.5) against real corpus data, not a synthetic fixture — see that
+    suite's `real_running_window` fixture.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._stats import js_median, round2
+from ._stats import js_median, js_sum, round2
 from .config import METRICS
 
 __all__ = ["round2", "aggregate_window"]
@@ -62,10 +69,10 @@ def aggregate_window(
             raise ValueError(f'aggregateWindow: metric "{metric}" has no non-null values in this window')
         n = len(non_null_capped)
 
-        mean_val = sum(non_null_capped) / n
+        mean_val = js_sum(non_null_capped) / n
         sorted_capped = sorted(non_null_capped)
         median_val = js_median(sorted_capped)
-        variance = sum((v - mean_val) ** 2 for v in non_null_capped) / n
+        variance = js_sum((v - mean_val) ** 2 for v in non_null_capped) / n
 
         # "last" is the most recent NON-null raw value for this specific
         # metric — a plain raw[-1] would go None if the window's final

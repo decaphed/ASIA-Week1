@@ -16,6 +16,17 @@ is the upper-middle element, not the textbook average of the two middle
 values `statistics.median`/`numpy.median` would compute. Must be hand-
 ported exactly; every ported module importing "median" imports this one
 function rather than reimplementing it.
+
+js_sum: JS's `array.reduce((a, b) => a + b, 0)` is naive, uncompensated
+left-to-right float addition — no Kahan/Neumaier error correction. Python's
+builtin `sum()` on CPython 3.12+ uses compensated summation for floats
+(more accurate, but a genuine parity divergence), confirmed via the golden-
+value parity suite (§11.6.5): the same 60-value array can round to a
+different `round2()` result depending on which summation is used when the
+true mean sits within float-noise of an exact `.xx5` boundary. Every mean/
+variance accumulation ported from a JS `.reduce()` call must use this
+helper instead of the builtin, or the two languages can silently diverge on
+real (not just adversarial) data.
 """
 
 from __future__ import annotations
@@ -47,6 +58,13 @@ def js_round(value: float) -> float:
 def js_median(values: list[float]) -> float:
     sorted_values = sorted(values)
     return sorted_values[len(sorted_values) // 2]
+
+
+def js_sum(values) -> float:
+    total = 0.0
+    for v in values:
+        total += v
+    return total
 
 
 def round2(value: float) -> float:

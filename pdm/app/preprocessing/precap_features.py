@@ -11,6 +11,11 @@ NULL-COERCION PARITY: `values` (stats_window's raw per-metric array, same
 array outlier.py's hampel_cap consumes) can contain None — see outlier.py's
 matching note. JS's `reduce`/arithmetic coerce `null` to `0` implicitly;
 `_as_number()` mirrors that explicitly since Python doesn't.
+
+SUMMATION PARITY: mean/variance use `js_sum` (naive left-to-right float
+addition), not the builtin `sum()` — see aggregation.py's matching note;
+CPython 3.12+'s compensated `sum()` can round a `.xx5`-boundary mean
+differently than JS's `.reduce()` on real data.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-from ._stats import js_median, js_number
+from ._stats import js_median, js_number, js_sum
 from .aggregation import round2
 
 
@@ -36,8 +41,8 @@ def compute_precap_features(values: list[Optional[float]]) -> dict[str, Any]:
     n = len(values)
     numeric_values = [js_number(v) for v in values]
 
-    mean_val = sum(numeric_values) / n
-    variance = sum((v - mean_val) ** 2 for v in numeric_values) / n
+    mean_val = js_sum(numeric_values) / n
+    variance = js_sum((v - mean_val) ** 2 for v in numeric_values) / n
     raw_std_dev = round2(math.sqrt(variance))
 
     diff_sum = 0.0
