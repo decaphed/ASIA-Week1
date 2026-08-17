@@ -1433,15 +1433,22 @@ correct behavior now: raw ingest genuinely has no diagnosis to offer, matching r
 
 ## 13. Synthetic Tier 2 training corpus (`data/pump-telemetry/`)
 
-**Status: generated and independently validated.** This resolves the open problem §10 was
-originally written against: HITL-confirmed `fault_events` alone cannot produce enough labeled
-fault examples to train Tier 2 in any reasonable timeframe, and every public dataset evaluated
-as an alternative (a diesel-engine CSV, an anonymized 50-sensor pump dataset, a
-loosely-pump-shaped CSV with only single-tick fault spikes, and a real but burst-sampled/
-differently-instrumented academic pump rig — none checked into this repo) failed at least one
-of: a real time axis, this system's exact 6 named metrics, or realistic multi-window fault
-episodes. A synthetic corpus generated from this system's own fault physics (§12.1's
-`FAULT_PROFILES`) is the only source that can satisfy all three by construction.
+**Status: generated and independently validated as a corpus; its role relative to Tier 2
+training is exploratory, not decided (see §13.3's correction and §13.4–§13.5).** The corpus
+itself is real and checked (§13.1–§13.2). What it's *for* is where this section originally
+overreached: an earlier version of this addendum declared it resolves §1's "Explicitly NOT in
+scope" bullet ("No Tier 2 model training or trained model artifact... there isn't enough labeled
+fault data yet") — but §1 is this doc's committed base scope, not itself amended here, and every
+other addendum in this doc is explicit when it supersedes earlier committed text (§10.6 item 1:
+"Superseded by §11..."). Declaring §1 resolved from inside an addendum, without updating §1 to
+say so, left the doc internally inconsistent — corrected in §13.3 below. Every public dataset
+evaluated as an alternative during generation (a diesel-engine CSV, an anonymized 50-sensor pump
+dataset, a loosely-pump-shaped CSV with only single-tick fault spikes, and a real but
+burst-sampled/differently-instrumented academic pump rig — none checked into this repo) failed
+at least one of: a real time axis, this system's exact 6 named metrics, or realistic multi-window
+fault episodes — which is why a synthetic corpus generated from this system's own fault physics
+(§12.1's `FAULT_PROFILES`) was built at all; that reasoning stands regardless of how §13.3
+resolves.
 
 ### 13.1 What exists
 
@@ -1493,18 +1500,90 @@ self-reported figures) and every check passed:
 - Bad-week clustering: weeks 1, 2, and 13 carry 28/28/24 episodes against a 10/week baseline
   in quiet weeks (mean 13.8/week) — matches §12's "roughly double" bad-week spec.
 
-### 13.3 How to use this corpus, and what it doesn't replace
+### 13.3 Correction: what this corpus is not, and why "train Tier 2 directly on it" overreached
 
-- **Train Tier 2 against `data/pump-telemetry/` directly.** Evaluate against
-  `pump-telemetry-episodes.csv`'s known episode boundaries, not just aggregate accuracy.
-- **This does not remove the need for real HITL-confirmed `fault_events`** (§3, §10) once real
-  operational data exists — synthetic data teaches the model this system's own modeled fault
-  *physics*; it cannot teach it anything a real fault looks like that the simulator doesn't
-  already encode. Treat this corpus as the way to get Tier 2 off the ground now, and real
-  HITL data as the long-run source that should eventually dominate the corpus, per §10.5's
-  provenance tracking (`sourceType`) — a future retrain-quality review should be able to see
-  how much of the corpus is still synthetic vs. real.
-- **`MISALIGNMENT` vs `BEARING` separability is a real, accepted limitation carried over from
-  §12.1** — both are vibration-dominant with only these 6 scalar metrics, and no amount of
-  additional synthetic data fixes that; it needs richer instrumentation (vibration spectrum or
-  motor current) to resolve, not more rows.
+**An earlier version of this section said to train Tier 2 against `data/pump-telemetry/`
+directly and treat that as resolving §1's scope note.** On review, that's not adopted. Reasons:
+
+- **§1 states Tier 2 training is out of scope because there isn't enough labeled fault data
+  yet — a data-honesty argument, not merely a data-volume one.** This corpus doesn't add labeled
+  *observations* of real fault behavior; every label in it is ground truth I asserted at
+  generation time from a model I wrote (§12.1's `FAULT_PROFILES`, exact linear deltas per fault
+  type). A model trained on it learns this system's own guess at fault physics, not evidence of
+  what a real fault looks like. Reporting accuracy/precision/recall from that as if it
+  establishes real-world Tier 2 performance risks exactly the kind of fabricated confidence §10.4
+  already rules out for a different part of this design ("never fabricate confidence it doesn't
+  have" — the reason Tier 1's automated flags need a human reviewer). The same principle applies
+  here: a number this corpus produces is not evidence about the real pump.
+- **§10.5's champion/challenger promotion gate is defined against a real held-out corpus** —
+  confirmed `fault_events`/accepted uploads, split by buffer. A model whose only training and
+  evaluation data is synthetic never passes through that gate in any meaningful sense; declaring
+  it ready to train "Tier 2" proper skips the exact safety mechanism §10.5 was designed to
+  enforce.
+- **§10.4's two entry points (manual buffer over real `raw_telemetry`, validated external
+  upload) are the only defined ways data joins the real corpus**, each with its own provenance
+  tag (`sourceType`) precisely so a bad or synthetic contribution can be traced and excluded.
+  This corpus fits neither entry point — it was never suggested it should — and no third entry
+  point for synthetic data is proposed here or elsewhere.
+
+**What the corpus is actually for:** developing and testing the Tier 2 *pipeline machinery* —
+feature computation, splitting, evaluation reporting, the `model.py` wiring — before real fault
+data exists in volume, addressing the gap §10.6 item 5 already named ("there is currently no
+Tier 2 corpus at all") without claiming to fill it. §13.4 describes this scaffold; none of it has
+been built. `MISALIGNMENT` vs `BEARING` separability remains a real, accepted limitation carried
+over from §12.1 regardless of which framing is used — both are vibration-dominant with only these
+6 scalar metrics, and no amount of additional synthetic data fixes that.
+
+### 13.4 The deferred scaffold (design, not built)
+
+A training scaffold consuming this corpus was designed in discussion but explicitly not built,
+each step tied to an existing module to reuse rather than reinvent:
+
+1. Load the corpus and its episode manifest.
+2. Compute windowed features via `pdm/app/preprocessing/aggregation.py`, not a hand-rolled
+   mean/std — consistent with §11's move of feature computation into Python and this doc's
+   general "don't recompute what already exists" stance (§3.1, §10.4).
+3. Build **two** labels side by side, to make §10.6 item 4 ("what counts as the label") concrete
+   rather than resolve it by fiat:
+   - a same-time diagnosis label (the row's own `status`/`faultType`) — "is a fault happening
+     right now," and
+   - a lead-time-shifted onset label ("does a fault start within the next N minutes") — the
+     signal a genuine PdM system needs, distinct from diagnosis.
+   The onset label needs a continuous per-row severity signal the corpus doesn't currently
+   expose: `severity` today only exists internally during generation and surfaces solely as
+   `peakSeverity` per episode in the manifest. A concrete, scoped follow-up this section records:
+   add a per-row `severity` column to `data/pump-telemetry` (0.0 outside any episode, ramping
+   smoothly 0→peak and back within one, from values already computed during generation, no new
+   modeling needed), so the onset label can be built by shifting this column backward in time
+   rather than inventing a new signal.
+4. Split by episode using `server/preprocessing/evaluation/episodes.js`'s
+   `walkForwardSplit`/`checkEvaluationGate` (`MIN_ONSET_EPISODES = 100`), per §10.5's own
+   instruction to reuse this "rather than reinventing... once ported to (or called from)
+   Python" — not a hand-rolled random split, which would leak correlated rows from the same
+   episode across train/test. The synthetic corpus's 180 episodes clear `MIN_ONSET_EPISODES`,
+   so it can exercise the gate logic itself even before real data does.
+5. Train a baseline Random Forest/XGBoost on the onset label, per the doc's intro and §10.1's
+   "model family stays Random Forest/XGBoost" decision.
+6. Evaluate stratified by proximity-to-onset (early-window accuracy, not just overall accuracy —
+   overall accuracy is flattered by easy late-episode rows, since severity ramps from 0) and by
+   fault type (expecting, not chasing, the `MISALIGNMENT`/`BEARING` ambiguity §12.1 already
+   calls out as a known limitation of these six scalar metrics).
+7. Report results clearly labeled as trained on synthetic ground truth only — not a substitute
+   for evaluation against real `fault_events` data, consistent with §10.5's champion/challenger
+   gate being defined in terms of a real held-out corpus, not this one.
+8. Wire the trained artifact into `pdm/app/model.py`'s `score()` stub as an augmenting, not
+   replacing, verdict — per §3.5's existing tiered design. This is the eventual integration
+   point already scaffolded there; nothing new needs to be invented for it.
+
+### 13.5 Open items this does not resolve
+
+This section narrows, but does not close, two items already open in §10.6:
+
+- **Item 4 (what counts as the label)** — building the two label variants in §13.4 step 3 lets
+  the choice be prototyped experimentally against a corpus with dense ground truth, but the real
+  answer still depends on what `fault_events` ends up capturing once HITL review data
+  accumulates, which this synthetic corpus cannot substitute for.
+- **Item 5 (corpus seed state)** — §13.1–§13.2 give the Tier 2 *pipeline* something to develop
+  and test against today; they do not seed the real training corpus, which per §10.6 item 5
+  still only comes into existence once the first accepted upload and/or HITL-confirmed
+  `fault_events` batch actually lands.
