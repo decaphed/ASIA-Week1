@@ -19,7 +19,7 @@ import { getForecast } from '../controllers/forecastController.js';
 import { getDrift } from '../controllers/driftController.js';
 import { getTrend } from '../controllers/trendController.js';
 import { createProcessedReading, getProcessedLive, getProcessedHistory } from '../controllers/processedController.js';
-import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats, exportFaultEventBuffers } from '../controllers/pdmController.js';
+import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats, exportFaultEventBuffers, createManualBufferEvent } from '../controllers/pdmController.js';
 import { getWhoami } from '../controllers/whoamiController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 import { validateProcessedMiddleware } from '../middleware/validateProcessed.js';
@@ -73,5 +73,11 @@ router.get('/pdm/fault-events/export/csv', requireTrustedProxy, exportFaultEvent
 router.get('/pdm/fault-events/:id', requireTrustedProxy, getFaultEvent);
 router.get('/pdm/fault-events', requireTrustedProxy, listFaultEvents);
 router.patch('/pdm/fault-events/:id', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), reviewFaultEvent);
+// §10.4 Entry point 1 — same reviewer group as the PATCH-confirm endpoint
+// above, since this creates a CONFIRMED row too, just from a fresh
+// assertion instead of reviewing a Tier 1 candidate. Registered as its own
+// literal path segment ("manual-buffer"), not a param, so it can't collide
+// with GET/PATCH /pdm/fault-events/:id regardless of route order.
+router.post('/pdm/fault-events/manual-buffer', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), createManualBufferEvent);
 
 export default router;

@@ -38,6 +38,44 @@ export async function insertReading(record) {
   return { lastInsertRowid: result.rows[0].id };
 }
 
+/**
+ * @returns raw_telemetry rows in [start, end], chronological — used to
+ *   reconstruct one 60-second window's worth of samples when a manual
+ *   buffer's fault range has no existing processed_telemetry row covering
+ *   it (server/services/faultEventService.js's Path B). Narrower-purpose
+ *   than faultEventModel.js's getBufferRange, which pulls the full
+ *   multi-hour training buffer for export/count, not a single window.
+ */
+export async function getRangeChronological(start, end) {
+  const result = await pool.query(
+    `SELECT * FROM raw_telemetry WHERE "timestamp" BETWEEN $1 AND $2 ORDER BY "timestamp" ASC`,
+    [start, end],
+  );
+  return result.rows.map(mapRow);
+}
+
+/**
+ * @returns the single newest raw_telemetry row strictly before `ts`, or
+ *   undefined — Path B's `prevSample` for Python's gap-fill continuity,
+ *   mirroring buffer.js's WindowState.prevSample capture for a live window.
+ */
+export async function getLastBefore(ts) {
+  const result = await pool.query(
+    `SELECT * FROM raw_telemetry WHERE "timestamp" < $1 ORDER BY "timestamp" DESC LIMIT 1`,
+    [ts],
+  );
+  return mapRow(result.rows[0]);
+}
+
+/** @returns the number of raw_telemetry rows in [start, end] — used to reject a manual-buffer request over a range with no ingested data. */
+export async function getCountInRange(start, end) {
+  const result = await pool.query(
+    `SELECT COUNT(*) AS count FROM raw_telemetry WHERE "timestamp" BETWEEN $1 AND $2`,
+    [start, end],
+  );
+  return Number(result.rows[0].count);
+}
+
 /** @returns the latest raw row, or undefined if the table is empty. */
 export async function getLatest() {
   const result = await pool.query('SELECT * FROM raw_telemetry ORDER BY id DESC LIMIT 1');

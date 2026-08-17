@@ -10,7 +10,11 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as model from '../models/faultEventModel.js';
+import * as processedModel from '../models/processedModel.js';
+import * as sensorModel from '../models/sensorModel.js';
+import * as processedService from './processedService.js';
 import { METRICS } from './forecastService.js';
+import { WINDOW_DURATION_SECONDS } from '../preprocessing/config.js';
 import { logger } from '../utils/logger.js';
 
 // §3.3.2: a PENDING_REVIEW row is only eligible to extend while its
@@ -20,6 +24,9 @@ import { logger } from '../utils/logger.js';
 const COALESCE_LOOKBACK_WINDOWS = 3;
 const WINDOW_SECONDS = 60;
 const ONE_HOUR_MS = 60 * 60 * 1000;
+const WINDOW_MS = WINDOW_DURATION_SECONDS * 1000;
+const PDM_SERVICE_URL = process.env.PDM_SERVICE_URL || 'http://localhost:8000';
+const PROCESS_WINDOW_TIMEOUT_MS = 2000;
 
 /** Full per-metric mean/median/min/max/stdDev/last off the flat processedRecord shape. */
 function buildMetricStats(data) {
@@ -175,6 +182,189 @@ export async function recordNegativeSample(data, processedTelemetryId, threshold
     logger.error(`faultEventService.recordNegativeSample failed: ${err.stack || err.message}`);
     return null;
   }
+}
+
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+function toWindowSampleIn(sample) {
+  return {
+    timestamp: sample.timestamp,
+    status: sample.status,
+    faultType: sample.faultType ?? null,
+    flowRate: sample.flowRate,
+    rpm: sample.rpm,
+    vibration: sample.vibration,
+    suctionPressure: sample.suctionPressure,
+    dischargePressure: sample.dischargePressure,
+    motorTemp: sample.motorTemp,
+  };
+}
+
+/**
+ * Default trigger-window resolution when the operator doesn't supply an
+ * explicit triggerWindowEnd: the latest window boundary at or before
+ * faultEnd, unless that boundary sits at/before faultStart (a fault period
+ * shorter than one window) — in that case, the earliest window boundary at
+ * or after faultStart instead. Either way the result is later
+ * bounds-checked against [faultStart, faultEnd] before use (see
+ * createManualBufferEvent) — this function is a starting guess, not the
+ * final authority.
+ */
+function resolveDefaultWindowEndMs(faultStartMs, faultEndMs) {
+  const latestBoundaryAtOrBeforeEnd = Math.floor(faultEndMs / WINDOW_MS) * WINDOW_MS;
+  if (latestBoundaryAtOrBeforeEnd > faultStartMs) return latestBoundaryAtOrBeforeEnd;
+  return Math.ceil(faultStartMs / WINDOW_MS) * WINDOW_MS;
+}
+
+/**
+ * §10.4 Entry point 1 — an operator retroactively confirms a fault over a
+ * raw_telemetry range that already exists but was never flagged by Tier 1
+ * or never reviewed. Unlike recordFlaggedEvent (an automated candidate
+ * needing HITL review), this is a human directly asserting ground truth,
+ * so the row is created CONFIRMED immediately — no PENDING_REVIEW step
+ * (§10.4's explicit resolution).
+ *
+ * @param body { faultStart, faultEnd, faultType, rootCause, resolution,
+ *   notes, triggerWindowEnd? } — already validated by the controller via
+ *   pdmManualBufferValidation.js.
+ * @param reviewedBy the resolved actor identity (controller resolves
+ *   req.identity?.username vs. client-supplied value, same as reviewFaultEvent).
+ * @throws an Error with .status 422 (no raw_telemetry data in range),
+ *   409 (overlaps an existing fault_events row), or 502 (pdm's
+ *   /process-window call failed during Path B reconstruction).
+ */
+export async function createManualBufferEvent(body, reviewedBy) {
+  const faultStart = new Date(body.faultStart).toISOString();
+  const faultEnd = new Date(body.faultEnd).toISOString();
+  const faultStartMs = Date.parse(faultStart);
+  const faultEndMs = Date.parse(faultEnd);
+
+  const dataCount = await sensorModel.getCountInRange(faultStart, faultEnd);
+  if (dataCount === 0) {
+    throw httpError(422, `no raw_telemetry data in [${faultStart}, ${faultEnd}]`);
+  }
+
+  const overlaps = await model.findOverlappingFaultEvents(faultStart, faultEnd);
+  if (overlaps.length > 0) {
+    const ids = overlaps.map((o) => `#${o.id} (${o.status})`).join(', ');
+    throw httpError(409, `overlaps existing fault event(s): ${ids}`);
+  }
+
+  const windowEndMs = body.triggerWindowEnd
+    ? Date.parse(new Date(body.triggerWindowEnd).toISOString())
+    : resolveDefaultWindowEndMs(faultStartMs, faultEndMs);
+  const windowStartMs = windowEndMs - WINDOW_MS;
+
+  // Safety net (not just trusting the resolution above, whether explicit or
+  // default): the chosen window must actually overlap the requested fault
+  // period, or featureSnapshot would be captured from a semantically
+  // unrelated window with no error to show for it (§10.4's design has no FK
+  // to catch this — processedTelemetryId is an unenforced BIGINT, see
+  // 002_fault_events.sql's header comment).
+  if (windowEndMs <= faultStartMs || windowStartMs >= faultEndMs) {
+    throw httpError(400, `resolved trigger window [${new Date(windowStartMs).toISOString()}, ${new Date(windowEndMs).toISOString()}) does not overlap the requested fault range`);
+  }
+
+  const windowStart = new Date(windowStartMs).toISOString();
+  const windowEnd = new Date(windowEndMs).toISOString();
+
+  let processedTelemetryId;
+  let featureSnapshotSource;
+  let thresholdsVersion = null;
+
+  const existing = await processedModel.getProcessedByWindowEnd(windowEnd);
+  if (existing) {
+    // Path A: the window was already computed at ingest time (the common
+    // case — every live window goes through POST /process-window per §11,
+    // whether or not Tier 1 fired). Reuse it rather than recomputing.
+    processedTelemetryId = existing.id;
+    featureSnapshotSource = existing;
+  } else {
+    // Path B: the window failed to process at the time (pdm was down,
+    // timed out, or every sample failed physics validation) — reconstruct
+    // it from raw_telemetry through the exact same /process-window call
+    // pipeline.js uses live, and persist via saveProcessedReading (NOT
+    // saveAndTrigger — a backfilled historical window must not re-fire
+    // forecast/drift/trend, which are live-only concerns).
+    const rawSamples = await sensorModel.getRangeChronological(windowStart, new Date(windowEndMs - 1).toISOString());
+    if (rawSamples.length === 0) {
+      throw httpError(422, `no raw_telemetry data in the resolved trigger window [${windowStart}, ${windowEnd})`);
+    }
+    const prevSample = await sensorModel.getLastBefore(windowStart);
+
+    const payload = {
+      windowSamples: rawSamples.map(toWindowSampleIn),
+      prevSample: prevSample ? toWindowSampleIn(prevSample) : null,
+      windowStart,
+      windowEnd,
+      mergedSampleCount: 0,
+      duplicateSampleCount: 0,
+    };
+
+    let res;
+    try {
+      res = await fetch(`${PDM_SERVICE_URL}/process-window`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(PROCESS_WINDOW_TIMEOUT_MS),
+      });
+    } catch (err) {
+      throw httpError(502, `pdm /process-window call failed: ${err.message}`);
+    }
+    if (!res.ok) {
+      let detail = '';
+      try {
+        detail = JSON.stringify(await res.json());
+      } catch {
+        // not JSON — status code alone is enough context.
+      }
+      throw httpError(502, `pdm /process-window responded ${res.status} for window ${windowStart}-${windowEnd}: ${detail}`);
+    }
+
+    const { processedRecord, tier1Verdict } = await res.json();
+    const saved = await processedService.saveProcessedReading(processedRecord);
+    processedTelemetryId = saved.id;
+    featureSnapshotSource = processedRecord;
+    // Captured, not discarded: Tier 1 DID score this window just now (the
+    // same /process-window call computes tier1Verdict alongside
+    // processedRecord) — recording its thresholdsVersion here is the
+    // difference between "never evaluated by Tier 1" and "evaluated, no
+    // trigger," which otherwise becomes indistinguishable and silently
+    // corrupts later precision/recall analysis of Tier 1 against confirmed
+    // faults (caught in this feature's design review).
+    thresholdsVersion = tier1Verdict?.thresholdsVersion ?? null;
+  }
+
+  const nowIso = new Date().toISOString();
+  const record = {
+    processedTelemetryId,
+    eventType: 'FLAGGED',
+    sourceType: 'MANUAL_BUFFER',
+    detectedAt: nowIso,
+    triggerWindowEnd: windowEnd,
+    lastSeenWindowEnd: windowEnd,
+    triggeredRules: null,
+    confidence: null,
+    featureSnapshot: buildFeatureSnapshot(featureSnapshotSource),
+    thresholdsVersion,
+    faultStart,
+    faultEnd,
+    bufferStart: new Date(faultStartMs - ONE_HOUR_MS).toISOString(),
+    bufferEnd: new Date(faultEndMs + ONE_HOUR_MS).toISOString(),
+    status: 'CONFIRMED',
+    faultType: body.faultType,
+    rootCause: body.rootCause.trim(),
+    resolution: body.resolution.trim(),
+    reviewedBy,
+    reviewedAt: nowIso,
+    notes: body.notes.trim(),
+  };
+
+  const info = await model.insertFaultEvent(record);
+  return getFaultEvent(Number(info.lastInsertRowid));
 }
 
 /** @returns fault_events rows, optionally filtered by status. */

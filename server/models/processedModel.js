@@ -76,6 +76,26 @@ export async function getProcessedCount() {
   return Number(result.rows[0].count);
 }
 
+/**
+ * @returns processed_telemetry rows whose windowEnd falls in [start, end],
+ *   chronological — used to find an already-computed window inside a
+ *   manual-buffer fault range (server/services/faultEventService.js's
+ *   Path A: reuse an existing row rather than reconstructing one).
+ */
+export async function getProcessedByWindowRange(start, end) {
+  const result = await pool.query(
+    `SELECT * FROM processed_telemetry WHERE "windowEnd" BETWEEN $1 AND $2 ORDER BY "windowEnd" ASC`,
+    [start, end],
+  );
+  return result.rows.map(mapRow);
+}
+
+/** @returns the single processed_telemetry row with this exact windowEnd, or undefined. */
+export async function getProcessedByWindowEnd(windowEnd) {
+  const result = await pool.query('SELECT * FROM processed_telemetry WHERE "windowEnd" = $1', [windowEnd]);
+  return mapRow(result.rows[0]);
+}
+
 /** @returns every processed row, oldest first (id ASC) — used by the historical-features backfill script. */
 export async function getAllProcessedChronological() {
   const result = await pool.query('SELECT * FROM processed_telemetry ORDER BY id ASC');

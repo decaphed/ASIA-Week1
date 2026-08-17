@@ -26,25 +26,49 @@ import pool, { toIso } from '../database/db.js';
 export async function insertFaultEvent(record) {
   const result = await pool.query(
     `INSERT INTO fault_events
-      ("processedTelemetryId", "eventType", "detectedAt", "triggerWindowEnd", "lastSeenWindowEnd",
+      ("processedTelemetryId", "eventType", "sourceType", "detectedAt", "triggerWindowEnd", "lastSeenWindowEnd",
        "triggeredRules", "confidence", "featureSnapshot", "thresholdsVersion",
        "faultStart", "faultEnd", "bufferStart", "bufferEnd", "status",
-       "faultType", "rootCause", resolution, "reviewedBy", "reviewedAt",
+       "faultType", "rootCause", resolution, "reviewedBy", "reviewedAt", notes,
        "autoLabeled", "autoLabeledFromEventId")
      VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-       $15, $16, $17, $18, $19, $20, $21)
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+       $16, $17, $18, $19, $20, $21, $22, $23)
      RETURNING id`,
     [
-      record.processedTelemetryId, record.eventType, record.detectedAt, record.triggerWindowEnd, record.lastSeenWindowEnd,
+      record.processedTelemetryId, record.eventType, record.sourceType ?? 'TIER1_FLAGGED', record.detectedAt, record.triggerWindowEnd, record.lastSeenWindowEnd,
       record.triggeredRules, record.confidence, record.featureSnapshot, record.thresholdsVersion,
       record.faultStart, record.faultEnd, record.bufferStart, record.bufferEnd, record.status,
       record.faultType ?? null, record.rootCause ?? null, record.resolution ?? null,
-      record.reviewedBy ?? null, record.reviewedAt ?? null,
+      record.reviewedBy ?? null, record.reviewedAt ?? null, record.notes ?? null,
       record.autoLabeled ?? false, record.autoLabeledFromEventId ?? null,
     ],
   );
   return { lastInsertRowid: result.rows[0]?.id };
+}
+
+/**
+ * Candidate fault_events rows whose [faultStart, faultEnd] intersects the
+ * given range — used to reject an overlapping manual-buffer creation
+ * before insert (server/services/faultEventService.js::createManualBufferEvent).
+ * NEGATIVE_SAMPLE rows are excluded from this check BY CONSTRUCTION, not by
+ * an explicit eventType filter: they always have faultStart/faultEnd = NULL
+ * (see 002_fault_events.sql's column comments), so the range comparison
+ * below can never match one — do not "fix" this by adding an eventType
+ * filter, it isn't needed and the NULL behavior is already correct.
+ * REJECTED/DISMISSED rows are excluded — a dismissed candidate shouldn't
+ * block a human from asserting the real fault over the same period.
+ * @returns [{ id, status, faultType }]
+ */
+export async function findOverlappingFaultEvents(faultStart, faultEnd) {
+  const result = await pool.query(
+    `SELECT id, status, "faultType" FROM fault_events
+     WHERE status NOT IN ('REJECTED', 'DISMISSED')
+       AND "faultStart" IS NOT NULL AND "faultEnd" IS NOT NULL
+       AND "faultStart" <= $2 AND "faultEnd" >= $1`,
+    [faultStart, faultEnd],
+  );
+  return result.rows;
 }
 
 /**

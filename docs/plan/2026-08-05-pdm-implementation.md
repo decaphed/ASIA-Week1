@@ -1398,19 +1398,26 @@ breakdown, per the "just the Python change for now" decision)
       `aggregation.js`, `buffer.js`, `ingestLock.js`, `server/utils/validation.js`, and
       `preprocessing/config.js` stay — each has a verified independent caller outside the
       deleted files' former call sites.
-- [ ] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
+- [x] `raw_telemetry.physicsValid`/`provenance` semantic change (surfaced during Phase 3's
       design, not previously documented): Node's ingest path no longer computes these locally
       per-sample — every row Node writes directly now falls back to the DB defaults
       (`physicsValid=TRUE`, `provenance='MEASURED'`), regardless of what Python later
-      determines for that sample within its audit window. Verified (via repo-wide grep) that
-      nothing outside the now-orphaned preprocessing files reads either column today — no
-      dashboard/API consumer — so this is not an observed regression, but it is a real,
-      permanent narrowing of `raw_telemetry`'s audit fidelity worth being aware of if a future
-      feature ever wants real per-row physics-validity from the raw table itself.
-- [ ] Python unit tests pass for every ported module (§11.6.2)
-- [ ] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
+      determines for that sample within its audit window. **Re-verified** (repo-wide grep,
+      post-cleanup): `sensorModel.js` only ever appears in an `INSERT` column list for these
+      two columns; no `SELECT ... physicsValid` / `SELECT ... provenance` exists anywhere in
+      `server/` — no dashboard/API consumer reads either column back out. Not an observed
+      regression, but a real, permanent narrowing of `raw_telemetry`'s audit fidelity worth
+      being aware of if a future feature ever wants real per-row physics-validity from the raw
+      table itself. Accepted as-is; no further action needed unless that future feature arrives.
+- [x] Python unit tests pass for every ported module (§11.6.2). **Verified**: `pytest pdm/tests/`
+      — 50/50 passing (post-cleanup; the count is 6 lower than the 56 seen mid-migration because
+      the golden-value parity tests were correctly deleted along with the restored JS reference
+      files once live cutover was confirmed).
+- [x] No PdM code writes to Postgres directly from Python (unchanged invariant from §3.4/§4,
       still holds — this migration adds a read path for §10's corpus, not a write path, and
-      doesn't touch this invariant at all for the live `/process-window` call)
+      doesn't touch this invariant at all for the live `/process-window` call). **Verified**:
+      no Postgres driver (`psycopg`/`asyncpg`/`sqlalchemy`) appears in `pdm/requirements.txt` or
+      `pdm/requirements-dev.txt` — the invariant holds structurally, not just by convention.
 
 ---
 

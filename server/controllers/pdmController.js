@@ -5,6 +5,7 @@
 
 import * as service from '../services/faultEventService.js';
 import { validateReviewPatch } from '../utils/pdmReviewValidation.js';
+import { validateManualBufferCreate } from '../utils/pdmManualBufferValidation.js';
 import { toCsv } from '../utils/csv.js';
 
 const EXPORT_COLUMNS = [
@@ -68,6 +69,38 @@ export async function reviewFaultEvent(req, res, next) {
     const updated = await service.reviewFaultEvent(id, patch);
     if (!updated) return res.status(404).json({ success: false, error: 'fault event not found' });
     res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * §10.4 Entry point 1 — creates a CONFIRMED fault_events row directly from
+ * an operator's assertion, no PENDING_REVIEW step. Errors from the service
+ * layer (422 no-data, 409 overlap, 502 pdm-call-failed, 400 window-bounds)
+ * carry their own .status and fall through to next(err) — the shared
+ * errorHandler (server/middleware/errorHandler.js) already reads err.status
+ * and echoes err.message for anything below 500, so no per-status mapping
+ * is needed here.
+ */
+export async function createManualBufferEvent(req, res, next) {
+  try {
+    const body = req.body ?? {};
+    const errors = validateManualBufferCreate(body);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, error: 'Invalid manual buffer request', details: errors });
+    }
+
+    // Same trust boundary as reviewFaultEvent: the authenticated identity
+    // (when present) is what gets persisted, never a client-supplied
+    // reviewedBy — a reviewer can't attribute this assertion to someone else.
+    const reviewedBy = req.identity?.username || (typeof body.reviewedBy === 'string' ? body.reviewedBy.trim() : undefined);
+    if (!reviewedBy) {
+      return res.status(400).json({ success: false, error: 'Invalid manual buffer request', details: ['reviewedBy is required when no Authentik identity is present'] });
+    }
+
+    const created = await service.createManualBufferEvent(body, reviewedBy);
+    res.status(201).json({ success: true, data: created });
   } catch (err) {
     next(err);
   }
