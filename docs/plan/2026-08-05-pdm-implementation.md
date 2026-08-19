@@ -904,6 +904,86 @@ regardless of the HITL decision above.
 
 ### 10.4.1 Column mapping for external uploads (Entry point 2 only)
 
+**Status: implemented.** Backend/API only, per §1's UI scoping — the mapping *screen* stays out
+of scope, only the endpoints a future screen would call. Design went through the same
+code-architect → ecc:code-reviewer pipeline as §10.4 Entry point 1 and §10.5, with explicit
+attention to file-upload security (the first upload surface in this codebase). Decisions D10-D18:
+
+- **D10:** an accepted upload never creates a `fault_events` row — `training_corpus`'s own
+  schema comment already reserved `bufferId = "upload:<uploadId>:<windowIndex>"` with
+  `faultEventId = NULL` for exactly this case (§10.5's D9). A new `external_uploads` table is
+  the audit/metadata record instead; `fault_events`' one-snapshot shape doesn't fit a
+  many-window upload.
+- **D11 (resolves §10.6 item 3 — concrete numbers, not just "mechanism resolved"):** Stage C's
+  composite `qualityScore` reject threshold is **< 70**, reusing `computeQuality`'s own
+  existing GOOD≥90/FAIR≥70/POOR<70 banding rather than inventing a new number. Plus two
+  floors, **`physicsPassRate ≥ 0.85`** and **`imputationRate ≤ 0.30`** — evaluated **per
+  window**, not as a corpus-wide weighted mean (code-review HIGH finding, fixed before
+  implementation: an aggregate-mean floor would let a batch of clean windows dilute a few
+  genuinely bad ones into a passing average — exactly the gaming risk the composite score's own
+  `AllSamplesInvalidError=0` handling already exists to prevent; the floors are supposed to be
+  an independent backstop against that, so they can't be vulnerable to the same averaging).
+- **D12:** external upload is the *only* path where quality is a hard accept/reject gate — live
+  ingest and manual-buffer data were already validated once, at original capture, by this same
+  pipeline; upload data never was.
+- **D13:** vibration's unit list is `{mm/s, in/s}` — deliberately excludes `g` (acceleration),
+  since converting to velocity needs the vibration frequency, which a scalar column can't supply.
+- **D14 (known v1 limitation, explicit not silent):** Stage A requires a median inter-sample
+  interval in `[0.5s, 5s]`. Stage C reuses `pdm/app/preprocessing/pipeline.py`'s
+  `/process-window`, whose `missingRate` accounting is hardwired to `EXPECTED_SAMPLE_COUNT` at
+  this system's own ~1Hz cadence — a materially slower-cadence historian export isn't supported
+  without a resampling-aware Stage C mode this pass didn't build.
+- **D15:** uploaded sample `status` is hardcoded `'RUNNING'` — no status-column mapping offered,
+  staying within the 6-metric-only mapping scope.
+- **D16:** a column >50% empty is auto-excluded from the Stage B mapping offer, not fatal to the
+  whole file — only zero surviving non-timestamp columns fails Stage A outright.
+- **D17:** `corpusMaterializationService.js::checkClassBalance` gained an `additionalCount`
+  parameter (backward-compatible, verified against its two existing warn-mode callers) so the
+  whole-corpus block-mode check can evaluate "if this upload's windows land" *before* any write,
+  not write-then-detect-then-rollback.
+- **D18 (security posture):** uploaded rows are staged in Postgres
+  (`external_uploads."stagedRows"` JSONB) between the upload and confirm requests, not left on
+  the container filesystem — the multer temp file is deleted in a `finally` block immediately
+  after Stage A parsing, success or failure. `stagedRows` is cleared the moment an upload reaches
+  any terminal state; `server/scripts/cleanupStaleUploads.js` purges anything abandoned in
+  `AWAITING_MAPPING` past a TTL.
+
+**File-upload security** (first such surface in this codebase — code-review flagged this for
+elevated scrutiny): `multer`'s temp filename is **always** `crypto.randomUUID()` — never derived
+from the client-supplied `originalname` (code-review HIGH finding, fixed: echoing a
+client-controlled filename into a disk-storage path is the standard multer path-traversal
+footgun; `originalname` is stored only as an audit metadata string, never used to construct a
+filesystem path). `csv-parse` (RFC4180-correct, not a hand-rolled splitter) enforces a hard
+row-count ceiling **mid-stream**, not after buffering the whole parse result — a file's on-disk
+size limit (`PDM_UPLOAD_MAX_BYTES`) doesn't bound its parsed row count on its own. Extension +
+MIME allowlist reject the obviously-wrong case before any bytes are parsed; real content
+validation happens in Stage A against the actual parsed data.
+
+**A gap closed during review, not originally in scope:** `EXTERNAL_UPLOAD` rows bypassing
+`fault_events` entirely (D10) meant the existing `onFaultEventRejectedOrExcluded` retraction path
+couldn't reach them — no undo mechanism existed for a mislabeled/fraudulent accepted upload.
+Added `corpusMaterializationService.js::retractUpload(uploadId)` (deletes via the new
+`corpusModel.js::deleteByUploadId`) as the `EXTERNAL_UPLOAD` equivalent.
+
+**Files:** `server/database/migrations/006_external_uploads.sql`, `server/models/
+externalUploadModel.js`, `server/utils/{externalUploadValidation,unitConversion,csvParse}.js`,
+`server/middleware/uploadFile.js`, `server/services/externalUploadService.js`, `server/
+controllers/externalUploadController.js`, `server/scripts/cleanupStaleUploads.js`. New deps:
+`csv-parse`, `multer@2.x` (not 1.x — 1.x has known unpatched CVEs, checked via `npm audit`
+before pinning). Endpoints: `POST /pdm/fault-events/external-upload` (Stage A, multipart),
+`POST /pdm/fault-events/external-upload/:uploadId/confirm` (Stage B + C + materialization, JSON)
+— same `requireTrustedProxy` + `requireGroup(PDM_REVIEWER_GROUP)` auth boundary as manual-buffer
+and the HITL PATCH endpoint (§10.4's resolution: the human-trust model is identical across all
+three CONFIRMED-creating paths; only the *data*-trust bar differs, enforced by Stage C).
+
+**Tested:** 46 + 12 Node tests (`externalUploadValidation.test.mjs` — 15 Stage A/B pure-logic
+cases; `unitConversion.test.mjs` — 10 conversion-math cases including D13's `g`-exclusion;
+`externalUploadService.test.mjs` — 7 mocked-service cases, including the direct regression test
+for the per-window-floor fix: a single bad window rejects the whole upload even when the
+weighted-mean composite would have passed) plus the full existing suite, all green. No live-stack
+integration test for this pass — same trust level manual-buffer and §10.5 had before their own
+CT runs.
+
 **Trigger for this subsection:** external candidate datasets evaluated during planning (a
 diesel-engine CSV with `Engine_RPM`/`Lub_Oil_Pressure`/etc., and an anonymized 50-sensor pump
 dataset with a `rul` column) both turned out to use different column names — and in one case,
@@ -1162,24 +1242,19 @@ Building on the earlier discussion (not yet reflected elsewhere in this doc):
    and only for this batch/read path. Whatever model artifacts/training-run metadata Python
    *does* need to persist (trained model files, run metrics) are a separate concern from the
    corpus and can live in Python's own store without touching Node's tables at all.
-3. **Statistical rejection thresholds for an uploaded file — mechanism resolved (§10.4.1 Stage
-   C), concrete numbers still open.** The gate now runs the mapped upload through the same
-   `computeQuality` pipeline live windows use and rejects below a quality-score threshold
-   framed in terms of the same physicsValid/imputed/capped rates already tracked elsewhere in
-   this system — what's still undecided is the actual cutoff values, not the shape of the
-   check.
-4. **What counts as the label** for supervised training — `fault_events.faultType`, `status`,
-   or something coarser/finer than either.
+3. ~~Statistical rejection thresholds for an uploaded file~~ — **resolved and implemented**
+   (§10.4.1's D11): composite `qualityScore < 70` (reusing `computeQuality`'s existing
+   GOOD/FAIR/POOR banding) plus two independent per-window floors,
+   `physicsPassRate >= 0.85` and `imputationRate <= 0.30`.
+4. ~~What counts as the label~~ — **resolved and implemented** (§10.5's D1):
+   `fault_events.faultType` for a `CONFIRMED` row, `'NORMAL'` for a `NEGATIVE_SAMPLE` row;
+   `status` is eligibility, not label content.
 5. **Corpus seed state** — there is currently no Tier 2 corpus at all (per §1, Tier 2 has never
    been trained). The very first accepted upload and/or the first batch of HITL-confirmed
    `fault_events` effectively *become* the seed corpus; worth being explicit that "merge" is a
    no-op until a second contribution exists.
-6. **Column-mapping UI — mechanism resolved, screen not designed.** §10.4.1 specifies the
-   backend ordering (time-series check → manual header mapping → unit conversion → range
-   sanity-check → confidence tagging) for Entry point 2 uploads whose column names don't match
-   this system's six metrics. The operator-facing form for presenting extracted headers and
-   collecting the mapping is out of scope here, same as the rest of this document's UI
-   deferrals (§1).
+6. ~~Column-mapping UI~~ — **backend mechanism implemented** (§10.4.1); the operator-facing form
+   itself remains out of scope, same as the rest of this document's UI deferrals (§1).
 
 ---
 

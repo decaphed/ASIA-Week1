@@ -70,8 +70,13 @@ export function resolveLabel(faultEventRow) {
   return faultEventRow.faultType;
 }
 
-/** Every 60s-aligned window boundary covering [startMs, endMs], inclusive. */
-function alignedWindowEndsInRange(startMs, endMs) {
+/**
+ * Every 60s-aligned window boundary covering [startMs, endMs], inclusive.
+ * Exported so externalUploadService.js (§10.4 Entry point 2) can chunk an
+ * uploaded file's arbitrary time range into the same window-boundary
+ * scheme, rather than a third, independently-invented windowing rule.
+ */
+export function alignedWindowEndsInRange(startMs, endMs) {
   const first = Math.ceil(startMs / WINDOW_MS) * WINDOW_MS;
   const last = Math.ceil(endMs / WINDOW_MS) * WINDOW_MS;
   const ends = [];
@@ -248,12 +253,19 @@ export async function materializeNegativeSample(faultEventId) {
  * @returns { warning: string|null } — non-null in 'warn' mode when the
  *   post-merge corpus looks skewed; throws in 'block' mode instead.
  */
-export async function checkClassBalance(candidateLabel, { mode = 'warn' } = {}) {
+export async function checkClassBalance(candidateLabel, { mode = 'warn', additionalCount = 0 } = {}) {
   const balance = await corpusModel.getClassBalance();
-  const total = balance.reduce((sum, row) => sum + row.count, 0);
+  const existingTotal = balance.reduce((sum, row) => sum + row.count, 0);
+  const total = existingTotal + additionalCount;
   if (total === 0) return { warning: null };
 
-  const candidateCount = balance.find((row) => row.label === candidateLabel)?.count ?? 0;
+  const existingCandidateCount = balance.find((row) => row.label === candidateLabel)?.count ?? 0;
+  // additionalCount is folded into the CANDIDATE's own count, not spread
+  // across other labels — this call is always evaluating "if this
+  // contribution's own label lands, what does the corpus look like
+  // afterward," per §10.4 Entry point 2's use (an upload's own faultType
+  // is the only label its own windowCount is adding).
+  const candidateCount = existingCandidateCount + additionalCount;
   const candidateShare = candidateCount / total;
 
   // A single label dominating more than 80% of a corpus with meaningful
@@ -288,4 +300,19 @@ export async function onFaultEventConfirmed(faultEventId) {
 /** Removes any corpus rows for a fault_events row that was rejected or later corrected away from CONFIRMED. */
 export async function onFaultEventRejectedOrExcluded(faultEventId) {
   await corpusModel.deleteByBuffer(`fault_events:${faultEventId}`);
+}
+
+/**
+ * Retracts an ACCEPTED external upload's contribution to the corpus — the
+ * EXTERNAL_UPLOAD equivalent of onFaultEventRejectedOrExcluded. Needed
+ * because §10.4 Entry point 2 (design decision D10) deliberately never
+ * creates a fault_events row, so the fault_events-keyed retraction path
+ * above structurally cannot reach an upload's rows (design-review MEDIUM
+ * finding — no undo mechanism existed for this path until this function).
+ * v1 scope: retraction only, no re-review workflow — an accepted upload
+ * later found mislabeled/fraudulent is fully removed from the corpus, not
+ * flagged for re-confirmation.
+ */
+export async function retractUpload(uploadId) {
+  await corpusModel.deleteByUploadId(String(uploadId));
 }

@@ -65,6 +65,16 @@ export async function deleteByBuffer(bufferId) {
   await pool.query('DELETE FROM training_corpus WHERE "bufferId" = $1', [bufferId]);
 }
 
+/**
+ * Removes every training_corpus row materialized from one external upload
+ * — the EXTERNAL_UPLOAD equivalent of deleteByBuffer, needed because an
+ * upload's rows span many bufferIds ("upload:<uploadId>:<windowIndex>",
+ * one per window), not a single one like a fault_events-sourced buffer.
+ */
+export async function deleteByUploadId(uploadId) {
+  await pool.query('DELETE FROM training_corpus WHERE "uploadId" = $1', [uploadId]);
+}
+
 /** @returns [{ label, count }] — the whole-corpus class balance (§10.5's post-merge check). */
 export async function getClassBalance() {
   const result = await pool.query(

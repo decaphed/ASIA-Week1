@@ -20,6 +20,8 @@ import { getDrift } from '../controllers/driftController.js';
 import { getTrend } from '../controllers/trendController.js';
 import { createProcessedReading, getProcessedLive, getProcessedHistory } from '../controllers/processedController.js';
 import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats, exportFaultEventBuffers, createManualBufferEvent } from '../controllers/pdmController.js';
+import { uploadExternalCsv, confirmExternalUpload } from '../controllers/externalUploadController.js';
+import { uploadCsv } from '../middleware/uploadFile.js';
 import { getWhoami } from '../controllers/whoamiController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
 import { validateProcessedMiddleware } from '../middleware/validateProcessed.js';
@@ -79,5 +81,11 @@ router.patch('/pdm/fault-events/:id', requireTrustedProxy, requireGroup(PDM_REVI
 // literal path segment ("manual-buffer"), not a param, so it can't collide
 // with GET/PATCH /pdm/fault-events/:id regardless of route order.
 router.post('/pdm/fault-events/manual-buffer', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), createManualBufferEvent);
+// §10.4 Entry point 2 — same reviewer-group auth boundary as manual-buffer
+// and the PATCH-confirm endpoint (§10.4's resolution: the human-trust
+// model is identical across all three CONFIRMED-creating paths; only the
+// DATA-trust bar differs, enforced by Stage C's quality gate, not auth).
+router.post('/pdm/fault-events/external-upload', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), uploadCsv.single('file'), uploadExternalCsv);
+router.post('/pdm/fault-events/external-upload/:uploadId/confirm', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), confirmExternalUpload);
 
 export default router;
