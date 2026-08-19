@@ -51,7 +51,7 @@ beforeEach(() => {
   saveAndTriggerCalls = [];
 
   mock.module('../../services/sensorService.js', {
-    exports: {
+    namedExports: {
       saveReading: async (data) => {
         const reading = { id: savedReadings.length + 1, ...data };
         savedReadings.push(reading);
@@ -61,7 +61,7 @@ beforeEach(() => {
   });
 
   mock.module('../../services/processedService.js', {
-    exports: {
+    namedExports: {
       saveAndTrigger: async (record) => {
         saveAndTriggerCalls.push(record);
         return { id: saveAndTriggerCalls.length, ...record };
