@@ -1864,3 +1864,1264 @@ This section narrows, but does not close, two items already open in §10.6:
   and test against today; they do not seed the real training corpus, which per §10.6 item 5
   still only comes into existence once the first accepted upload and/or HITL-confirmed
   `fault_events` batch actually lands.
+
+---
+
+# Tier 2 Model Ops — artifacts, fitting, human-approved promotion, admin surface, monitoring
+
+Closes the six things standing between §10.5's already-built retrain/promotion *infrastructure*
+and an actually-deployed, actually-supervised Tier 2 model: a model artifact that exists and
+gets loaded, code that fits one, a human decision point on promotion, an admin-only screen for
+that decision, continuous monitoring of whatever is deployed, and admin-side access to the
+already-built upload/mapping flow.
+
+**Status:** planning only — nothing here has been executed yet. Matches the convention every
+prior addendum in this document uses until reviewed and approved.
+
+**Reference convention.** A bare `§x` refers to a section of this document. Decision IDs
+continue this document's series (D1–D18 are taken; this section starts at **D19**).
+
+**What this builds on, unchanged.** §10.5's corpus/split/promotion machinery
+(`training_corpus`, `training_runs`, `corpusMaterializationService.js`, `trainingRunModel.js`,
+`pdm/app/{corpus,promotion,retrain}.py`, `pdm/app/evaluation/episodes.py`,
+`server/scripts/recordTrainingRun.js`), §10.4/§10.4.1's two corpus entry points and their
+Stage A/B/C gate, §11's Python-owned feature computation, §12.1's 7-fault taxonomy,
+and §3.4's "Python never writes application data" invariant. None of those decisions are
+reopened here.
+
+---
+
+## 14.0 Preconditions and what was verified against the code, not assumed
+
+Every claim below was checked against the actual repo before this section was written. Several
+contradict what a reader would infer from §10.5's prose alone, and the plan depends on the
+corrected version.
+
+1. **`pdm/app/model.py::score()` returns `None` unconditionally.** No artifact load, no
+   feature vectorization, no model object. Confirmed.
+2. **Nothing fits a model anywhere in the repo.** `retrain.py::run_retrain()` takes a
+   `predict_fn` and never trains; `_main()` deliberately exits 1 with
+   `"retrain.py's CLI entry point requires a trained model.py"`. Confirmed.
+3. **`pdm/requirements.txt` has no ML stack** — `fastapi`, `uvicorn[standard]`, `pydantic`,
+   `pyyaml`, `psycopg[binary]`. No numpy, scikit-learn, xgboost, joblib.
+4. **`training_runs.artifactPath` exists and nothing writes or reads it.**
+   `recordTrainingRun.js` passes `result.artifactPath ?? null`; `retrain.py`'s result dict has
+   no `artifactPath` key at all, so it is always null today.
+5. **The live scoring path no longer goes through `/score`.** Since §11's cutover,
+   `pipeline.js` calls `POST /process-window`, whose response carries `tier1Verdict` computed by
+   `preprocessing/pipeline.py:222` (`rules.evaluate(...)`), and `pdmService.js` uses that
+   *precomputed* verdict rather than issuing its own `POST /score`.
+   **`preprocessing/pipeline.py` never calls `model.score()`.** So a loaded Tier 2 model wired
+   only into `main.py`'s `/score` handler would have **zero effect on live scoring** — the
+   augmentation described in §3.5 is currently plumbed into the one endpoint the live path
+   stopped using. This must be fixed in `/process-window`, not just `/score` (§14.3.4).
+6. **`ScoreResponse` (pdm/app/schemas.py:51) declares only Tier 1 fields**, and both `/score`
+   and `/process-window` bind it as a `response_model`. FastAPI's `response_model` *filters*
+   undeclared keys, so `main.py:31`'s `verdict = {**verdict, **tier2_verdict}` merge would
+   silently drop every Tier 2 field it adds. Confirmed by reading the model. Extending the
+   schema is therefore mandatory, not cosmetic.
+7. **No admin group concept exists anywhere.** The only Authentik group referenced in code is
+   `PDM_REVIEWER_GROUP` (`server/routes/index.js:34`, default `'pdm-reviewers'`), used on the
+   HITL PATCH, manual-buffer, and both external-upload routes. Repo-wide grep for
+   `ADMIN_GROUP`/other `*_GROUP` constants returns nothing else (`METRIC_GROUPS` in
+   `ReportsPage.jsx` is unrelated). The client has **no route guard of any kind** — `App.jsx`
+   holds a `page` string in `useState` and renders every page unconditionally; there is no
+   router.
+8. **The client already knows the signed-in user's groups.** `GET /api/whoami`
+   (`whoamiController.js`) echoes `req.identity` (`username`, `email`, `groups`), and `App.jsx:32`
+   already polls it — `identity.groups[0]` is currently used as a cosmetic job-title stand-in in
+   the sidebar.
+9. **`recordTrainingRun.js`'s documented usage cannot work in the deployed topology.** Its
+   header says `python -m pdm.app.retrain | node server/scripts/recordTrainingRun.js`, but
+   `pdm/Dockerfile` is a `python:3.12-slim` image with no Node, and `server/`'s image has no
+   Python — the two sides of that pipe live in different containers. It works only on a dev host
+   with both toolchains. Any admin-triggered retrain needs a different transport (§14.4.5).
+10. **`pdm` has no writable persistent storage.** `docker-compose.yml`'s `pdm` service mounts
+    only `./pump-physics.yaml:ro`, has `cap_drop: ALL`, `mem_limit: 512m`, publishes no ports,
+    and is on the `data` network only. `backend` is on `edge` + `data`, so `backend → pdm` works
+    and nothing outside the stack can reach `pdm` at all.
+11. **`pdm_corpus_readonly` is granted `SELECT` on `training_corpus` only**
+    (`005_training_corpus.sql`'s conditional `GRANT`). It has no grant on `training_runs`.
+12. **`training_runs` has no decision/approval columns** — `promoted BOOLEAN NOT NULL DEFAULT
+    false`, `promotionReason TEXT NOT NULL`, `championRunIdAtEval`. No actor, no timestamp of
+    promotion, no pending state, no artifact checksum. `getChampion()` is
+    `WHERE promoted = true ORDER BY id DESC LIMIT 1`.
+13. **No Tier 2 prediction is persisted anywhere.** Repo-wide grep: `fault_events` has no Tier 2
+    columns (002/003/004 migrations add `autoLabeled`/`autoLabeledFromEventId`/`sourceType`
+    only), and there is no predictions table. There is currently *nothing to monitor from*.
+14. **The existing Stage A response is already a complete mapping-screen contract.**
+    `externalUploadService.js::handleUpload` returns `{uploadId, headers, excludedColumns,
+    detectedTimestampColumn, rowCount, medianIntervalSec, warnings}`; `confirmUpload` returns
+    `{requiresConfirmation, rangeSanityWarnings}` on the Stage-B range soft gate and accepts
+    `confirmRangeOverride`. No new upload backend is needed for the core flow (§14.8).
+15. **`corpusMaterializationService.js::retractUpload(uploadId)` exists with no HTTP route.**
+    The undo mechanism §10.4.1 added during review is currently uninvokable.
+16. **`server/package.json`'s test script actively excludes PdM tests:**
+    `node --test $(find scripts/tests -maxdepth 1 -name '*.test.mjs' ! -name '*pdm*' ! -name '*faultEvent*')`.
+    A new test file named `...pdm...` or `...faultEvent...` will be silently skipped by
+    `npm test` (§14.10.2).
+17. **The client's fetch wrapper hardcodes a JSON content type.** `client/src/api/client.js:13`
+    spreads `{'Content-Type': 'application/json', ...options.headers}` on every request — a
+    multipart upload through it would send the wrong content type with no boundary (§14.8.3).
+
+---
+
+## 14.1 Scope
+
+### In scope
+
+1. **Artifact store + load path** (§14.3): where a trained model file lives, how
+   `training_runs.artifactPath` points at it, how `pdm` loads the champion at startup and
+   hot-reloads it on promotion, and what happens when it can't.
+2. **Actual model fitting** (§14.2): a deterministic `featureSnapshot → feature vector`
+   transform, a Random Forest (default) / XGBoost (config-gated) fit, and the artifact +
+   metadata it writes. `retrain.py` gains a real training path while keeping its injectable
+   `predict_fn` for tests.
+3. **Human-approved promotion** (§14.4): `decide_promotion()` becomes a *recommendation*; a new
+   `training_runs` decision lifecycle, admin approve/reject/rollback endpoints, single-champion
+   enforcement, and a retrain job transport that works across the container boundary.
+4. **Admin-only frontend page** (§14.7): `ModelOpsPage`, the exact auth boundary, and a new
+   `PDM_ADMIN_GROUP` tier distinct from `PDM_REVIEWER_GROUP`.
+5. **Continuous monitoring** (§14.6): six concrete metrics, a `tier2_predictions` table, where
+   each metric is computed, and how it reaches the page.
+6. **Training-data + mapping upload from the admin page** (§14.8): reusing §10.4.1's endpoints
+   as-is, plus a list/retract surface and two small contract fixes.
+
+### Explicitly NOT in scope
+
+- **No change of model family.** Random Forest / XGBoost, per §10.1. No sequence model —
+  §10.2's row-not-sequence reasoning is what makes the whole corpus/split design valid.
+- **No onset / lead-time label.** This plan trains the *same-time diagnosis* label
+  `training_corpus.label` already carries (§10.5 D1). §13.4 step 3 and §13.5's open
+  item 4 (diagnosis vs. lead-time-shifted onset) stay open, and the `severity`-column follow-up
+  §13.4 records is not built here. Reason: `training_corpus` has no per-row severity or
+  onset signal, so an onset label cannot be built from it without new columns and a new
+  materialization pass — a separate piece of work with its own ML review.
+- **No hyperparameter search.** Fixed, versioned hyperparameters only (§14.2.4). Searching against
+  the same held-out split the promotion gate uses would overfit the gate itself, and there is no
+  third split to search against.
+- **No automatic promotion, ever, under any recommendation.** §14.4.1.
+- **No automatic rollback on a monitoring signal.** Monitoring displays; a human decides — same
+  posture as promotion.
+- **No alerting/paging.** No such infrastructure exists in this repo. Thresholds are rendered as
+  chips on a page, not enforced.
+- **No training on `data/pump-telemetry/`.** §13.3 settled this: the synthetic corpus is for
+  exercising machinery, not for producing a model whose numbers get reported as evidence. It is
+  not an entry point into `training_corpus` and this plan does not add one. It *is* usable to
+  smoke-test §14.2's fitting code offline (§14.10.3).
+- **No Tier 2 replacing Tier 1.** Tier 2 augments, never replaces, per §3.5. Tier 1 remains
+  the sole flagging authority; Tier 2 contributes a predicted label and confidence alongside it.
+- **No scheduler/cron for retraining.** Admin-triggered only. A cadence can be added later once
+  there's evidence about how often the corpus actually grows.
+- **No multi-pump support**, per §1.
+
+---
+
+## 14.2 Design: the fitting code
+
+### 14.2.1 D19 — a separate, explicit `features.py`; no ad-hoc flattening at either call site
+
+`featureSnapshot` is a nested JSON object (§3.3's fixed composition: full
+`precapFeaturesByMetric` + full `metricStats`, all six metrics, identical across event types).
+A model needs an ordered numeric vector. That transform is the single highest-risk piece of
+train/serve skew in this whole plan — if training orders features one way and live scoring
+another, the model produces confident nonsense with no error anywhere.
+
+New `pdm/app/features.py`, the **only** place that transform exists:
+
+- `FEATURE_ORDER` is *derived*, not hand-typed: the sorted cross-product of the six metric names
+  (from `pump-physics.yaml`, the existing shared source per §11.6.1) × the three
+  `precapFeaturesByMetric` keys (`rawStdDev`, `rawRateOfChange`, `rawMaxExcursion`) and the six
+  `metricStats` keys (`mean`, `median`, `min`, `max`, `stdDev`, `last`) — 6 × 9 = **54
+  features**. Deriving it from the shared config means a metric added to `pump-physics.yaml`
+  can't silently produce a differently-shaped vector on one side only.
+- `to_vector(feature_snapshot, feature_order)` returns a `list[float]`, and **raises on a
+  missing or non-numeric key** rather than substituting 0.0 or NaN. A silently-zeroed feature is
+  indistinguishable from a real reading of zero for several of these metrics.
+- **The exact `feature_order` list used at fit time is persisted in the artifact metadata**
+  (§14.3.2) and re-read at load time, never recomputed from the current code. Loading an artifact
+  whose stored order disagrees with the current `FEATURE_ORDER` is a hard load failure (§14.3.4) —
+  that's a code-vintage mismatch, not something to paper over.
+- Rows whose snapshot fails `to_vector` are **excluded from training and counted** in the run
+  result (`skippedRowCount` + per-reason tally), never silently dropped. At serve time a failing
+  snapshot means `score()` returns `None` for that window — Tier 1 is unaffected, exactly as if
+  no model were loaded.
+
+### 14.2.2 D20 — Random Forest is the default; XGBoost is config-gated, not a second code path
+
+`pdm/app/training.py::fit_model(train_rows, *, config) -> FittedModel`, wrapping
+`sklearn.ensemble.RandomForestClassifier` by default with
+`PDM_MODEL_FAMILY=random_forest|xgboost` selecting the estimator. Reasoning:
+
+- At the scale the promotion gate itself requires (§10.5: `MIN_ONSET_EPISODES = 100`
+  fault-labeled buffers), with 54 tabular features and 8 classes of very uneven support, a
+  Random Forest with `class_weight='balanced'` is the better-behaved default — no learning rate,
+  no early-stopping split to carve out, no native-library build to pin.
+- XGBoost stays available because §10.1 fixed the *family* as "Random Forest / XGBoost", and
+  removing half of that would be a scope change made silently. It is a one-line estimator swap
+  behind the same `FittedModel` interface, not a parallel pipeline.
+- **Whichever is used is recorded per run** (`modelFamily` in the artifact metadata and in the
+  training-run record), so a comparison between two runs can never quietly be a comparison
+  between two families.
+
+`FittedModel` exposes exactly two things: `predict(rows) -> list[str]` (the shape
+`promotion.py::evaluate_candidate` already consumes — verified against its signature at
+`promotion.py:81`, so **no change to `promotion.py` is required**) and `predict_with_confidence(row)`
+returning `(label, probability)` for the live path.
+
+### 14.2.3 D21 — `run_retrain()` keeps its injectable seam; training is a new default, not a replacement
+
+`retrain.py::run_retrain()` currently takes `predict_fn` and is exercised by 26 passing Python
+tests with fixture functions (§10.5's "Tested" note). Breaking that signature would throw
+away the only test coverage the orchestration has.
+
+New signature, backward-compatible:
+
+```
+run_retrain(conn, predict_fn=None, *, train_fn=training.fit_model,
+            champion_metrics=None, champion_run_id=None,
+            test_episode_fraction=0.2, artifact_root=None)
+```
+
+- `predict_fn is not None` → today's behavior exactly, no fitting, no artifact. Existing tests
+  pass untouched.
+- `predict_fn is None` → fit `train_fn(split["trainRows"])`, write the artifact (§14.3.2), and use
+  the fitted model's `predict` as the `predict_fn` for `evaluate_candidate`.
+- The result dict gains `artifactPath`, `artifactSha256`, `modelFamily`, `trainingConfigVersion`,
+  `featureOrder`, `labelClasses`, `trainRowCount`, `testRowCount`, `skippedRowCount`, `seed`.
+  `recordTrainingRun.js` already forwards `result.artifactPath ?? null`, so that one field needs
+  no change there; the rest need new columns (§14.5.1).
+
+The order of operations matters and is easy to get wrong: **the evaluation gate is checked
+before anything is fitted** (unchanged — `check_evaluation_gate` before `walk_forward_split`),
+and **the artifact is written before the promotion decision is computed**, because a
+non-recommended candidate must still be inspectable and still be approvable by an admin
+override (§14.4.1). A candidate whose artifact was never written is not a candidate an admin can
+act on.
+
+### 14.2.4 D22 — hyperparameters live in a versioned YAML, mirroring `thresholds.yaml`
+
+`pdm/app/training_config.yaml`, with a top-level `version:` string bumped by hand on every
+change — the same mechanism `thresholds.yaml` already established for Tier 1 (§3.1.1), for
+the same reason: the value recorded on a run must identify the configuration, and it must not
+require git at runtime. Contents: `modelFamily`, per-family hyperparameters, `seed`,
+`classWeight`. `trainingConfigVersion` is recorded on every run.
+
+Determinism: `random_state` from a single configured `seed`, `n_jobs: 1` by default. Two runs
+over the same corpus manifest with the same config version must produce the same
+`artifactSha256`. This is testable (§14.10.3) and is what makes "did the corpus change or did the
+config change?" answerable after the fact — the same reproducibility value §10.5's D4
+(`corpusRowManifest`) was added for.
+
+### 14.2.5 D23 — no class is dropped for thin support
+
+Every label present in the corpus is trained on, including `OTHER` and including a class with
+two examples. Dropping a class would mean discarding human-confirmed ground truth (the same
+reasoning as §10.5's D6, which made the class-balance check warn-only for human-sourced
+paths). Thin support is handled where it was already handled: `decide_promotion`'s
+`min_support_per_class` excludes such classes from the *decision* while still *reporting* them,
+and `OTHER` is structurally excluded from the gate (D1/D8). No change to `promotion.py`.
+
+---
+
+## 14.3 Design: artifacts
+
+### 14.3.1 D24 — artifacts are files on a `pdm`-owned volume; the DB holds the pointer, not the bytes
+
+A new named volume `pdm_artifacts` mounted at `/artifacts` in the `pdm` service, with
+`PDM_ARTIFACT_ROOT=/artifacts`. Not Postgres bytea, not the repo, not a bind-mount into
+`server/`.
+
+**This is not a violation of §3.4's invariant, and the plan must say so explicitly** because
+the invariant gets cited constantly and a reader will otherwise flag this. The invariant, as
+§10.6 item 2 restated it when the read-only corpus role landed, is *"Python never writes
+**application data**"* — i.e. never writes `raw_telemetry`, `processed_telemetry`,
+`fault_events`, `training_corpus`, or `training_runs`. A model artifact is not application data;
+it is Python's own build output, written by the process that produced it, and every *database
+row about it* is still written exclusively by Node (§14.4.5). §10.6 item 2 already anticipated
+exactly this: *"Whatever model artifacts/training-run metadata Python does need to persist ...
+can live in Python's own store without touching Node's tables at all."* This is that store.
+
+Node never reads artifact bytes and never mounts the volume — it only ever handles the
+`artifactPath` string. That keeps one owner for the artifact filesystem and avoids a second
+process's permission model on the same directory.
+
+### 14.3.2 D25 — layout, naming, and why the path can't contain the run id
+
+```
+/artifacts/
+  runs/
+    20260819T101500Z-a3f19c2b8d04/     # <trainedAt compact>-<corpusContentHash[:12]>
+      model.joblib
+      metadata.json
+      SHA256SUM
+```
+
+`training_runs.artifactPath` stores the path **relative to `PDM_ARTIFACT_ROOT`**
+(`runs/20260819T101500Z-a3f19c2b8d04/model.joblib`), not an absolute path — so remounting the
+volume elsewhere, or moving `pdm` to its own CT (§1's intended deployment), doesn't
+invalidate every historical row.
+
+**Why the directory isn't keyed by `training_runs.id`:** the id doesn't exist yet when the
+artifact is written. Python writes the artifact, hands the result to Node, and *Node* does the
+`INSERT ... RETURNING id` (§14.4.5). Keying on the id would require either Python writing the row
+(forbidden) or a rename round-trip after the insert (a new failure mode where the row points at
+a path that no longer exists). `trainedAt` + corpus hash is unique in practice and is
+independently meaningful — it answers "which corpus produced this" without a join.
+
+`metadata.json` (authoritative, ships with the artifact) carries: `featureOrder`, `labelClasses`,
+`modelFamily`, `trainingConfigVersion`, `seed`, `corpusContentHash`, `corpusRowCount`,
+`featureCodeVersions` (the distinct `training_corpus.featureCodeVersion` values present in the
+training rows — §10.5's D2 added that column precisely so a skew is detectable, and this is
+where it becomes visible), `sklearnVersion`/`xgboostVersion`, `pythonVersion`, `trainedAt`,
+`trainRowCount`/`testRowCount`/`skippedRowCount`.
+
+The load-critical subset is **mirrored** into a new `training_runs."artifactMeta"` JSONB column
+(§14.5.1) so the admin page and any investigation can answer "why won't this load" from one SQL
+query, without the artifact volume. The sidecar remains authoritative on a mismatch, and a
+mismatch is itself a reportable condition.
+
+### 14.3.3 D26 — `pdm` reads its own champion pointer from `training_runs`; the read-only grant widens by one table
+
+`pdm` needs to know which artifact is champion. Three options were considered:
+
+1. **Grant `SELECT` on `training_runs` to `pdm_corpus_readonly`** and let `pdm` query it at
+   startup.
+2. Have Node push the champion to `pdm` over HTTP at Node's startup and on every promotion.
+3. Have Node write a `champion.json` pointer into the artifact volume.
+
+**Chosen: (1), with (2) as an additive hot-swap trigger, not as the source of truth.**
+
+- (3) is rejected outright: it makes Node a writer to `pdm`'s filesystem, creating a second
+  owner of that directory and a second source of truth alongside `training_runs.promoted`.
+- (2) alone is rejected as the *only* mechanism because it makes `pdm`'s model state depend on a
+  Node call: restart `pdm` and it serves Tier 1 only until Node happens to push again. That is a
+  silent degradation, and §11.3 already established that this system prefers visible
+  failure to silent wrongness.
+- (1) does widen the read-only role's scope beyond the "scoped to `training_corpus` only"
+  description in §10.6 item 2. That widening is deliberate and small: `training_runs` is
+  metadata about `pdm`'s own runs, it is read-only, and it removes a startup-order dependency
+  between two services. **The invariant that matters is untouched** — `pdm_corpus_readonly` gets
+  `SELECT` and nothing else, and Python still never writes. Grant added in the same conditional
+  `DO $$ ... $$` style `005_training_corpus.sql` already uses for `training_corpus`.
+
+**Startup must be non-fatal.** `model.py` loads lazily and defensively: DB unreachable, no
+promoted run, null `artifactPath`, missing file, checksum mismatch, or feature-order mismatch →
+log the specific reason, leave the model unloaded, `score()` returns `None`, `/health` stays
+`ok`. A Tier 2 problem must never take down `/process-window`, because since §11's cutover
+that endpoint is on the critical path for `processed_telemetry`, the dashboard, forecast, drift
+and trend (§11.3). This is the single most important behavioral constraint in this section.
+
+### 14.3.4 D27 — Tier 2 augmentation goes into `/process-window`, not just `/score`
+
+Per §14.0 items 5 and 6, the currently-scaffolded augmentation point is on the endpoint the live
+path no longer uses, and the response model would strip the fields anyway. Both need fixing:
+
+- `pdm/app/preprocessing/pipeline.py` — after `rules.evaluate(...)` at line 222, call
+  `model.score(processed_record)` and merge a non-`None` result into `tier1_verdict` the same way
+  `main.py:31` does. Keep `main.py`'s `/score` augmentation too, for the back-compat
+  `POST /api/processed` path that `pdmService.js` still falls back to.
+- **Better: extract the merge into one function** (`model.augment(verdict, processed_record)`)
+  called from both places, so a third call site can't diverge. Two independent merges of the
+  same two dicts is the same duplication problem §11.1 rejected for feature computation.
+- `pdm/app/schemas.py::ScoreResponse` gains optional Tier 2 fields:
+  `tier2Label`, `tier2Probability`, `tier2ModelRunId`, `tier2ArtifactSha256` (short form).
+  All `Optional[...] = None`, so every existing consumer and every existing test is unaffected
+  when no model is loaded. `ProcessWindowResponse.tier1Verdict` is typed as `ScoreResponse`
+  (`schemas.py:194`), so it inherits these automatically — verified.
+- **Naming note, deliberate:** the field on the wire stays `tier1Verdict` even once it carries
+  Tier 2 fields, because renaming it would break `pipeline.js`, `pdmService.js`, and the parity
+  fixtures for no functional gain. Its docstring must say "Tier 1 verdict, augmented with Tier 2
+  fields when a model is loaded" so the name doesn't mislead. Flagged rather than silently left.
+- `tier2ModelRunId` requires `model.py` to know which `training_runs.id` it loaded — it does,
+  since D26 has it query `training_runs` for the champion. This is what makes §14.6's prediction
+  monitoring attributable to a specific model.
+
+### 14.3.5 D28 — hot reload on promotion, and the loaded-vs-champion mismatch is a first-class displayed state
+
+- `POST /model/reload` on `pdm`: re-runs the champion lookup and swaps the in-memory model
+  atomically (build fully, then rebind the module-level reference — never mutate in place while
+  requests are in flight). Returns the resulting status.
+- `GET /model/status` on `pdm`: `{loaded, runId, artifactPath, artifactSha256, loadedAt,
+  lastLoadError, featureOrderHash, modelFamily}`.
+- **Auth for these two endpoints is the network boundary, and that is sufficient here.** `pdm`
+  publishes no ports and sits on the `data` network only (§14.0 item 10) — the only container that
+  can reach it is `backend`. Adding a second auth mechanism inside `pdm` (a shared secret, a
+  token) would be inventing one where none exists elsewhere in this service; `/score` and
+  `/process-window` already rely on exactly this boundary. Stated explicitly so a reviewer
+  doesn't read the omission as an oversight. **If `pdm` is ever moved to its own CT (§1) and
+  reachable beyond a private network, this decision must be revisited** — noted in the risk
+  register.
+- Node calls `/model/reload` after a successful approval, fire-and-forget-**but-caught** with a
+  2s timeout, matching the discipline §3.4 established and §10.5 reused.
+- **If reload fails, the DB says champion X and `pdm` is still serving Y.** That mismatch is
+  detected by comparing `GET /model/status`'s `runId` against `trainingRunModel.getChampion()`
+  and is rendered as an explicit warning banner on the admin page (§14.7.3), with a manual "Reload
+  model" button. A silent mismatch here would mean the admin believes they deployed something
+  they didn't — the single worst failure mode this plan can produce.
+
+### 14.3.6 D29 — artifact retention is `pdm`'s job, and never prunes a rollback target
+
+During each retrain, `pdm` prunes artifacts beyond `PDM_ARTIFACT_KEEP_RUNS` (default 10), oldest
+first, **never** deleting: the current champion, any run whose `promoted` was ever true (queried
+via the D26 grant — a `promotedAt IS NOT NULL` check, §14.5.1), or anything newer than
+`PDM_ARTIFACT_MIN_AGE_HOURS`. Rollback (§14.4.3) is only possible while the older artifact still
+exists, so "retain previous artifacts so a bad promotion can be rolled back" (§10.5) is a
+hard constraint on the pruner, not a nice-to-have.
+
+Orphan sweep: an artifact directory with no corresponding `training_runs` row older than the
+min-age (i.e. Python wrote it but Node's insert never happened — §14.4.5's crash window) is
+deleted by the same pass.
+
+---
+
+## 14.4 Design: human-in-the-loop promotion
+
+### 14.4.1 D30 — `decide_promotion()` becomes a recommendation, and is *necessary but not sufficient*
+
+The question posed was whether `decide_promotion()` stays authoritative with an admin override,
+or becomes a recommendation an admin confirms. **Chosen: recommendation. No run is ever
+promoted without an explicit human action.**
+
+Reasoning, grounded in decisions this project already made:
+
+- §10.5's own framing is *"Retrain-and-evaluate, not retrain-and-replace ... never blindly
+  promote just because a retrain completed."* An automated gate that promotes on pass is still
+  promote-on-completion from an operator's point of view — the gate is a floor on *metrics*, not
+  a judgment about whether the corpus those metrics were computed over is trustworthy. Nothing
+  in `decide_promotion()` can see that the last 30 corpus rows came from one operator's
+  questionable upload.
+- §10.5 D8 already loosened the gate to a support-scaled tolerance specifically so it
+  *wouldn't* block forever at thin support. A gate that is deliberately generous is a poor sole
+  authority for a deployment decision — the generosity was justified precisely because a human
+  would be looking.
+- Symmetry with the rest of this system: §3.2/§10.4 established that automated verdicts get
+  human review and human assertions don't. A promotion decision is an automated verdict.
+
+Mechanics:
+
+- `decide_promotion()` output is stored as `recommendation` (boolean) + `promotionReason` +
+  `perClassComparison`. **`promotion.py` is not modified.**
+- A new run lands as `promotionStatus = 'PENDING_DECISION'` with `promoted = false`, regardless
+  of recommendation.
+- An admin may **approve against a negative recommendation** or **reject a positive one**. Either
+  direction is an *override*, and an override requires a non-empty `decisionNotes` — the same
+  escalation §10.4 applied to manual-buffer's mandatory `notes` ("this action skips review
+  entirely, so the audit trail is the only check left"). A decision that *matches* the
+  recommendation may have empty notes.
+- **Rejecting is a real, recorded outcome, not a no-op.** A `REJECTED` run keeps its artifact
+  until the pruner reaches it (so a decision can be revisited) but can never become champion
+  without a fresh decision.
+
+### 14.4.2 D31 — a stale comparison cannot be approved
+
+`championRunIdAtEval` records which champion the candidate was compared against. If a *different*
+run has been approved since (i.e. `championRunIdAtEval != ` the current champion's id), the
+comparison on screen is against a model that is no longer deployed, and approving it would
+deploy a candidate that was never evaluated against what it's replacing.
+
+`POST .../approve` returns **409** in that case, with both ids and a message directing the admin
+to re-run the retrain. This is the concurrency hazard of a two-actor system (a retrain job and an
+approving human) and it is cheap to close at the write. Same instinct as §10.4's pre-write
+overlap check (409) on manual buffers.
+
+Additional approve preconditions, all 409/422 rather than silent: `promotionStatus` must be
+`PENDING_DECISION`; `artifactPath` must be non-null; the artifact must load — verified by
+calling `pdm`'s `POST /model/verify` (dry-run load, no swap) *before* flipping any DB state, so
+an approval never leaves the system pointing at an unloadable artifact.
+
+### 14.4.3 D32 — one champion, enforced by the database; rollback is re-approval of an older run
+
+`getChampion()` today is `WHERE promoted = true ORDER BY id DESC LIMIT 1`. **This silently
+breaks rollback**: re-promoting run 7 while run 9 was previously promoted would leave two rows
+with `promoted = true`, and `ORDER BY id DESC` would still return run 9. Fixes, together:
+
+- Add `promotedAt TIMESTAMPTZ`. `getChampion()` becomes
+  `WHERE promoted = true ORDER BY "promotedAt" DESC NULLS LAST, id DESC LIMIT 1`.
+- Enforce single-champion structurally: `CREATE UNIQUE INDEX ... ON training_runs ((true)) WHERE
+  promoted` (partial unique index on a constant — the standard Postgres "at most one row
+  satisfying this predicate" idiom). A bug that tries to promote two runs then fails loudly at
+  the write instead of producing a system with two champions and an ordering-dependent answer.
+- Approval/rollback happens in **one transaction**: demote the current champion
+  (`promoted = false`, keep `promotedAt` as history), promote the target, insert an audit row.
+  Reusing the ordering-by-`promotedAt` means a demoted-then-re-promoted run gets a fresh
+  `promotedAt` and orders correctly.
+- **Audit table `model_promotion_events`** (`runId`, `action` in
+  `APPROVE | REJECT | ROLLBACK`, `actor`, `at`, `notes`, `recommendationAtDecision`,
+  `championRunIdBefore`). `training_runs` holds current state; this holds history. Without it, a
+  rollback overwrites the record of the promotion it's undoing, and "who deployed the model that
+  was live last Tuesday" becomes unanswerable — the same reproducibility value §10.5's D4
+  protected for corpora.
+- `POST /api/pdm/model/runs/:id/rollback` is a distinct action from approve (different
+  precondition: target must have a valid artifact and must have been `APPROVED` at some point;
+  D31's stale-comparison check does **not** apply, because a rollback is explicitly a decision to
+  go backwards, not a claim about a comparison).
+
+### 14.4.4 D33 — `promoted` keeps its meaning; the new lifecycle column sits beside it
+
+`promoted` stays "is (or was) this the champion", so `trainingRunModel.getChampion()` and
+`corpusMaterializationService`'s callers need no semantic reinterpretation. `promotionStatus`
+(`PENDING_DECISION | APPROVED | REJECTED | SUPERSEDED`) is the new lifecycle. `SUPERSEDED` is set
+on the previous champion at approval time, so the history table isn't the only way to read "this
+used to be live".
+
+A migration backfill question that must be answered explicitly rather than defaulted: **existing
+rows.** Any `training_runs` row already present (written by `recordTrainingRun.js` in the
+current auto-decide flow) has `promoted` set by `decide_promotion()` with no human involved and
+no artifact. Backfill: `recommendation = promoted`, `promotionStatus = 'REJECTED'`,
+`promoted = false`, `promotedAt = NULL`, with a `decisionNotes` string stating it was
+retroactively invalidated by this migration. Rationale: those runs have no artifact
+(`artifactPath` is null for all of them, §14.0 item 4), so they cannot be champions in any
+meaningful sense — leaving `promoted = true` on an artifact-less row would make `getChampion()`
+return something `pdm` can never load, and D32's unique index would reject the migration outright
+if more than one such row exists. This must be stated in the migration's header comment.
+
+### 14.4.5 D34 — retrain runs as an HTTP job on `pdm`; Node still does every write
+
+Per §14.0 item 9, the documented `python | node` pipe cannot work in the deployed topology. And a
+retrain is a minutes-long operation, so it cannot ride the 2s-timeout fetch pattern the rest of
+the Node↔Python boundary uses.
+
+Chosen transport — deliberately the smallest thing that works, matching §11.5 item 2's
+explicit preference for "lowest infrastructure cost" over new queue/worker infrastructure
+(which §4.5 notes this codebase still doesn't have):
+
+- `POST /retrain` on `pdm` → starts a FastAPI `BackgroundTasks` job in a **single in-process
+  slot**. Returns `202 {jobId, startedAt}`. A second concurrent request gets **409** with the
+  running job's id. Request body carries `championMetrics` and `championRunId`, sourced by Node
+  from `trainingRunModel.getChampion()` — matching `run_retrain`'s existing contract
+  (`retrain.py:41-55` documents exactly this: "Looked up via `trainingRunModel.getChampion()` on
+  the Node side and passed through by the caller"). Keeping that contract means D26's grant is
+  used only for the champion *artifact pointer*, not for metrics, and there's one source of truth
+  for what the candidate was compared against.
+- `GET /retrain/:jobId` → `{status: RUNNING|SUCCEEDED|FAILED|ABORTED, result?, error?}`. The
+  `RetrainResult` is held in memory until read, then retained for a short TTL.
+- **Node polls, then writes.** `POST /api/pdm/model/retrain` (admin) kicks the job and returns
+  the `jobId`; the admin page polls `GET /api/pdm/model/retrain/:jobId` (a thin proxy), and on
+  `SUCCEEDED` the **backend** performs the `training_runs` INSERT. Python never writes Postgres.
+- The insert logic is **extracted from `recordTrainingRun.js` into
+  `server/services/trainingRunService.js`**, so the CLI script and the new controller share one
+  implementation. `recordTrainingRun.js` stays as a thin stdin wrapper — it's still the right
+  tool for an offline/dev-host run and deleting it would remove the only path that works without
+  the backend running.
+- **Failure modes, stated because they're accepted rather than solved:** `pdm` restarting
+  mid-job loses the job and its result; the artifact may already exist and becomes an orphan
+  (swept by D29). `ABORTED` on `MIN_ONSET_EPISODES` not met (`RetrainAbortedError`) is a normal,
+  displayed outcome, not an error — the page shows `episodeCount/required` from the gate. Node
+  polling stops after `PDM_RETRAIN_POLL_TIMEOUT` and reports "job lost" rather than polling
+  forever.
+
+---
+
+## 14.5 Work items — data layer
+
+### 14.5.1 Migration `007_model_ops.sql`
+
+`training_runs` — additive columns:
+
+| Column | Type | Why |
+|---|---|---|
+| `recommendation` | BOOLEAN NOT NULL DEFAULT false | `decide_promotion()`'s output, separated from the human decision (D30) |
+| `promotionStatus` | TEXT NOT NULL DEFAULT 'PENDING_DECISION' + CHECK | lifecycle (D33) |
+| `promotedAt` | TIMESTAMPTZ | correct champion ordering + rollback (D32) |
+| `decidedBy` / `decidedAt` / `decisionNotes` | TEXT / TIMESTAMPTZ / TEXT | audit of the human action (D30) |
+| `artifactSha256` | TEXT | load-time integrity check (D25) |
+| `artifactMeta` | JSONB | mirrored load-critical metadata (D25) |
+| `perClassComparison` | JSONB | already computed by `decide_promotion` and currently thrown away — the comparison view's primary data source (§14.7.4) |
+| `modelFamily` / `trainingConfigVersion` / `seed` | TEXT / TEXT / INTEGER | run comparability (D20, D22) |
+| `trainRowCount` / `testRowCount` / `skippedRowCount` | INTEGER | evaluation context; skipped rows are a data-quality signal (D19) |
+
+Plus: the partial unique index enforcing one champion (D32); the D33 backfill of existing rows,
+with its reasoning in the header comment; `GRANT SELECT ON training_runs TO pdm_corpus_readonly`
+in the same conditional `DO $$` form `005` uses (D26).
+
+New `model_promotion_events` table (D32). New `tier2_predictions` table (§14.6.2). Down migration
+drops the new tables and columns and reverses the grant.
+
+### 14.5.2 Models
+
+- `trainingRunModel.js` — `insertRun()` extended for the new columns; `getChampion()` reordered
+  per D32; new `getRunById`, `listRunsWithDecision(n)`, and a **transactional**
+  `decideRun({runId, action, actor, notes, ...})` that demotes/promotes/audits in one `BEGIN ...
+  COMMIT`. This is the first place in this repo needing an explicit multi-statement transaction
+  on a `pg` pool — it must take a client from the pool and release it in a `finally`, not use
+  `pool.query` three times.
+- New `modelPromotionEventModel.js` — insert + list by run.
+- New `tier2PredictionModel.js` — insert; the four monitoring aggregate queries (§14.6).
+
+### 14.5.3 Services
+
+- New `server/services/trainingRunService.js` — the insert path extracted from
+  `recordTrainingRun.js` (D34), plus `decide()` wrapping D31's preconditions and D32's
+  transaction, plus the post-approval `pdm` reload call.
+- New `server/services/modelMonitoringService.js` — §14.6's metric computation.
+- `pdmService.js` — persist a `tier2_predictions` row when the verdict carries `tier2Label`
+  (§14.6.2). Must follow the existing discipline exactly: caught, never allowed to affect
+  ingestion, no new await inside the coalescing critical path.
+
+### 14.5.4 Controllers + routes
+
+New `server/controllers/modelOpsController.js`, all routes
+`requireTrustedProxy` + `requireGroup(PDM_ADMIN_GROUP)`:
+
+```
+POST   /api/pdm/model/retrain                  # kick a job -> 202 {jobId}
+GET    /api/pdm/model/retrain/:jobId           # proxy pdm's job status
+GET    /api/pdm/model/runs                     # history + decisions
+GET    /api/pdm/model/runs/:id                 # one run + perClassComparison + artifactMeta
+GET    /api/pdm/model/champion                 # champion row + pdm's loaded status + mismatch flag
+POST   /api/pdm/model/runs/:id/approve         # {notes} — D30/D31
+POST   /api/pdm/model/runs/:id/reject          # {notes}
+POST   /api/pdm/model/runs/:id/rollback        # {notes} — D32
+POST   /api/pdm/model/reload                   # manual reload after a failed auto-reload (D28)
+GET    /api/pdm/model/monitoring               # §14.6
+GET    /api/pdm/external-upload                # list uploads (§14.8.4)
+DELETE /api/pdm/external-upload/:uploadId      # retract (§14.8.4)
+```
+
+Route-ordering note, same trap §3.6's `/stats` hit: `/api/pdm/model/retrain` and
+`/api/pdm/model/champion` must be registered before `/api/pdm/model/runs/:id` — they don't
+actually collide (different segment counts) but the file's existing convention is
+specific-before-generic and should be followed.
+
+`PDM_ADMIN_GROUP` is declared next to `PDM_REVIEWER_GROUP` at the top of `routes/index.js`,
+default `'pdm-admins'`, added to `.env.example` and `docker-compose.yml`'s `backend`
+environment.
+
+---
+
+## 14.6 Design + work items: continuous monitoring
+
+### 14.6.1 D35 — six metrics, all computed in Node, none of them requiring the model
+
+Per §14.0 item 13 there is nothing to monitor today. Concretely measurable, with the honest caveat
+each one needs:
+
+1. **Champion staleness.** Days since `trainedAt`; corpus rows added since the champion's
+   `corpusRowManifest` (a set difference on `(bufferId, windowEnd)` — this is exactly what §10.5's
+   D4 persisted the manifest *for*), and how many of those are fault-labeled. Answers
+   "is a retrain worth doing" without running one. Pure SQL.
+2. **Tier 2 prediction volume + label distribution over time.** Daily counts per predicted label
+   from `tier2_predictions`, next to the champion's training class prior (from `artifactMeta`).
+   A live distribution diverging sharply from the training prior is the cheapest real drift
+   signal available. Pure SQL.
+3. **HITL agreement on reviewed windows.** Join `tier2_predictions.processedTelemetryId` to
+   `fault_events.processedTelemetryId` for `status = 'CONFIRMED'` rows and compare
+   `predictedLabel` to `faultType`; report a confusion breakdown. This is the Tier 2 analogue of
+   §3.6's `GET /pdm/fault-events/stats` and belongs beside it conceptually.
+   **Caveat that must be rendered on the page, not just written here:** ground truth only ever
+   arrives for windows Tier 1 flagged (or a human manually entered), so this is *agreement on
+   reviewed windows*, a biased sample — never "live accuracy". Labeling it accuracy would be
+   exactly the fabricated confidence §13.3 refused for the synthetic corpus.
+   Second caveat: §10.5's auto-labeling path (migration 003, `autoLabeled = true`) produces
+   `CONFIRMED` rows no human actually reviewed. Those must be **excluded** from the agreement
+   numerator/denominator, or the metric partly measures Tier 1's rule-matching against itself.
+4. **Model input drift, per metric.** Mean/stddev of the six metrics over `processed_telemetry`
+   for the last 7 days vs. the same statistics over the champion's training rows, reported as a
+   standardized difference `|Δmean| / σ_train` per metric. Deliberately six interpretable
+   numbers rather than a KS/PSI battery over 54 features — an admin has to be able to act on it.
+   **Check before building:** a `driftService.js` already exists in this repo for a different
+   purpose (`GET /api/drift`). Reuse it if its statistic is the right one; otherwise name this
+   distinctly (`modelInputDrift`) and cross-reference, rather than shipping a second thing
+   called "drift" with no stated relationship to the first.
+5. **Corpus composition drift.** Class counts in `training_corpus` now vs. in the champion's
+   manifest, broken down by `sourceType`. This is the whole-corpus balance concern §10.5
+   raised ("if operators only ever upload fault examples...") made continuously visible instead
+   of only checked at write time by `checkClassBalance`.
+6. **Deployment integrity.** `pdm`'s `GET /model/status` vs. `getChampion()` — loaded run id,
+   artifact checksum, `lastLoadError`, mismatch flag (D28).
+
+**Where computed: Node, all six.** Every one is a SQL aggregate over Node-owned tables, and Node
+is the only writer. Pushing any of it into Python would mean widening the read-only role further
+(D26 widened it by exactly one table, on purpose) for no analytical benefit — none of these
+metrics needs the model itself. One endpoint, `GET /api/pdm/model/monitoring`, returns all six;
+the page polls it on a slow interval (60s, matching `faultEventStats`'s existing cadence in
+`PredictionsPage.jsx`).
+
+### 14.6.2 D36 — `tier2_predictions` is its own table, not columns on `fault_events`
+
+Tier 2 predicts on **every** closed window; `fault_events` only has rows for flagged windows and
+periodic negative samples. Hanging predictions off `fault_events` would discard the majority of
+them and make metric 2 (distribution over time) impossible.
+
+```
+tier2_predictions (
+  id, "processedTelemetryId", "windowEnd",
+  "predictedLabel", "probability",
+  "modelRunId"      -- which training_runs row produced it (D27's tier2ModelRunId)
+  "artifactSha256", "createdAt"
+)
+```
+
+- Written by `pdmService.js` from the augmented verdict, in the same caught/never-blocking style
+  as everything else on that path.
+- Volume: one row per minute ≈ 525k/year — small, but unbounded. `processed_telemetry` is
+  already a Timescale hypertable, so the convention for this exists; **verify** whether
+  002/001's hypertable + retention pattern applies cleanly to a table with a `BIGSERIAL` primary
+  key before committing to it (002's own header discusses why `fault_events` deliberately isn't
+  one). Fallback: plain table + a prune in the existing `server/scripts/` cleanup style, matching
+  `cleanupStaleUploads.js`.
+- `processedTelemetryId` gets no enforced FK, consistent with `fault_events`' documented
+  convention for referencing the hypertable (002's header).
+
+---
+
+## 14.7 Design + work items: the admin-only page
+
+### 14.7.1 D37 — `PDM_ADMIN_GROUP` is a new, stricter tier; no group hierarchy in code
+
+Investigated (§14.0 item 7): no admin concept exists. `PDM_REVIEWER_GROUP` is the only group any
+code checks.
+
+**Decision: introduce `PDM_ADMIN_GROUP` (default `'pdm-admins'`) as a distinct group, not a
+rename of the reviewer group and not a superset implemented in code.**
+
+- The trust claims are genuinely different in blast radius. A reviewer asserts ground truth about
+  *one* fault event (§10.4's reasoning for why that needs no second reviewer). An admin
+  changes which model classifies *every future window*. Gating the second on the first would
+  mean everyone who can label a fault can also deploy a model.
+- **No "admin implies reviewer" logic in code.** Each route declares exactly the group it needs.
+  An operator who needs both capabilities is put in both groups in Authentik — configuration,
+  not code. Implementing a hierarchy would be a second auth mechanism alongside
+  `requireGroup()`, which the brief explicitly rules out and which this codebase has no
+  precedent for.
+- Consequence to handle deliberately, not discover later: **an admin who is not also a reviewer
+  gets 403 from the upload endpoints** (which stay reviewer-gated, §14.8.2). The page must therefore
+  gate the upload panel on the *reviewer* flag and the promotion panel on the *admin* flag,
+  independently (§14.7.2).
+
+### 14.7.2 D38 — the server is the boundary; `/whoami` computes the booleans so the group name never lives in the client
+
+- Every new route: `requireTrustedProxy` + `requireGroup(PDM_ADMIN_GROUP)`. That is the real
+  boundary. **Client-side gating is cosmetic** — it hides a nav item, nothing more, and must be
+  documented as such in `App.jsx` so a future reader doesn't treat it as security.
+- The client needs to know whether to show the page. Two options: a `VITE_PDM_ADMIN_GROUP` build
+  arg, or have `/api/whoami` return derived booleans. **Chosen: derived booleans** —
+  `whoamiController.js` returns `{...req.identity, isAdmin, isReviewer}` computed from the same
+  env vars the routes use. One source of truth for the group names; a build-time copy in the
+  client could drift from the server's and produce a UI that offers actions the API rejects.
+  Small additive change; existing consumers of `/whoami` are unaffected.
+- **The dev bypass must be stated in the plan** so it isn't mistaken for a hole later:
+  `requireGroup()` and `requireTrustedProxy()` both call `next()` when `NODE_ENV` is
+  `development` or `test` (`authentikIdentity.js:49-75`). `docker-compose.yml` sets
+  `NODE_ENV: production` explicitly on `backend` for exactly this reason. `/whoami`'s derived
+  booleans must mirror that bypass, or a local dev run will render a page whose API calls
+  succeed but whose nav item is hidden.
+
+### 14.7.3 D39 — one page, five panels, following the existing client conventions exactly
+
+`client/src/pages/ModelOpsPage.jsx`, reached the same way every other page is: a new `page` id
+in `App.jsx`'s `useState`, a new entry in `Sidebar.jsx`'s `PAGES` under a second nav heading
+("Administration", alongside the existing "Monitor"), rendered only when `isAdmin`. No router is
+introduced — `App.jsx` has never had one and adding one for a single page is scope creep with a
+real regression surface. `usePolling` for data, `Card`/`CardLabel`/`buttonReset` for chrome,
+inline styles, `memo` on the default export — matching `PredictionsPage.jsx` throughout.
+
+Panels:
+
+1. **Deployed model** — champion run id, `trainedAt`, `modelFamily`, corpus hash + row count,
+   `decidedBy`/`decidedAt`, staleness (metric 1), and the loaded-vs-champion state from D28 with
+   a "Reload model" button. Renders an explicit empty state ("No Tier 2 model is deployed — Tier
+   1 rules only") rather than blanks, since that is the state on day one and for a long time
+   after.
+2. **Retrain** — evaluation-gate readiness (`episodeCount / MIN_ONSET_EPISODES`, disabling the
+   button and explaining *why* when not met, since that will be the state until 100 fault
+   buffers exist), a "Retrain now" button, and running-job status.
+3. **Candidate vs champion** (§14.7.4) — the comparison view and the approve/reject action.
+4. **Run history** — every run with recommendation, decision, actor, and corpus hash; a run
+   row expands into its own comparison view; a previously-approved run offers "Roll back to
+   this".
+5. **Monitoring** — §14.6's six metrics.
+6. **Training data upload** — §14.8, gated on `isReviewer`.
+
+### 14.7.4 D40 — the comparison view leads with per-class, and labels `overallAccuracy` as non-decisive
+
+Straight from `perClassComparison` (§14.5.1's new column) — one row per label:
+
+| Label | Cand. precision | Champ. precision | Cand. recall | Champ. recall | Support (cand/champ) | Tolerance | Verdict |
+|---|---|---|---|---|---|---|---|
+
+- Excluded classes render with their reason, never omitted — `promotion.py` deliberately reports
+  them (`{"included": false, "reason": "insufficient support" | "excluded from gate (OTHER)"}`),
+  and dropping them from the UI would hide from the admin exactly what the gate couldn't judge.
+- The `"candidate has zero support/predictions for a class the champion was evaluated on"` case
+  gets its own prominent treatment — that's a forgotten-class regression, the most consequential
+  single failure the gate detects.
+- The recommendation banner shows `promotionReason` verbatim (it's written to be human-readable
+  and is always populated, pass or fail).
+- **`overallAccuracy` is displayed small and explicitly labeled "informational only — not part of
+  the promotion gate."** `promotion.py`'s own comment says it is "NEVER used by
+  decide_promotion — that's the whole point of the per-class floor: an aggregate can't hide a
+  regression." A UI that leads with one number would reintroduce, at the human layer, exactly the
+  failure mode D8's per-class floor was built to prevent. This is the same anchoring concern
+  §3.2 raised about surfacing Tier 1's `confidence` to reviewers, applied to a different actor:
+  the fix isn't hiding the number, it's not letting it be the headline.
+- Approve/Reject buttons with a notes field that becomes **required** when the action contradicts
+  the recommendation (D30), with the requirement stated in the UI before submission rather than
+  surfaced as a 400.
+- Corpus provenance for the candidate — row count and per-`sourceType` breakdown — sits beside
+  the metrics, because "should I trust these numbers" is largely a question about where the
+  corpus came from, and that context is the thing `decide_promotion()` structurally cannot see.
+
+---
+
+## 14.8 Design + work items: upload from the admin page
+
+### 14.8.1 D41 — this is (a): expose the existing endpoints. No new upload/mapping backend.
+
+The brief asks whether the admin-page upload is (a) a UI over the existing endpoints or (b) new
+backend surface. **It is (a)**, and §14.0 item 14 is the evidence: `handleUpload`'s return value is
+already precisely a mapping screen's input (surviving headers, auto-excluded columns, detected
+timestamp column, row count, median interval, warnings), and `confirmUpload`'s
+`requiresConfirmation` + `rangeSanityWarnings` + `confirmRangeOverride` is already a two-phase
+"we think your mapping or units may be wrong, confirm to proceed" contract. §10.4.1 built
+this deliberately as "the endpoints a future screen would call" and it holds up.
+
+Building a second upload path would duplicate Stage A/B/C's gate — the exact duplication
+§10.4/§11.1 rejected twice on principle, and the one place in this system where data hygiene is
+a hard accept/reject gate (§10.4.1 D12). Nothing about a screen changes the data-trust
+argument.
+
+### 14.8.2 D42 — upload stays reviewer-gated; retraction is admin-gated
+
+Uploading does not become an admin action just because the button now lives on an admin page.
+§10.4.1's reasoning ("the human-trust model is identical across all three CONFIRMED-creating
+paths; only the *data*-trust bar differs, enforced by Stage C") is unchanged, and raising the bar
+would silently remove a capability existing reviewers have. `DELETE .../external-upload/:id`
+(retract, §14.8.4) is **admin**-gated: it deletes corpus rows, which is a corpus-integrity action of
+the same class as promotion, not a data-contribution action.
+
+### 14.8.3 Two small contract fixes, both required
+
+1. **Multipart through the client wrapper.** `client/src/api/client.js:13` unconditionally sets
+   `Content-Type: application/json`. A `FormData` body needs the browser to set the header
+   *including its generated boundary*. Fix: let `request()` omit the default when the body is a
+   `FormData` instance (or when an explicit `undefined` content type is passed). Without this the
+   upload fails with a Stage A parse error that looks like a bad file.
+2. **Unit options must come from the server.** The per-metric allowed-unit lists live in
+   `server/utils/unitConversion.js`, including §10.4.1 D13's deliberate exclusion of `g` for
+   vibration. Hardcoding them in the client creates a second copy that can drift — and a drifted
+   copy here corrupts the corpus silently (a wrong declared unit is, per §10.4.1 item 6,
+   "just as corrupting as a wrong name match"). Fix: **embed a `mappingOptions` block in the
+   Stage A response** (`{metrics: [{key, label, units: [...]}]}`) rather than adding a route —
+   the list is only ever needed immediately after an upload, and zero new endpoints is the
+   smaller change.
+
+### 14.8.4 Genuinely new surface, and why it's justified
+
+- `GET /api/pdm/external-upload` — list uploads with status/outcome. `external_uploads` has no
+  read endpoint at all today, so an operator has no way to see that yesterday's upload was
+  `STAGE_C_REJECTED` and why.
+- `DELETE /api/pdm/external-upload/:uploadId` — calls the existing
+  `corpusMaterializationService.js::retractUpload(uploadId)`. Per §14.0 item 15 that function was
+  added during §10.4.1's review specifically as the `EXTERNAL_UPLOAD` equivalent of the
+  `onFaultEventRejectedOrExcluded` retraction path, and it currently has **no way to be
+  invoked**. A documented undo mechanism that can't be triggered isn't one.
+
+### 14.8.5 Page flow
+
+Upload file → Stage A result panel (row count, median interval, excluded columns, warnings) →
+mapping table (one row per surviving column: metric dropdown / "unused", unit dropdown from
+`mappingOptions`) → fault metadata (`faultType` from `client/src/utils/constants.js`'s existing
+`FAULT_TYPES`, plus the mandatory `rootCause`/`resolution`/`notes` the controller already
+requires) → confirm → either the range-sanity confirmation step (`rangeSanityWarnings`, with an
+explicit override) or the Stage C outcome (accepted window count, or rejection with the composite
+score and the three underlying rates — §10.4.1's item 9 requires "why was this rejected" never
+be a black box, and the response already carries the numbers).
+
+---
+
+## 14.9 Work items — summary by layer
+
+**Database:** `007_model_ops.sql` (§14.5.1) + down migration.
+
+**Python (`pdm/`):**
+- New `app/features.py` (D19), `app/training.py` (D20), `app/artifacts.py` (write/verify/load/prune
+  — D25, D29), `app/training_config.yaml` (D22).
+- `app/model.py` — real champion lookup + lazy defensive load + `score()` + `augment()` (D26,
+  D27, D28).
+- `app/retrain.py` — training path, artifact write, extended result, real CLI (D21, D34).
+- `app/preprocessing/pipeline.py` — call `model.augment` after `rules.evaluate` (D27).
+- `app/main.py` — `POST /retrain`, `GET /retrain/:jobId`, `GET /model/status`,
+  `POST /model/reload`, `POST /model/verify`; use `model.augment` in `/score` (D27, D28, D34).
+- `app/schemas.py` — Tier 2 fields on `ScoreResponse`; request/response models for the new
+  endpoints (D27).
+- `requirements.txt` — `scikit-learn`, `numpy`, `joblib` pinned; `xgboost` only if D20's
+  config-gated path is exercised in v1 (decide at implementation time; pinning an unused native
+  dep just grows the image).
+
+**Node (`server/`):** models, services, controller, routes per §14.5.2–§14.5.4; `pdmService.js`
+prediction persistence (§14.6.2); `whoamiController.js` derived booleans (D38); `routes/index.js`
+`PDM_ADMIN_GROUP`.
+
+**Client:** `pages/ModelOpsPage.jsx`; `App.jsx` page id + `isAdmin`/`isReviewer` wiring;
+`Sidebar.jsx` Administration group + icon; `api/client.js` new methods + the FormData fix
+(§14.8.3); reuse `utils/constants.js`'s `FAULT_TYPES`.
+
+**Docker / config:** `pdm_artifacts` volume + `/artifacts` mount; `PDM_ARTIFACT_ROOT`,
+`PDM_ARTIFACT_KEEP_RUNS`, `PDM_ARTIFACT_MIN_AGE_HOURS`, `PDM_MODEL_FAMILY`, `PDM_TRAIN_SEED` on
+`pdm`; `PDM_ADMIN_GROUP`, `PDM_RETRAIN_POLL_TIMEOUT` on `backend`; all of the above in
+`.env.example`. **`pdm`'s `mem_limit: 512m` needs raising** (sklearn + numpy + a fitted forest on
+the full corpus in memory) — measure, then set; a container OOM-killed mid-retrain is a
+confusing failure. The volume must be writable by the `pdm` user created in `pdm/Dockerfile`
+(`useradd ... pdm`, `USER pdm`) — Docker named volumes are root-owned on first creation, so this
+needs either an entrypoint `chown` or a matching uid, and must be verified on a **fresh volume**,
+not an existing one. `cap_drop: ALL` is retained; nothing here needs a capability.
+
+---
+
+## 14.10 Tests
+
+### 14.10.1 Python (`pdm/tests/`)
+- `test_features.py` — order derived from `pump-physics.yaml` is stable and 54-long; missing key
+  raises rather than defaults; a round-trip through a persisted `feature_order` reproduces the
+  same vector from a reordered dict.
+- `test_training.py` — fits on a small fixture corpus; two fits with the same seed and config
+  produce byte-identical artifacts (D22); `predict` returns exactly one label per row (the
+  contract `evaluate_candidate` asserts at `promotion.py:101`).
+- `test_artifacts.py` — write/verify round-trip; corrupted byte fails the checksum; a
+  `feature_order` mismatch refuses to load; the pruner never removes a champion or an
+  ever-promoted run (D29).
+- `test_model_load.py` — **the load-failure matrix**, and the most important suite here: DB
+  unreachable, no promoted run, null `artifactPath`, missing file, bad checksum, feature-order
+  mismatch → each leaves the model unloaded with a specific logged reason, `score()` returns
+  `None`, and `/health` still returns ok (D26).
+- `test_retrain.py` — extended: existing fixture-`predict_fn` cases unchanged (proving D21's
+  seam held); new no-`predict_fn` case trains and returns an `artifactPath`;
+  `RetrainAbortedError` still raised before any artifact is written.
+- `test_augment.py` — `/process-window` carries Tier 2 fields when a model is loaded and is
+  byte-identical to today's response when it isn't (the regression that protects §11's
+  parity work).
+
+### 14.10.2 Node (`server/scripts/tests/`)
+- `trainingRunService` — approve happy path; approve with a stale `championRunIdAtEval` → 409
+  (D31); approve against a negative recommendation without notes → 400, with notes → 200;
+  approve/rollback leaves exactly one `promoted = true` row; the unique index rejects a
+  double-promote attempt; an audit row is written for every decision.
+- `modelMonitoringService` — each of §14.6's six aggregates against seeded rows, including the
+  `autoLabeled` exclusion in metric 3 (that's a correctness bug waiting to happen, not a nicety).
+- Retrain job proxy — `pdm` unreachable, 409 job-already-running, and a job that disappears
+  (poll timeout) each produce a clean error, no unhandled rejection. Same discipline §5.6
+  established.
+- `pdmService` — a verdict carrying Tier 2 fields writes a `tier2_predictions` row; a failure
+  writing it does not affect the `fault_events` path or ingestion.
+- **Naming trap (§14.0 item 16):** `npm test`'s `find` excludes `*pdm*` and `*faultEvent*`. New test
+  files must avoid those substrings **or** the script must be fixed. Fixing it is preferable —
+  but it presumably excludes them for a reason (they need a live Postgres, or the `mock.module`
+  compatibility issue commit `8a63403` addressed), so **determine that reason before changing
+  it** rather than re-including a suite that then fails for everyone.
+
+### 14.10.3 Offline smoke test using the synthetic corpus
+`data/pump-telemetry/` cannot train a promotable model (§13.3, and §14.1's non-scope restates
+it), but it is the right input for proving the *machinery* runs at realistic scale: a dev-only
+script that windows a slice of it, shapes rows like `training_corpus` rows, and runs
+`run_retrain` end-to-end including the artifact write. Any number it produces is labeled
+synthetic and is never inserted into `training_runs`. This is precisely the role §13.3
+assigned that corpus.
+
+### 14.10.4 Live verification (against a real stack, like §11's `verify-pdm-cutover.sh`)
+1. Fresh `pdm_artifacts` volume — confirm `pdm` can write to it as the non-root `pdm` user.
+2. Boot with no promoted run — `/model/status` reports `loaded: false`, `/process-window` and the
+   dashboard behave exactly as today.
+3. Retrain from the admin page; confirm one `training_runs` row, `PENDING_DECISION`, non-null
+   `artifactPath`, and an artifact on disk with a matching checksum.
+4. Approve; confirm the DB transaction, the audit row, `pdm`'s auto-reload, `/model/status`
+   reporting the new run id, and Tier 2 fields appearing on subsequent `/process-window`
+   responses and in `tier2_predictions`.
+5. Stop `pdm` mid-retrain; confirm the backend reports a lost job, writes no `training_runs` row,
+   and the orphan artifact is swept.
+6. Corrupt the champion artifact and restart `pdm`; confirm it starts, logs the checksum failure,
+   serves Tier 1 only, and the admin page shows the mismatch banner.
+7. Retrain again, approve, then roll back to the previous run; confirm `getChampion()` returns the
+   rolled-back-to run (this is what D32's `promotedAt` ordering exists for) and `pdm` loads it.
+8. Hit every new route as a reviewer-but-not-admin identity → 403; as an admin-but-not-reviewer
+   identity, confirm the upload panel's 403 is handled as a message, not a crash.
+
+---
+
+## 14.11 Risk register
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Tier 2 wired only into `/score`, so a loaded model never affects live scoring | **High** | Augment in `preprocessing/pipeline.py` via one shared `model.augment()`; regression test asserts Tier 2 fields on `/process-window` (§14.0 item 5, D27) |
+| `response_model=ScoreResponse` silently strips Tier 2 fields | **High** | Fields declared on `ScoreResponse`; the same test covers it (§14.0 item 6, D27) |
+| Train/serve feature-order skew produces confident nonsense with no error | **High** | Single `features.py`; order persisted in the artifact and verified at load; mismatch is a hard load failure (D19, D25) |
+| A Tier 2 load/scoring failure takes down `/process-window`, and with it `processed_telemetry`, the dashboard, forecast and drift | **High** | Defensive lazy load, every failure path returns `None`; the load-failure matrix is its own test suite (D26, §14.10.1). §11.3's coupling is exactly why this is High |
+| DB says champion X, `pdm` serves Y, nobody knows | **High** | `GET /model/status` compared to `getChampion()`, mismatch banner + manual reload; never inferred from a successful approval (D28) |
+| A model is deployed on a gate designed to be generous at thin support, with no human judgment | **High** | Promotion requires an explicit admin action; recommendation is necessary-but-not-sufficient (D30) |
+| Admin approves a comparison against a champion that has since changed | **High** | 409 on stale `championRunIdAtEval` (D31) |
+| Rollback silently doesn't work because `getChampion()` orders by id | **High** | `promotedAt` ordering + partial unique index + single transaction (D32) |
+| Existing artifact-less `promoted = true` rows make `getChampion()` return something unloadable | Medium | Explicit migration backfill to `REJECTED`/`promoted = false`, reasoning in the migration header (D33) |
+| Admin rubber-stamps on `overallAccuracy` and misses a minority-class regression | Medium | Per-class table is the headline; `overallAccuracy` rendered small and labeled non-decisive (D40) — the human-layer analogue of §3.2's anchoring concern |
+| HITL-agreement metric is read as live accuracy when its sample is biased to flagged windows | Medium | Named "agreement on reviewed windows" in the API and on screen; `autoLabeled` rows excluded (D35 metric 3) |
+| Widening `pdm_corpus_readonly` to `training_runs` erodes the read-only boundary by precedent | Medium | One table, `SELECT` only, in the same conditional grant style; the write invariant is untouched and restated (D26) |
+| Approving deploys an artifact that turns out to be unloadable | Medium | `POST /model/verify` dry-run load before any DB state changes (D31) |
+| `pdm` OOM-killed mid-retrain under `mem_limit: 512m` | Medium | Measure and raise before shipping; job reports FAILED rather than hanging (§14.9) |
+| Named volume is root-owned; non-root `pdm` user can't write artifacts | Medium | Verified on a **fresh** volume in §14.10.4 step 1 — an existing volume can mask this |
+| Artifact pruner deletes the rollback target | Medium | Pruner never removes a champion or an ever-promoted run; asserted in `test_artifacts.py` (D29) |
+| Retrain job lost on `pdm` restart; orphan artifact left behind | Low — accepted | Poll timeout reports "job lost"; orphan sweep in the same prune pass (D34, D29). A durable queue is explicitly out of scope, consistent with §11.5 item 2 |
+| Client's hardcoded JSON content type breaks multipart upload, surfacing as a confusing Stage A parse error | Medium | FormData exemption in `request()`; covered in §14.10.4 step 8's flow (§14.8.3) |
+| Client's unit list drifts from `unitConversion.js`, silently corrupting the corpus | Medium | Units served in the Stage A response, never hardcoded client-side (§14.8.3) |
+| New tests silently skipped by `npm test`'s `find` exclusions | Medium | Named around the exclusions, or the script fixed *after* establishing why the exclusions exist (§14.10.2) |
+| `pdm`'s new control endpoints are unauthenticated at the application layer | Low today | Network boundary only (`data` network, no published ports) — same basis `/score` already relies on. **Must be revisited if `pdm` moves to its own CT** per §1 (D28) |
+| A second thing called "drift" appears with no stated relation to `GET /api/drift` | Low | Reuse `driftService` or name it `modelInputDrift` and cross-reference (D35 metric 4) |
+| An admin who isn't a reviewer sees an upload panel that 403s | Low | Panels gated independently on `isReviewer` / `isAdmin` (D37, D38) |
+| `tier2_predictions` grows unbounded | Low | Retention policy or a prune script in `cleanupStaleUploads.js`'s style; hypertable suitability verified first (D36) |
+
+---
+
+## 14.12 Definition of done
+
+**Fitting and artifacts**
+- [ ] `features.py` derives a 54-feature order from `pump-physics.yaml`; a missing/non-numeric key raises; the order used at fit time is persisted in the artifact and verified at load
+- [ ] `training.py` fits a Random Forest by default, XGBoost via `PDM_MODEL_FAMILY`, hyperparameters from a versioned `training_config.yaml`, and records `modelFamily`/`trainingConfigVersion`/`seed` on the run
+- [ ] Two fits over the same corpus manifest and config version produce byte-identical artifacts
+- [ ] No class is dropped for thin support; `promotion.py` is unmodified; `evaluate_candidate`'s `predict_fn` contract is unchanged
+- [ ] Artifacts land on the `pdm_artifacts` volume under `<trainedAt>-<corpusHash>/`, with `metadata.json` + `SHA256SUM`; `training_runs.artifactPath` holds the path **relative** to `PDM_ARTIFACT_ROOT`
+- [ ] The artifact is written before the promotion decision, so a non-recommended candidate is still inspectable and still approvable
+- [ ] The pruner never removes the champion or any ever-promoted run; orphaned artifacts are swept
+- [ ] Python still writes no Postgres table — verified by grep, not convention: no write SQL in `pdm/`, and `pdm_corpus_readonly` holds `SELECT` and nothing else
+
+**Load and serving**
+- [ ] `pdm` resolves its champion from `training_runs` at startup and loads the artifact; every failure mode leaves it unloaded with a specific logged reason, `score()` returning `None`, and `/health` ok
+- [ ] Tier 2 augmentation happens in `/process-window` (the live path) as well as `/score`, through one shared `augment()`
+- [ ] `ScoreResponse` declares the Tier 2 fields; a no-model response is byte-identical to today's
+- [ ] `POST /model/reload` swaps atomically; `GET /model/status` reports loaded run id, checksum and last error
+- [ ] Tier 1 remains the sole flagging authority; Tier 2 only adds a label + probability (§3.5)
+
+**Promotion**
+- [ ] No code path promotes a run without an explicit admin action
+- [ ] `promotionStatus`/`recommendation`/`promotedAt`/`decidedBy`/`decidedAt`/`decisionNotes` exist and are populated
+- [ ] Approving against the recommendation (either direction) requires non-empty notes; matching it does not
+- [ ] Stale `championRunIdAtEval` → 409; null/unverifiable artifact → rejected before any DB write
+- [ ] Exactly one `promoted = true` row is possible, enforced by a partial unique index, not application logic alone
+- [ ] `getChampion()` orders by `promotedAt`; rolling back to an older run makes it champion and `pdm` loads it
+- [ ] Every decision writes a `model_promotion_events` row; pre-existing artifact-less rows are backfilled per D33
+- [ ] Retrain runs as an HTTP job on `pdm` (202/409/poll); Node performs the `training_runs` INSERT via a shared `trainingRunService`; `recordTrainingRun.js` still works standalone
+
+**Admin page and auth**
+- [ ] `PDM_ADMIN_GROUP` exists, defaults to `pdm-admins`, is distinct from `PDM_REVIEWER_GROUP`, and no code implements a group hierarchy
+- [ ] Every new route is `requireTrustedProxy` + `requireGroup(PDM_ADMIN_GROUP)`; a reviewer-only identity gets 403 on all of them
+- [ ] `/api/whoami` returns `isAdmin`/`isReviewer` derived server-side; the client never contains a group name; the client gate is documented as cosmetic
+- [ ] `ModelOpsPage` renders all six panels, with real empty states for "no model deployed" and "evaluation gate not met"
+- [ ] The comparison view leads with per-class metrics, shows excluded classes with their reasons, treats the forgotten-class case prominently, and labels `overallAccuracy` as non-decisive
+- [ ] Run history shows recommendation vs. decision vs. actor, and offers rollback on previously-approved runs
+
+**Monitoring**
+- [ ] `tier2_predictions` is written on every window a loaded model scores, without ever affecting ingestion
+- [ ] `GET /api/pdm/model/monitoring` returns all six metrics; every one is computed in Node
+- [ ] Metric 3 excludes `autoLabeled` rows and is labeled "agreement on reviewed windows", never accuracy
+- [ ] Metric 4 either reuses `driftService` or is named distinctly with the relationship stated
+- [ ] The loaded-vs-champion mismatch is visible on the page, not only in logs
+
+**Upload**
+- [ ] Upload + mapping work end-to-end from the admin page against the **existing** §10.4.1 endpoints — no second upload/mapping backend
+- [ ] Unit options come from the server's `unitConversion.js` via the Stage A response
+- [ ] `request()` handles `FormData` without forcing a JSON content type
+- [ ] Upload/confirm stay reviewer-gated; list and retract are admin-gated; retract invokes the existing `retractUpload()`
+- [ ] A Stage C rejection shows the composite score and the three underlying rates
+
+**Verification**
+- [ ] Python unit suites pass, including the full load-failure matrix
+- [ ] Node suites pass and are actually included in `npm test`
+- [ ] §14.10.4's eight live-stack steps pass against a real Postgres + `pdm` + `backend` stack on a **fresh** artifact volume
+- [ ] `pdm`'s memory limit measured and set; a retrain does not OOM
+
+---
+
+## 14.13 Open questions carried forward
+
+1. **Label semantics — still open, deliberately.** This plan trains the same-time *diagnosis*
+   label. §13.4 step 3 / §13.5 item 4's lead-time-shifted *onset* label — arguably the label
+   a genuine PdM system needs — requires a per-row severity/onset signal `training_corpus` does
+   not carry. Needs its own plan: new columns, a re-materialization pass, and an ML review of
+   what "N minutes before onset" means for buffers whose boundaries are 1 hour either side of a
+   human-declared fault window.
+2. **Retrain cadence.** Admin-triggered only. Whether a schedule is warranted depends on how fast
+   the corpus actually grows, which nobody knows yet. Revisit once metric 1 (staleness) has real
+   history.
+3. **`MISALIGNMENT` vs `BEARING` separability** — a known, accepted limitation of six scalar
+   metrics (§12.1, restated in §13.3). Expect it in the per-class comparison; do not treat a
+   persistent confusion between those two as a promotion blocker without richer instrumentation.
+   Worth a note on the comparison panel so an admin isn't surprised by it every retrain.
+4. **XGBoost in v1 or not.** D20 keeps the config seam; whether to pin the dependency before
+   anything uses it is an implementation-time call, and the reasoning (image size vs. an unused
+   native dep) should be recorded wherever it lands.
+5. **Whether `tier2_predictions` should be a hypertable.** Depends on facts about
+   `001`/`002`'s hypertable conventions that must be checked against the live schema, not
+   assumed (D36).
+6. **`pdm`'s application-layer auth**, if and when it moves to its own CT per §1. Today the
+   `data`-network boundary is the whole story and that is stated, not assumed.
+7. **Evaluation-gate reachability.** `MIN_ONSET_EPISODES = 100` fault-labeled buffers is a long
+   way off from real HITL throughput, so §14.7.3's panel 2 will show "gate not met" for a long time
+   and nothing in this plan produces a model until it's met. Whether that threshold is right for
+   a first deployment (as opposed to a mature one) is an ML question §10.5 settled at 100 by
+   porting the existing constant; it is worth re-asking with real numbers in hand, but not
+   worth changing pre-emptively here.
+
+
+---
+
+## 14.14 ecc:mle-reviewer pass on §14 — findings and decisions D43–D50
+
+**Verdict: BLOCK on first pass**, one finding above threshold (D43); everything else is a
+refinement, not a blocker — matching this document's own §10.5 precedent (that pass also
+returned BLOCK on its first sketch, over what became D8). Reviewed against §14.0–§14.13 as
+written above; §1–§13 read for background only, not re-reviewed.
+
+### D43 — BLOCK: the train/serve contract catches structural skew, not semantic skew
+
+§14.2.1 (D19) persists `feature_order` in the artifact and hard-fails a load if it disagrees
+with the current `FEATURE_ORDER` — this correctly catches a *shape* mismatch (wrong count, wrong
+position, an added/removed metric). It does **not** catch a *semantics* mismatch: a feature whose
+name and position stay identical while its underlying computation changes (e.g. `rawStdDev`'s
+window, units, or clipping behavior shifts in a future `pump-physics.yaml` or feature-code
+revision). §10.5's D2 built exactly this detector for the corpus side
+(`training_corpus.featureCodeVersion` per row), and §14.3.2 already carries the artifact-side
+half (`featureCodeVersions` in `metadata.json`) — but nothing in the load path (D26/D28) or the
+serving path (D27) actually compares that stored value against the running feature code's
+current version. Given §14.2.1 itself calls this "the single highest-risk piece of train/serve
+skew in this whole plan," leaving the semantic half of that risk unchecked is a real gap, not an
+optional refinement.
+
+**Fix:** at model load, compare the running feature-code version (whatever §11 already stamps as
+`processed_telemetry.preprocessingVersion`) against the artifact's recorded `featureCodeVersions`.
+A live version not present in (or newer than) what the artifact trained on surfaces as a warning
+on the admin page — extend D28's loaded-vs-champion mismatch banner (§14.3.5, §14.7.3) to also
+carry a feature-code-version mismatch state, alongside the existing artifact-checksum mismatch
+it already displays.
+
+### D44 — training on classes down to n=2 under `class_weight='balanced'` (refinement, not blocking)
+
+D23's reasoning (parity with §10.5 D6 — don't discard human-confirmed ground truth) is sound for
+whether to *include* rare rows in the corpus, but doesn't address a second question: a class with
+2 training examples under `class_weight='balanced'` gets a per-sample weight inversely
+proportional to its frequency, large enough to warp splits elsewhere in the tree, not just "learn
+that class poorly." §14.2.5 addresses this only at the *decision* layer
+(`min_support_per_class` excludes it from the gate), never at the *fitting* layer. Sub-BLOCK
+because the human-approval gate (D30) and the per-class comparison table (D40) are very likely to
+surface the symptom directly (a well-supported class's recall regressing) rather than letting it
+deploy silently.
+
+**Optional fix:** cap `class_weight` per class (e.g. `min(computed_balanced_weight, cap)`), or at
+minimum state explicitly in §14.2.2 that `class_weight='balanced'` at thin support is a known,
+accepted risk mitigated only by the human-gate comparison table, not by the fitting code itself.
+
+### D45 — no hyperparameter search is justified; OOB scoring is a free partial mitigation not currently used
+
+§14.1's "no hyperparameter search" reasoning (no third split exists; searching against the
+promotion split would overfit the gate) is correct. But `RandomForestClassifier(oob_score=True)`
+gives a free generalization estimate from the exact bootstrap-out-of-bag rows already implicit in
+`train_rows`, at no extra split cost. Not a substitute for search and doesn't change any
+promotion decision, but it's cheap and currently unused.
+
+**Optional fix:** set `oob_score=True` on the RandomForest path (note XGBoost has no direct
+equivalent), record `oobAccuracy`/`oobScorePerClass` in `metadata.json` where practical, surface
+it on the comparison panel (§14.7.4) as informational-only — same "informational, not
+gate-decisive" treatment §14.7.4 already gives `overallAccuracy` (D40), so it doesn't reintroduce
+an anchoring risk.
+
+### D46 — the comparison table gives the human less information than `promotion.py` already computes internally
+
+§14.7.4 (D40)'s human-gated promotion design holds up well overall: leading with per-class
+metrics, demoting `overallAccuracy`, showing excluded classes with reasons, and surfacing corpus
+provenance are all substantive mitigations, not cosmetic reordering — provenance in particular is
+exactly the kind of judgment a human can make that the automated gate structurally cannot.
+But `promotion.py`'s support-scaled tolerance (§10.5 D8: "~0.22 at n=5, ~0.02 at n=500") already
+computes, internally, how much noise a given support level implies — and the comparison table
+surfaces only a raw `Support (cand/champ)` number, forcing the admin to mentally reconstruct
+"n=5 means ±22 points of noise" with no aid. The plan is asking a human to do a job the automated
+gate's own arithmetic already does better.
+
+**Fix:** surface D8's already-computed tolerance value per class/support level directly in the
+comparison table (e.g. "recall 80% ± 22pp at n=5") rather than a bare support count. A UI change
+over an already-computed value, not a new statistical component.
+
+### D47 — monitoring metric 3 (HITL agreement) has a second, unaddressed bias source
+
+§14.6.1 metric 3 already flags and excludes `autoLabeled=true` rows (self-comparison bias) and is
+correctly labeled "agreement on reviewed windows," never accuracy. The second bias is structural
+and unaddressed: ground truth only ever exists for Tier-1-*flagged* windows, so this metric can
+only ever measure agreement on the subset of windows Tier 1's rules already suspected. Tier 2's
+behavior on windows Tier 1 never flags — plausibly the majority, and exactly the population where
+a Tier 2 model would add the most value or do the most damage — is invisible to every one of the
+six metrics; metric 2 (label distribution) has no ground truth to compare against, and metric 3
+has ground truth only on the flagged subset. Not fixable by adjusting metric 3's SQL — it's a
+structural blind spot, not a computation bug.
+
+**Fix:** add an explicit caveat string to the monitoring panel (§14.7.3 panel 5) stating that
+Tier 2's behavior on windows Tier 1 never flags is not measured by any current metric, and that
+metric 3 measures agreement only on the intersection of "flagged by Tier 1" and "later confirmed
+by a human" — a subset of a subset. No new machinery, just an honest label, matching the
+discipline metric 3's first caveat already applies.
+
+### D48 — monitoring metric 4 (drift) is marginal-only; the consequence for a tree ensemble should be stated explicitly
+
+The `|Δmean|/σ_train` per-metric reduction (six numbers instead of a 54-feature KS/PSI battery)
+is a reasonable human-facing tradeoff, correctly justified as "an admin has to be able to act on
+it." But a Random Forest / XGBoost splits on joint structure implicitly — drift in the
+*correlation* between two metrics (e.g. vibration and temperature moving together in a new way,
+each individually still within its historical marginal mean/stddev) is invisible to six
+independent per-metric statistics but can still shift which leaf a row lands in and therefore the
+predicted label. Not a reason to build a heavier detector now; the tradeoff still holds. But the
+plan should say so explicitly, so a future "metric 4 looked fine but the model degraded" incident
+isn't mistaken for the monitoring system being broken rather than doing exactly what it was
+scoped to do.
+
+**Fix:** one sentence in §14.6.1 metric 4 (and its risk-register row) stating the marginal-only
+scope explicitly, parallel to how metric 3's bias is already stated.
+
+### D49 — no prediction-confidence / calibration monitoring metric exists among the six
+
+`tier2_predictions` (D36) already stores `probability` per prediction — the raw material for this
+already exists — but none of the six metrics uses it. A shift in the distribution of `probability`
+over time (the model becoming systematically more or less confident, or confidence collapsing
+toward the decision boundary for a specific label) is one of the cheapest and most actionable
+degradation signals available for a deployed classifier, cheaper than metric 4's drift
+computation, sitting unused in a column the plan is already writing. Not a BLOCK — nothing about
+deploying without it is unsafe, since Tier 1 remains authoritative and D30 keeps promotion
+human-gated — but it's the most concrete gap in "six metrics" claiming to be "continuous
+monitoring."
+
+**Fix:** add a seventh metric (or fold into metric 2) — daily mean/percentile of
+`tier2_predictions.probability`, optionally split by predicted label, computed the same way as
+the other five (pure SQL over `tier2_predictions`, no model access needed) — consistent with
+D35's "none of them requiring the model" design constraint.
+
+### D50 — determinism (D22) is well-handled; version-pin discipline should be stated explicitly
+
+§14.2.4's determinism design is more careful than most: `n_jobs: 1` removes thread-scheduling
+float-summation nondeterminism (the dominant hidden nondeterminism source for parallelized
+RF/XGBoost fits), and the byte-identical-artifact test (§14.10.1) is the right verification. One
+gap: §14.9 says scikit-learn/numpy/joblib are "pinned" but doesn't state whether that means an
+exact pin (`==`) versus a compatible-release pin (`~=`) — scikit-learn has changed RF
+tie-breaking/default-criteria behavior across minor versions historically, and D22's
+byte-identical-artifact claim is load-bearing for "did the corpus change or did the config
+change" reproducibility.
+
+**Fix:** state explicitly in §14.2.4 or §14.9 that scikit-learn/numpy/xgboost are exact-pinned
+(`==`), not range-pinned, and that a version bump is itself a `trainingConfigVersion`-triggering
+event (already implied by `sklearnVersion` being recorded in `metadata.json` per D25 — just make
+the pin discipline explicit next to the determinism claim).
+
+### What passed review without a finding
+
+- **D30's human-gated promotion design** (§14.4.1, §14.7.4/D40): substantively addresses the
+  asymmetry between an automated gate and a human reviewer (per-class headline, demoted
+  `overallAccuracy`, excluded-class transparency, corpus provenance) rather than just relocating
+  the same statistical fragility. Not reopened, aside from D46's information-surfacing gap above.
+- **D21's reuse of `evaluation/episodes.py`/`promotion.py` under a real, non-fixture classifier**:
+  `evaluate_candidate`'s `predict(rows) -> list[str]` contract is explicitly verified against the
+  actual `promotion.py` signature before being relied on, and D19's fail-hard-on-bad-feature
+  design (raise, don't silently zero) matters specifically because a real classifier — unlike the
+  fixture `predict_fn`s that were the only prior caller — actually consumes the feature vector.
+  No gap found here beyond D43 above.
+
+### Net effect on §14
+
+D43 should be treated the same way §10.5 treated D8 — a required fix before implementation, not
+an optional refinement. D44–D50 are recorded as refinements; none blocks implementation on their
+own, but D46/D47/D49 in particular are cheap (UI/label/one-more-SQL-metric changes over data the
+plan already computes or persists) and worth folding in during implementation rather than
+deferring, since they close gaps identified against this plan's own stated goals rather than
+introducing new scope.
