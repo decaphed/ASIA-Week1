@@ -19,24 +19,38 @@ const STEP_HOURS = 0.25;
 
 // ─────────────────────────────────────────────────────────────────────────
 // projectForecast — /api/forecast publishes one damped-trend step ahead per
-// metric (level, trend, forecast, lower/upperBound). entry.trend is the
-// ETS model's per-MINUTE rate (forecastService.js advances level/trend once
-// per minute, on every new processed record — see that file's header). The
-// design asks for a 1-hour fan plotted in HORIZON_STEPS of STEP_HOURS each,
-// so each step is STEP_HOURS*60 minutes of trend, not 1 minute — extrapolate
-// level + trend across the horizon in those units, and widen the interval
-// with the square root of the horizon, the standard random-walk growth for
-// an ETS prediction interval.
+// metric (level, trend, phi, forecast, lower/upperBound). entry.trend is the
+// ETS model's per-MINUTE rate, decayed each minute by entry.phi
+// (forecastService.js advances level/trend once per minute, on every new
+// processed record — see that file's header). The design asks for a 1-hour
+// fan plotted in HORIZON_STEPS of STEP_HOURS each, so each step is
+// STEP_HOURS*60 minutes ahead — extrapolating with the *same* phi the model
+// fit (rather than a flat per-step trend) is what makes a heavily-damped
+// metric's line visibly flatten out instead of running straight to the edge
+// of the chart forever: Holt's damped-trend forecast h steps ahead adds
+// trend * (phi + phi^2 + ... + phi^h), not trend * h.
+//
+// anchorValue pins the very first point (h=0) to the last actually-observed
+// reading rather than entry.forecast — the model's own smoothed "now" belief
+// — because they come from two different aggregations of the signal
+// (processed_telemetry per-minute means vs. the raw_telemetry series this
+// chart plots) and rarely land on the same number. Without this the dashed
+// line would visibly jump away from where the solid observed line ends.
 // ─────────────────────────────────────────────────────────────────────────
-function projectForecast(entry) {
+function projectForecast(entry, anchorValue) {
   if (!entry || entry.forecast == null) return null;
   const halfWidth = entry.upperBound != null ? entry.upperBound - entry.forecast : 0;
   const minutesPerStep = STEP_HOURS * 60;
+  const trend = entry.trend ?? 0;
+  const phi = entry.phi ?? 1;
+  const base = anchorValue ?? entry.forecast;
   const median = [];
   const upper = [];
   const lower = [];
   for (let i = 0; i <= HORIZON_STEPS; i++) {
-    const value = entry.forecast + (entry.trend ?? 0) * i * minutesPerStep;
+    const h = i * minutesPerStep; // minutes ahead — trend is a per-minute rate
+    const damped = phi >= 1 ? trend * h : (trend * phi * (1 - phi ** h)) / (1 - phi);
+    const value = base + damped;
     const w = halfWidth * Math.sqrt(i + 1);
     median.push(value);
     upper.push(value + w);
@@ -100,11 +114,15 @@ function Tabs({ tab, setTab, pendingCount }) {
 function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey, goReview }) {
   const metric = METRIC_BY_KEY[metricKey];
   const th = THRESHOLDS[metricKey];
-  const projection = useMemo(() => projectForecast(forecast?.[metricKey]), [forecast, metricKey]);
 
   const hero = useMemo(() => {
     const history = points.map((p) => p[metricKey]).filter((v) => v != null).slice(-48);
-    if (!projection || history.length < 2) return null;
+    if (history.length < 2) return null;
+    // Anchor the projection to the last actually-observed reading (not the
+    // model's own smoothed belief) so the dashed line starts exactly where
+    // the solid observed line ends — see projectForecast()'s comment.
+    const projection = projectForecast(forecast?.[metricKey], history[history.length - 1]);
+    if (!projection) return null;
     const all = [...history, ...projection.upper, ...projection.lower];
     let [mn, mx] = range(all, 0.12);
     if (th?.alarmHigh != null && th.alarmHigh < mx * 1.35) mx = Math.max(mx, th.alarmHigh * 1.04);
@@ -150,14 +168,15 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
       crosses: ci >= 0 && nowValue < th.alarmHigh,
       crossPoint: ci >= 0 ? fp[ci] : null,
     };
-  }, [points, bucketSeconds, metricKey, metric, th, projection]);
+  }, [points, bucketSeconds, metricKey, metric, th, forecast]);
 
   // Per-channel outlook cards plus the alert copy shown beside the hero chart.
   const outlook = useMemo(() => METRICS.map((m) => {
-    const proj = projectForecast(forecast?.[m.key]);
     const history = points.map((p) => p[m.key]).filter((v) => v != null).slice(-8);
-    const limit = THRESHOLDS[m.key]?.alarmHigh;
     const nowValue = history.length ? history[history.length - 1] : null;
+    // Anchor here too, for the same reason as the hero chart above.
+    const proj = projectForecast(forecast?.[m.key], nowValue);
+    const limit = THRESHOLDS[m.key]?.alarmHigh;
 
     let chip = 'stable';
     let chipBg = '#E4F3EB';

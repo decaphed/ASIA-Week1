@@ -243,6 +243,11 @@ function computeForecastEntry(metricState) {
   return {
     level: round2(level),
     trend: round2(trend),
+    // Exposed so the client can extrapolate multiple steps ahead with the
+    // same damping the model itself fit — without phi, a multi-step
+    // projection has no way to know how fast this metric's trend actually
+    // decays and can only draw a straight (undamped) line.
+    phi: round2(phi),
     forecast: round2(nextValue),
     lowerBound: round2(nextValue - 1.96 * rmse),
     upperBound: round2(nextValue + 1.96 * rmse),
