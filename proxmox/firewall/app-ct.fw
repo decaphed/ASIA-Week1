@@ -1,0 +1,43 @@
+# Proxmox host firewall ruleset for the single app CT — apply per
+# docs/runbook/proxmox-firewall.md, from the Proxmox host, not from a
+# session inside the CT.
+#
+# Replace BOTH <MGMT_HOST_IP> placeholders below with the actual IP address
+# of the machine you are SSHing from, before copying this file to
+# /etc/pve/firewall/<VMID>.fw. Do this on the copy at that path, not on this
+# repo file — see the runbook's step 2.
+
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+# SSH — first rule, evaluated before policy_in: DROP takes over below it.
+# Scoped to the one trusted management host; get <MGMT_HOST_IP> wrong here
+# and step 2 of the runbook catches it before this becomes the only way in
+# (see the runbook's §0 "keep a second, independent way into the CT").
+IN ACCEPT -p tcp -dport 22 -source <MGMT_HOST_IP> -log nolog
+
+# Proxmox web UI, same trusted source only — not opened to the whole LAN.
+IN ACCEPT -p tcp -dport 8006 -source <MGMT_HOST_IP> -log nolog
+
+# Traefik HTTP entrypoint — dashboard.home is meant to be reachable from
+# the whole LAN (that's the point of this stack), not just the management
+# host, so this is deliberately unscoped by -source.
+IN ACCEPT -p tcp -dport 80 -log nolog
+
+# Traefik HTTPS entrypoint. Commented out per the runbook's step 3 — enable
+# once TLS is confirmed live end-to-end (mkcert cert served on 443), then
+# re-test `https://dashboard.home/` the same way as the http check.
+#IN ACCEPT -p tcp -dport 443 -log nolog
+
+# Everything else this CT runs (5432 postgres, 6379 authentik-redis, 3000
+# backend, 1880 node-red, 9000 authentik-server) is intentionally NOT
+# listed here. docker-compose.yml doesn't publish any of those ports to
+# the host, and none of them are meant to be reachable from outside the
+# CT's own Docker networks — policy_in: DROP above denies them by default.
+# Do not add a bare port number here without a -source scope: see this
+# file's own runbook for what that would defeat. Any new published port in
+# docker-compose.yml needs a matching, scoped line added here by hand — the
+# two are not kept in sync automatically.

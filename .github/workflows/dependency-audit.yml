@@ -1,0 +1,40 @@
+name: Dependency audit
+
+on:
+  schedule:
+    # 06:00 UTC daily. Pinned dependency versions (server/, client/, pdm/)
+    # never self-report a newly disclosed CVE against an already-installed
+    # version — this is the only thing that would catch one short of
+    # someone manually running npm audit / pip-audit.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # npm audit reads package-lock.json directly — no npm ci/install needed.
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: server
+
+  npm-audit-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: client
+
+  pip-audit-pdm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt
+        working-directory: pdm

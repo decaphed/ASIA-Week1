@@ -186,6 +186,16 @@ services:
       retries: 5
     mem_limit: 256m
     cpus: 0.5
+    # Entrypoint runs as root and drops to the "redis" user via su-exec —
+    # same pattern as postgres's cap_add above. Without SETUID/SETGID it
+    # fails outright ("failed switching to \"redis\": operation not
+    # permitted") rather than degrading, confirmed against a fresh-volume
+    # boot.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
     networks: [data]
@@ -228,6 +238,8 @@ services:
     # No ports: — reached only via Traefik at authentik-server:9000.
     mem_limit: 1g
     cpus: 1.0
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
     networks: [edge, data]
@@ -263,6 +275,8 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     cpus: 1.0
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
     networks: [data]
@@ -294,6 +308,15 @@ services:
       start_period: 10s
     mem_limit: 256m
     cpus: 0.5
+    # Image runs as root (no USER in its Dockerfile) to bind the privileged
+    # ports below — cap_drop: ALL alone would make it lose
+    # CAP_NET_BIND_SERVICE and fail to bind 80/443, so it's added back
+    # explicitly rather than left granted-by-omission with the rest of the
+    # default capability set.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     networks: [edge]
@@ -303,15 +326,34 @@ networks:
     driver: bridge
   data:
     driver: bridge
-    # internal: true removed 2026-08-19 — Docker's isolation chain for it
-    # (DOCKER-INTERNAL) applied its DROP rules unscoped to any bridge
-    # interface, so it was blocking all new inter-container connections on
-    # the separate edge network too (traefik -> authentik-server forward-
-    # auth timing out, 500s on every dashboard request). No member
-    # currently needs internet egress (error reporting/update checks
-    # disabled, no SMTP configured — see .env.example) and nothing on this
-    # network publishes a host port, so removing the flag doesn't expose
-    # anything new — it only stops Docker from blocking egress no one uses.
+    internal: true
+    # internal: true restored 2026-08-19, after re-verifying on this host
+    # (Docker 29.7.2 / Debian 12 bookworm, kernel 7.0.2-6-pve) that the
+    # DOCKER-INTERNAL chain no longer applies its DROP rules unscoped to
+    # other bridges: with the flag re-enabled, `curl --resolve
+    # dashboard.home:443:127.0.0.1 https://dashboard.home/` still returned
+    # 302 (edge -> traefik -> authentik-server forward-auth unaffected) and
+    # `docker compose exec postgres wget -qO- --timeout=3 https://1.1.1.1`
+    # timed out (data's egress is actually blocked again). Earlier the same
+    # day, on this same host/version, the flag caused the DOCKER-INTERNAL
+    # chain's DROP rules to also apply to the edge network, breaking that
+    # forward-auth path — see git history on this file for the prior
+    # incident and the temporary removal. If this ever regresses again,
+    # suspect a Docker/iptables change and re-run both checks above before
+    # re-adding the flag.
+    #
+    # KNOWN GAP: this only blocks egress for members that are data-only
+    # (postgres, authentik-redis, authentik-worker, pdm — confirmed above
+    # and, separately, for authentik-worker directly). authentik-server is
+    # dual-homed on [edge, data], and `edge` has no internal: true of its
+    # own, so authentik-server still has full internet egress via its edge
+    # interface regardless of this flag (confirmed live: a Python socket
+    # connect from inside authentik-server to 1.1.1.1:443 succeeds).
+    # Closing that would need either host-level egress filtering (item 1's
+    # Proxmox firewall, or an OUTPUT-chain rule on this CT) as a
+    # compensating control, or splitting authentik-server's edge-facing
+    # surface from its data-facing surface — neither is in scope of this
+    # network-flag change alone.
 
 volumes:
   pg_data:
