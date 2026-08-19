@@ -79,7 +79,7 @@ function EvidenceChart({ event, points }) {
             {chart.threshY != null && (
               <>
                 <line x1="8" x2="412" y1={chart.threshY} y2={chart.threshY} stroke="#B3282D" strokeWidth="1" strokeDasharray="4 3" opacity="0.7" />
-                <text x="410" y={chart.threshY - 4} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 9, fontWeight: 600, fill: '#B3282D' }}>
+                <text x="410" y={chart.threshY - 4} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 9, fontWeight: 600, fill: '#B3282D' }}>
                   alarm limit {chart.threshVal}
                 </text>
               </>
@@ -88,7 +88,7 @@ function EvidenceChart({ event, points }) {
             <path d={chart.linePath} stroke="#1F3A6E" strokeWidth="2" fill="none" strokeLinejoin="round" />
             <line x1={chart.mark[0]} x2={chart.mark[0]} y1="8" y2="112" stroke="#B3282D" strokeWidth="1.2" strokeDasharray="3 3" />
             <circle cx={chart.mark[0]} cy={chart.mark[1]} r="4" fill="#B3282D" stroke="#ffffff" strokeWidth="1.8" />
-            <text x={chart.mark[0]} y="124" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 9, fontWeight: 600, fill: '#B3282D' }}>detection</text>
+            <text x={chart.mark[0]} y="124" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 9, fontWeight: 600, fill: '#B3282D' }}>detection</text>
           </svg>
         )}
       </div>
@@ -244,7 +244,7 @@ export default function ReviewDrawer({ event, points, reviewer, onClose, onRevie
 
           <div style={{ borderTop: '1px solid #eef2f5', paddingTop: 16 }}>
             <h3 style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8a99a8', marginBottom: 12 }}>Engineer review</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}>
                 <span>Fault type <span style={{ color: '#B3282D' }} aria-hidden="true">*</span><span className="sr-only">(required)</span></span>
                 <select required value={form.faultType} onChange={setField('faultType')} style={{ border: '1px solid #d3dbe2', borderRadius: 6, padding: '8px 10px', fontSize: 13, background: '#ffffff', color: '#1a2530' }}>

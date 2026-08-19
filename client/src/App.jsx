@@ -87,7 +87,7 @@ export default function App() {
           />
         )}
         {page === 'reports' && (
-          <ReportsPage live={live} queue={queue} audit={audit} showToast={showToast} />
+          <ReportsPage queue={queue} audit={audit} showToast={showToast} />
         )}
       </main>
       <Toast toast={toast} />

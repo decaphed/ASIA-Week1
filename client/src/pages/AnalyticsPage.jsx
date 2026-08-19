@@ -3,7 +3,7 @@ import Card, { CardLabel, buttonReset } from '../components/Card.jsx';
 import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
 import { METRICS, METRIC_BY_KEY, SC, THRESHOLDS, statusOf, fmt } from '../utils/constants.js';
-import { pts, line, area, range } from '../utils/geometry.js';
+import { ptsByTime, line, area, range } from '../utils/geometry.js';
 
 const RANGES = [
   { id: '1h', label: 'Last hour' },
@@ -11,6 +11,11 @@ const RANGES = [
   { id: '24h', label: 'Last 24 hours' },
   { id: '7d', label: 'Last 7 days' },
 ];
+
+// Matches the backend's SERIES_RANGES window (summaryService.js) — anchors
+// the chart's time axis to the actual requested window, not to whatever
+// span the returned points happen to cover.
+const RANGE_MS = { '1h': 3600e3, '8h': 8 * 3600e3, '24h': 24 * 3600e3, '7d': 7 * 86400e3 };
 
 const X0 = 52;
 const W = 834;
@@ -76,28 +81,33 @@ function AnalyticsPage() {
   const chip = trendChip(trend, metricKey);
 
   const chart = useMemo(() => {
-    const values = points.map((p) => p[metricKey]).filter((v) => v != null);
-    if (values.length < 2) return null;
+    const rows = points.filter((p) => p[metricKey] != null);
+    if (rows.length < 2) return null;
+    const values = rows.map((p) => p[metricKey]);
+    const times = rows.map((p) => Date.parse(p.t));
     const th = THRESHOLDS[metricKey];
     let [mn, mx] = range(values, 0.15);
     if (th?.alarmHigh != null && th.alarmHigh > mn && th.alarmHigh < mx * 1.3) {
       mx = Math.max(mx, th.alarmHigh * 1.04);
     }
-    const p = pts(values, X0, Y0, W, H, mn, mx);
+    // Anchor to the actual requested window (now − rangeMs .. now), not to
+    // the span the returned points happen to cover — a gap in ingestion
+    // (or simply a young dataset) must show as empty space, not stretch the
+    // real readings across the full width and imply they span the window.
+    const tMax = Math.max(Date.now(), times[times.length - 1]);
+    const tMin = tMax - RANGE_MS[rangeId];
+    const p = ptsByTime(values, times, X0, Y0, W, H, mn, mx, tMin, tMax);
     const grid = [0, 1, 2, 3, 4].map((i) => {
       const y = Y0 + H - (i * H) / 4;
       return { y, label: fmt(mn + ((mx - mn) * i) / 4, metric.dec) };
     });
     const xTicks = [0, 1, 2, 3, 4, 5, 6].map((i) => {
-      const idx = Math.min(points.length - 1, Math.round((i * (points.length - 1)) / 6));
-      const t = points[idx]?.t;
-      const d = t ? new Date(t) : null;
-      const label = !d || Number.isNaN(d.getTime())
-        ? ''
-        : rangeId === '7d'
-          ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-          : d.toTimeString().slice(0, 5);
-      return { x: X0 + (i * W) / 6, label };
+      const frac = i / 6;
+      const d = new Date(tMin + frac * (tMax - tMin));
+      const label = rangeId === '7d'
+        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : d.toTimeString().slice(0, 5);
+      return { x: X0 + frac * W, label };
     });
     const hasThresh = th?.alarmHigh != null && th.alarmHigh <= mx && th.alarmHigh >= mn;
     const threshY = hasThresh ? Y0 + H - ((th.alarmHigh - mn) / (mx - mn)) * H : null;
@@ -247,17 +257,17 @@ function AnalyticsPage() {
             {chart.grid.map((g, i) => (
               <g key={i}>
                 <line x1={X0} x2={886} y1={g.y} y2={g.y} stroke="#eef2f5" strokeWidth="1" />
-                <text x="44" y={g.y + 3.5} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{g.label}</text>
+                <text x="44" y={g.y + 3.5} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{g.label}</text>
               </g>
             ))}
             {chart.xTicks.map((x, i) => (
-              <text key={i} x={x.x} y="290" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{x.label}</text>
+              <text key={i} x={x.x} y="290" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{x.label}</text>
             ))}
             {chart.hasThresh && (
               <g>
                 <rect x={X0} y={Y0} width={W} height={Math.max(0, chart.threshY - Y0)} fill="rgba(179,40,45,0.05)" />
                 <line x1={X0} x2={886} y1={chart.threshY} y2={chart.threshY} stroke="#B3282D" strokeWidth="1.2" strokeDasharray="5 4" opacity="0.7" />
-                <text x="58" y={chart.threshY - 6} textAnchor="start" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fontWeight: 600, fill: '#B3282D' }}>
+                <text x="58" y={chart.threshY - 6} textAnchor="start" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fontWeight: 600, fill: '#B3282D' }}>
                   Alarm limit: {chart.threshVal}. Readings in the red zone trigger an alarm.
                 </text>
               </g>
@@ -270,7 +280,7 @@ function AnalyticsPage() {
       </Card>
 
       {summaryHead && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 20 }}>
           {[
             { k: 'Availability', v: summaryHead.availabilityPct == null ? '—' : `${fmt(summaryHead.availabilityPct, 1)} %`, sub: `over the last ${summaryRange === '7d' ? '7 days' : '24 hours'}` },
             { k: 'Run time', v: summaryHead.runHours == null ? '—' : `${fmt(summaryHead.runHours, 2)} h`, sub: 'pump in RUNNING state' },
@@ -286,15 +296,15 @@ function AnalyticsPage() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 20 }}>
         <Card>
           <CardLabel style={{ marginBottom: 6 }}>24-hour rollup · all metrics</CardLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.8fr 0.8fr 0.8fr 1.3fr', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.3fr)', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
             <span>Metric</span><span style={{ textAlign: 'right' }}>Min</span><span style={{ textAlign: 'right' }}>Avg</span><span style={{ textAlign: 'right' }}>Max</span><span style={{ textAlign: 'right' }}>Trend</span>
           </div>
           {roll24.length === 0 && <div style={{ padding: '20px 0', color: '#8a99a8', fontSize: 12.5 }}>No summary available yet.</div>}
           {roll24.map((r) => (
-            <div key={r.key} style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.8fr 0.8fr 0.8fr 1.3fr', fontSize: 13, padding: '9px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+            <div key={r.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.3fr)', fontSize: 13, padding: '9px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
               <span style={{ fontWeight: 500, color: '#33475a' }}>{r.label} <span style={{ color: '#a7b3bf', fontSize: 11 }}>{r.unit}</span></span>
               <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#5f6f7e' }}>{r.min}</span>
               <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.avg}</span>
@@ -306,12 +316,12 @@ function AnalyticsPage() {
 
         <Card>
           <CardLabel style={{ marginBottom: 6 }}>7-day rollup · all metrics</CardLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
             <span>Metric</span><span style={{ textAlign: 'right' }}>Min</span><span style={{ textAlign: 'right' }}>Avg</span><span style={{ textAlign: 'right' }}>Max</span>
           </div>
           {roll7.length === 0 && <div style={{ padding: '20px 0', color: '#8a99a8', fontSize: 12.5 }}>No summary available yet.</div>}
           {roll7.map((r) => (
-            <div key={r.key} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr', fontSize: 13, padding: '9px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+            <div key={r.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', fontSize: 13, padding: '9px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
               <span style={{ fontWeight: 500, color: '#33475a' }}>{r.label} <span style={{ color: '#a7b3bf', fontSize: 11 }}>{r.unit}</span></span>
               <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#5f6f7e' }}>{r.min}</span>
               <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{r.avg}</span>

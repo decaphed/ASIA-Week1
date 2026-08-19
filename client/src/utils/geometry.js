@@ -11,6 +11,19 @@ export function pts(arr, x0, y0, w, h, min, max) {
   return arr.map((v, i) => [x0 + i * (w / (n - 1)), y0 + h - ((v - min) / sp) * h]);
 }
 
+/**
+ * Map an array of readings onto [x0,y0,w,h], positioning each point by its
+ * actual elapsed time within [tMin,tMax] rather than by array index — so a
+ * gap in the underlying data (e.g. an ingestion outage) reads as a gap in
+ * the chart instead of being silently stretched to fill the full width,
+ * which would misrepresent when the plotted window actually has data.
+ */
+export function ptsByTime(values, times, x0, y0, w, h, min, max, tMin, tMax) {
+  const sp = max - min || 1;
+  const tsp = tMax - tMin || 1;
+  return values.map((v, i) => [x0 + ((times[i] - tMin) / tsp) * w, y0 + h - ((v - min) / sp) * h]);
+}
+
 export function line(points) {
   if (!points.length) return '';
   return 'M' + points.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L');

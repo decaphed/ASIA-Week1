@@ -28,7 +28,7 @@ function Tag({ x, y, prefix, num, status, label, labelX, labelY, labelAnchor, va
         // without relying on hue.
         <>
           <circle cx={x + 13} cy={y - 13} r="7" fill={sc.c} stroke="#ffffff" strokeWidth="1.4" />
-          <text x={x + 13} y={y - 9.6} textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 9.5, fontWeight: 700, fill: '#ffffff' }}>{glyph}</text>
+          <text x={x + 13} y={y - 9.6} textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 9.5, fontWeight: 700, fill: '#ffffff' }}>{glyph}</text>
         </>
       )}
       <text x={labelX} y={labelY} textAnchor={labelAnchor || 'middle'} style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, fontWeight: 600, fill: sc.c }}>{value}</text>
@@ -63,8 +63,8 @@ export default function ProcessSchematic({ reading, statuses, stale }) {
         <rect x="30" y="82" width="112" height="92" rx="8" fill="#fbfcfd" stroke="#8a99a8" strokeWidth="1.6" />
         <rect x="34" y="118" width="104" height="52" rx="5" fill="url(#tankw)" />
         <path d="M34 118 Q46 113 58 118 T82 118 T106 118 T130 118 T138 118" stroke="#a9c3d8" strokeWidth="1.5" fill="none" />
-        <text x="86" y="104" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 11.5, fontWeight: 600, fill: '#33475a' }}>T-01</text>
-        <text x="86" y="190" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fill: '#8a99a8' }}>Supply Tank</text>
+        <text x="86" y="104" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 11.5, fontWeight: 600, fill: '#33475a' }}>T-01</text>
+        <text x="86" y="190" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fill: '#8a99a8' }}>Supply Tank</text>
 
         {/* Pipework + animated flow */}
         <path d="M142 138 L468 138" stroke="#aebdc9" strokeWidth="6" strokeLinecap="round" />
@@ -87,14 +87,14 @@ export default function ProcessSchematic({ reading, statuses, stale }) {
           <path d="M500 138 L500 113 M500 138 L521.6 150.5 M500 138 L478.4 150.5" stroke="#1F3A6E" strokeWidth="2.4" strokeLinecap="round" />
         </g>
         <circle cx="500" cy="138" r="4.5" fill="#1F3A6E" />
-        <text x="500" y="192" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 11.5, fontWeight: 600, fill: '#33475a' }}>P-101</text>
+        <text x="500" y="192" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 11.5, fontWeight: 600, fill: '#33475a' }}>P-101</text>
         <text x="500" y="207" textAnchor="middle" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, fill: '#8a99a8' }}>
           {fmt(reading?.rpm, 0)} rpm
         </text>
 
         {/* Motor */}
         <rect x="546" y="70" width="48" height="36" rx="6" fill="#f6f8fa" stroke="#5f6f7e" strokeWidth="1.6" />
-        <text x="570" y="93" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 13, fontWeight: 600, fill: '#33475a' }}>M</text>
+        <text x="570" y="93" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 13, fontWeight: 600, fill: '#33475a' }}>M</text>
         <path d="M532 138 L570 138 L570 106" stroke="#5f6f7e" strokeWidth="1.6" fill="none" />
 
         {/* Check valve CV-102 + outlet */}
@@ -102,7 +102,7 @@ export default function ProcessSchematic({ reading, statuses, stale }) {
         <path d="M722 126 L722 150" stroke="#5f6f7e" strokeWidth="1.6" />
         <text x="711" y="168" textAnchor="middle" style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9.5, fill: '#5f6f7e' }}>CV-102</text>
         <path d="M956 130 L972 138 L956 146 Z" fill="#9fb0bf" />
-        <text x="964" y="118" textAnchor="end" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10.5, fill: '#8a99a8' }}>To process header</text>
+        <text x="964" y="118" textAnchor="end" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10.5, fill: '#8a99a8' }}>To process header</text>
 
         {/* Instrument leads */}
         <path d="M220 132 L220 82" stroke="#c9d2dc" strokeWidth="1.2" strokeDasharray="3 3" />

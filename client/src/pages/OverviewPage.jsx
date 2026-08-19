@@ -44,12 +44,12 @@ function HealthGauge({ health, statuses, unknown }) {
               <circle cx={dot[0].toFixed(1)} cy={dot[1].toFixed(1)} r="8" fill="#ffffff" stroke={color.c} strokeWidth="3.5" />
             </>
           )}
-          <text x="115" y="106" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 44, fontWeight: 600, fill: unknown ? '#8a99a8' : '#1a2530', fontVariantNumeric: 'tabular-nums' }}>
+          <text x="115" y="106" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 44, fontWeight: 600, fill: unknown ? '#8a99a8' : '#1a2530', fontVariantNumeric: 'tabular-nums' }}>
             {unknown ? '—' : health}
           </text>
-          <text x="115" y="126" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 12, fill: '#8a99a8' }}>/ 100</text>
-          <text x="28" y="152" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fill: '#a7b3bf' }}>0</text>
-          <text x="202" y="152" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fill: '#a7b3bf' }}>100</text>
+          <text x="115" y="126" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 12, fill: '#8a99a8' }}>/ 100</text>
+          <text x="28" y="152" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fill: '#a7b3bf' }}>0</text>
+          <text x="202" y="152" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fill: '#a7b3bf' }}>100</text>
         </svg>
       </div>
       <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
@@ -282,12 +282,12 @@ export default function OverviewPage({ live, queue, goReview }) {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr 300px', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr) 300px', gap: 20 }}>
         <HealthGauge health={health} statuses={statuses} unknown={stale} />
         <AlarmsPanel reading={reading} statuses={statuses} alarmStarts={alarmStarts} stale={stale} />
         <QueueCard queue={queue} goReview={goReview} />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
         {METRICS.map((m) => (
           <MetricCard key={m.key} metric={m} buffer={buffers[m.key]} reading={reading} stale={stale} />
         ))}

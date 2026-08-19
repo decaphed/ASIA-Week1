@@ -144,7 +144,7 @@ function ExportCard({ showToast }) {
   return (
     <Card style={{ padding: '20px 22px' }}>
       <CardLabel>Historical data export</CardLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, marginTop: 14 }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}>
           Range
           <select value={rangeId} onChange={(e) => setRangeId(e.target.value)} style={{ border: '1px solid #d3dbe2', borderRadius: 6, padding: '8px 10px', fontSize: 13, background: '#ffffff', color: '#1a2530' }}>
@@ -197,89 +197,6 @@ function ExportCard({ showToast }) {
   );
 }
 
-function ManualReadingCard({ latest, showToast, onRecorded }) {
-  const [metricKey, setMetricKey] = useState('vibration');
-  const [value, setValue] = useState('');
-  const [observedAt, setObservedAt] = useState(() => new Date().toISOString().slice(0, 16));
-  const [busy, setBusy] = useState(false);
-
-  const metric = METRIC_BY_KEY[metricKey];
-
-  async function submit() {
-    const numeric = Number(value);
-    if (value === '' || Number.isNaN(numeric)) {
-      showToast('Enter a numeric value for the reading', '#e0b880');
-      return;
-    }
-    if (!latest) {
-      showToast('No live reading yet to base a manual entry on', '#e0b880');
-      return;
-    }
-    setBusy(true);
-    try {
-      // POST /api/data validates all six numeric channels, so the untouched
-      // ones carry over from the newest live reading and only the selected
-      // channel takes the hand-recorded value.
-      const body = {
-        flowRate: latest.flowRate,
-        rpm: latest.rpm,
-        vibration: latest.vibration,
-        suctionPressure: latest.suctionPressure,
-        dischargePressure: latest.dischargePressure,
-        motorTemp: latest.motorTemp,
-        status: latest.status || 'RUNNING',
-        timestamp: new Date(observedAt).toISOString(),
-        [metricKey]: numeric,
-      };
-      await api.postReading(body);
-      showToast(`Manual reading recorded: ${metric.label} = ${numeric} ${metric.unit}`);
-      onRecorded({ metricKey, value: numeric, at: body.timestamp });
-      setValue('');
-    } catch (err) {
-      const detail = Array.isArray(err.details) ? ` (${err.details.join('; ')})` : '';
-      showToast(`Could not record reading: ${err.message}${detail}`, '#e08a80');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Card style={{ padding: '20px 22px' }}>
-      <CardLabel>Manual test reading</CardLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.2fr', gap: 12, marginTop: 14 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}>
-          Channel
-          <select value={metricKey} onChange={(e) => setMetricKey(e.target.value)} style={{ border: '1px solid #d3dbe2', borderRadius: 6, padding: '8px 10px', fontSize: 13, background: '#ffffff', color: '#1a2530' }}>
-            {METRICS.map((m) => <option key={m.key} value={m.key}>{m.label} ({m.unit})</option>)}
-          </select>
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}>
-          Value
-          <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="0.00" inputMode="decimal" style={{ border: '1px solid #d3dbe2', borderRadius: 6, padding: '8px 10px', fontSize: 13, fontVariantNumeric: 'tabular-nums', color: '#1a2530' }} />
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#5f6f7e' }}>
-          Observed at
-          <input type="datetime-local" value={observedAt} onChange={(e) => setObservedAt(e.target.value)} style={{ border: '1px solid #d3dbe2', borderRadius: 6, padding: '7px 10px', fontSize: 12.5, color: '#1a2530' }} />
-        </label>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-        <button
-          type="button"
-          className="hover-dark"
-          onClick={submit}
-          disabled={busy}
-          style={{ background: '#33475a', color: '#ffffff', border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 }}
-        >
-          {busy ? 'Recording…' : 'Add reading'}
-        </button>
-      </div>
-      <div style={{ fontSize: 11.5, color: '#8a99a8', marginTop: 12 }}>
-        The five channels you do not edit carry over from the newest live reading, since the ingestion endpoint stores a complete sample.
-      </div>
-    </Card>
-  );
-}
-
 function AuditTrail({ audit }) {
   const rows = [...audit].sort(
     (a, b) => (Date.parse(b.reviewedAt || b.detectedAt) || 0) - (Date.parse(a.reviewedAt || a.detectedAt) || 0)
@@ -300,14 +217,14 @@ function AuditTrail({ audit }) {
           </span>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '90px 175px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', marginTop: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '90px 175px minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) 130px 120px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', marginTop: 8 }}>
         <span>Event</span><span>Outcome</span><span>Fault type</span><span>Root cause</span><span>Resolution</span><span>Reviewed by</span><span>Reviewed at</span>
       </div>
       {rows.length === 0 && <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>No reviews recorded yet.</div>}
       {rows.map((a) => {
         const pill = pillFor(a.status);
         return (
-          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '90px 175px 1.2fr 1.4fr 1.4fr 130px 120px', fontSize: 13, padding: '12px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '90px 175px minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) 130px 120px', fontSize: 13, padding: '12px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
             <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: '#33475a' }}>{eventId(a)}</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>
@@ -339,10 +256,10 @@ function AuditTrail({ audit }) {
 // ─────────────────────────────────────────────────────────────────────────
 // System event log — the design shows one unified feed. The backend has no
 // dedicated event-log endpoint, so the feed is composed from what the
-// services do publish: fault-event detections and reviews, drift-service
-// structural breaks, and manual entries recorded during this session.
+// services do publish: fault-event detections and reviews, and
+// drift-service structural breaks.
 // ─────────────────────────────────────────────────────────────────────────
-function useEventLog(queue, audit, drift, manualEntries) {
+function useEventLog(queue, audit, drift) {
   return useMemo(() => {
     const events = [];
 
@@ -380,47 +297,26 @@ function useEventLog(queue, audit, drift, manualEntries) {
       });
     }
 
-    for (const m of manualEntries) {
-      const metric = METRIC_BY_KEY[m.metricKey];
-      events.push({
-        id: `man-${m.at}-${m.metricKey}`,
-        at: m.at,
-        type: 'MANUAL',
-        bg: '#eef1f4',
-        color: '#5f6f7e',
-        msg: `Hand-recorded ${metric.label} of ${m.value} ${metric.unit} submitted to ingestion`,
-      });
-    }
-
     return events.sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0)).slice(0, 20);
-  }, [queue, audit, drift, manualEntries]);
+  }, [queue, audit, drift]);
 }
 
-export default function ReportsPage({ live, queue, audit, showToast }) {
-  const [manualEntries, setManualEntries] = useState([]);
+export default function ReportsPage({ queue, audit, showToast }) {
   const { data: driftRes } = usePolling(() => api.drift(), 60000, []);
   const { data: statsRes } = usePolling(() => api.stats(), 30000, []);
 
-  const events = useEventLog(queue, audit, driftRes?.data, manualEntries);
+  const events = useEventLog(queue, audit, driftRes?.data);
   const stats = statsRes?.data;
 
   return (
     <div style={{ padding: '26px 32px 44px', display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeUp .3s ease' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
-        <ExportCard showToast={showToast} />
-        <ManualReadingCard
-          latest={live.latest}
-          showToast={showToast}
-          onRecorded={(entry) => setManualEntries((prev) => [entry, ...prev].slice(0, 10))}
-        />
-      </div>
+      <ExportCard showToast={showToast} />
 
       {stats && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
           {[
             { k: 'Stored readings', v: fmt(stats.totalRecords, 0), sub: 'rows in raw telemetry' },
             { k: 'Newest reading', v: stats.latestTimestamp ? new Date(stats.latestTimestamp).toTimeString().slice(0, 8) : '—', sub: 'ingestion timestamp' },
-            { k: 'Mean vibration', v: `${fmt(stats.averageVibration, 2)} mm/s`, sub: 'across all stored rows' },
             { k: 'API latency', v: stats.apiLatencyMs == null ? '—' : `${fmt(stats.apiLatencyMs, 0)} ms`, sub: 'last request round trip' },
           ].map((s) => (
             <Card key={s.k} style={{ padding: '16px 18px' }}>

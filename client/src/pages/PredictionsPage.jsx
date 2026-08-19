@@ -51,6 +51,13 @@ function crossingIndex(median, alarmHigh) {
   return median.findIndex((v) => v >= alarmHigh);
 }
 
+// "+30 min" / "+1 h" — the forecast horizon is HORIZON_STEPS * STEP_HOURS,
+// currently 1 hour, so axis labels must be derived from that rather than
+// hardcoded, or a future horizon change would silently mislabel the chart.
+function forecastLabel(minutes) {
+  return minutes < 60 ? `+${Math.round(minutes)} min` : `+${(minutes / 60).toFixed(minutes % 60 === 0 ? 0 : 1)} h`;
+}
+
 function Tabs({ tab, setTab, pendingCount }) {
   const item = (id, label, badge) => {
     const active = tab === id;
@@ -133,8 +140,8 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
         { x: X0 + 60, label: `−${spanHours.toFixed(0)} h` },
         { x: X0 + histW * 0.55, label: `−${(spanHours / 2).toFixed(0)} h` },
         { x: X0 + histW, label: 'now' },
-        { x: X0 + histW + (FW - histW) * 0.5, label: '+2 h' },
-        { x: X0 + FW - 20, label: '+4 h' },
+        { x: X0 + histW + (FW - histW) * 0.5, label: forecastLabel(forecastMinutes / 2) },
+        { x: X0 + FW - 20, label: forecastLabel(forecastMinutes) },
       ],
       hasThresh,
       threshY: hasThresh ? Y0 + FH - ((th.alarmHigh - mn) / (mx - mn)) * FH : null,
@@ -231,7 +238,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 20, alignItems: 'start' }}>
         <Card style={{ padding: '22px 24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
@@ -256,24 +263,24 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
               {hero.grid.map((g, i) => (
                 <g key={i}>
                   <line x1={X0} x2={886} y1={g.y} y2={g.y} stroke="#eef2f5" strokeWidth="1" />
-                  <text x="44" y={g.y + 3.5} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{g.label}</text>
+                  <text x="44" y={g.y + 3.5} textAnchor="end" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10.5, fill: '#8a99a8', fontVariantNumeric: 'tabular-nums' }}>{g.label}</text>
                 </g>
               ))}
               {hero.xTicks.map((x, i) => (
-                <text key={i} x={x.x} y="290" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10.5, fill: '#8a99a8' }}>{x.label}</text>
+                <text key={i} x={x.x} y="290" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10.5, fill: '#8a99a8' }}>{x.label}</text>
               ))}
               {hero.hasThresh && (
                 <g>
                   <rect x={X0} y={Y0} width={FW} height={Math.max(0, hero.threshY - Y0)} fill="rgba(179,40,45,0.05)" />
                   <line x1={X0} x2={886} y1={hero.threshY} y2={hero.threshY} stroke="#B3282D" strokeWidth="1.2" strokeDasharray="5 4" opacity="0.7" />
-                  <text x="58" y={hero.threshY - 6} textAnchor="start" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fontWeight: 600, fill: '#B3282D' }}>
+                  <text x="58" y={hero.threshY - 6} textAnchor="start" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fontWeight: 600, fill: '#B3282D' }}>
                     Alarm limit · {fmt(th.alarmHigh, metric.dec)} {metric.unit}
                   </text>
                 </g>
               )}
               <path d={hero.band} fill="rgba(31,58,110,0.12)" />
               <line x1={hero.nowX} x2={hero.nowX} y1="20" y2="272" stroke="#c9d2dc" strokeWidth="1.2" strokeDasharray="3 3" />
-              <text x={hero.nowX} y="14" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans'", fontSize: 10, fontWeight: 600, fill: '#8a99a8' }}>NOW</text>
+              <text x={hero.nowX} y="14" textAnchor="middle" style={{ fontFamily: "'IBM Plex Sans',sans-serif", fontSize: 10, fontWeight: 600, fill: '#8a99a8' }}>NOW</text>
               <path d={hero.histPath} stroke="#1F3A6E" strokeWidth="2.2" fill="none" strokeLinejoin="round" />
               <path d={hero.medPath} stroke="#4A6B8A" strokeWidth="2.2" fill="none" strokeDasharray="6 5" strokeLinejoin="round" />
               {hero.crosses && hero.crossPoint && (
@@ -315,7 +322,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
           <CardLabel>1-hour outlook · all channels</CardLabel>
           <div style={{ fontSize: 11.5, color: '#8a99a8' }}>shaded = likely range · dashed = expected path</div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14 }}>
           {outlook.map((o) => (
             <button
               key={o.key}
@@ -347,7 +354,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
                 )}
               </svg>
               <div aria-hidden="true" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#8a99a8', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
-                <span>now {o.now}</span><span>+4 h {o.proj} {o.unit}</span>
+                <span>now {o.now}</span><span>{forecastLabel(HORIZON_STEPS * STEP_HOURS * 60)} {o.proj} {o.unit}</span>
               </div>
             </button>
           ))}
@@ -417,14 +424,14 @@ function DetectTab({ queue, audit, stats }) {
   const confirmRate = reviewed ? Math.round((100 * confirmed) / reviewed) : null;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20, alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)', gap: 20, alignItems: 'start' }}>
       <Card>
         <CardLabel>Detection model</CardLabel>
         <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, marginTop: 10 }}>Automated fault detection</h3>
         <div style={{ fontSize: 12.5, color: '#5f6f7e', lineHeight: 1.55, marginTop: 6 }}>
           Watches vibration, temperature and pressure for abnormal behavior. Every detection waits for engineer review before it enters the record.
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 16 }}>
           {[
             { v: all.length, label: 'detections', color: '#1a2530' },
             { v: confirmed, label: 'confirmed', color: '#177E4D' },
@@ -471,7 +478,7 @@ function DetectTab({ queue, audit, stats }) {
           </a>
         </div>
         <FilterBar filters={filters} setFilters={setFilters} resultCount={filtered.length} totalCount={all.length} />
-        <div style={{ display: 'grid', gridTemplateColumns: '96px 1.8fr 1fr 130px 130px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '96px minmax(0, 1.8fr) minmax(0, 1fr) 130px 130px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '8px 2px', borderBottom: '1px solid #eef2f5' }}>
           <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Status</span>
         </div>
         {all.length === 0 && <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>No detections recorded yet.</div>}
@@ -481,7 +488,7 @@ function DetectTab({ queue, audit, stats }) {
         {filtered.map((d) => {
           const pill = pillFor(d.status);
           return (
-            <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '96px 1.8fr 1fr 130px 130px', fontSize: 13, padding: '11px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+            <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '96px minmax(0, 1.8fr) minmax(0, 1fr) 130px 130px', fontSize: 13, padding: '11px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
               <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: '#33475a' }}>{eventId(d)}</span>
               <span style={{ fontWeight: 500, paddingRight: 10 }}>
                 {d.status === 'PENDING_REVIEW' ? eventTitle(d) : (d.rootCause || eventTitle(d))}
@@ -578,7 +585,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
         </div>
       </div>
       <FilterBar filters={filters} setFilters={setFilters} resultCount={sorted.length} totalCount={queue.length} />
-      <div style={{ display: 'grid', gridTemplateColumns: '28px 96px 1.9fr 1fr 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', alignItems: 'center' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '28px 96px minmax(0, 1.9fr) minmax(0, 1fr) 120px 100px 190px', fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#8a99a8', padding: '10px 2px', borderBottom: '1px solid #eef2f5', alignItems: 'center' }}>
         <input
           ref={selectAllRef}
           type="checkbox"
@@ -594,7 +601,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
         const sp = sevPill(sev);
         const dismissing = dismissingIds.has(q.id);
         return (
-          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '28px 96px 1.9fr 1fr 120px 100px 190px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
+          <div key={q.id} className="hover-row" style={{ display: 'grid', gridTemplateColumns: '28px 96px minmax(0, 1.9fr) minmax(0, 1fr) 120px 100px 190px', fontSize: 13.5, padding: '14px 2px', borderBottom: '1px solid #f4f7f9', alignItems: 'center' }}>
             <input
               type="checkbox"
               checked={selected.has(q.id)}
