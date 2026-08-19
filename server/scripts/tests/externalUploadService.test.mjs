@@ -64,7 +64,7 @@ beforeEach(() => {
   checkClassBalanceThrows = null;
 
   mock.module('../../models/externalUploadModel.js', {
-    exports: {
+    namedExports: {
       getUploadById: async () => uploadRow,
       finalizeUpload: async (id, fields) => { finalizeCalls.push({ id, fields }); },
       insertUpload: async () => ({ id: 1 }),
@@ -74,7 +74,7 @@ beforeEach(() => {
   });
 
   mock.module('../../models/corpusModel.js', {
-    exports: {
+    namedExports: {
       upsertRow: async (record) => { upsertCalls.push(record); return { id: upsertCalls.length }; },
       getClassBalance: async () => [],
       deleteByBuffer: async () => {},
@@ -85,7 +85,7 @@ beforeEach(() => {
   });
 
   mock.module('../../services/corpusMaterializationService.js', {
-    exports: {
+    namedExports: {
       alignedWindowEndsInRange: (startMs, endMs) => {
         const WINDOW_MS = 60_000;
         const first = Math.ceil(startMs / WINDOW_MS) * WINDOW_MS;
