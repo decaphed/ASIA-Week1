@@ -303,10 +303,15 @@ networks:
     driver: bridge
   data:
     driver: bridge
-    # No member currently needs internet egress (error reporting/update
-    # checks disabled, no SMTP configured — see .env.example). Revisit if
-    # that changes (e.g. authentik SMTP added).
-    internal: true
+    # internal: true removed 2026-08-19 — Docker's isolation chain for it
+    # (DOCKER-INTERNAL) applied its DROP rules unscoped to any bridge
+    # interface, so it was blocking all new inter-container connections on
+    # the separate edge network too (traefik -> authentik-server forward-
+    # auth timing out, 500s on every dashboard request). No member
+    # currently needs internet egress (error reporting/update checks
+    # disabled, no SMTP configured — see .env.example) and nothing on this
+    # network publishes a host port, so removing the flag doesn't expose
+    # anything new — it only stops Docker from blocking egress no one uses.
 
 volumes:
   pg_data:
