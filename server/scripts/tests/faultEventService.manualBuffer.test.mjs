@@ -102,7 +102,7 @@ beforeEach(() => {
   insertedFaultEventRow = null;
 
   mock.module('../../models/faultEventModel.js', {
-    exports: {
+    namedExports: {
       findOverlappingFaultEvents: async () => overlapResult,
       insertFaultEvent: async (record) => {
         insertedRecords.push(record);
@@ -115,7 +115,7 @@ beforeEach(() => {
   });
 
   mock.module('../../models/processedModel.js', {
-    exports: {
+    namedExports: {
       getProcessedByWindowEnd: async () => processedByWindowEndResult,
       // Not exercised by these tests, but forecastModel.js (pulled in
       // transitively via faultEventService.js's `import { METRICS } from
@@ -127,7 +127,7 @@ beforeEach(() => {
   });
 
   mock.module('../../models/sensorModel.js', {
-    exports: {
+    namedExports: {
       getCountInRange: async () => countInRangeResult,
       getRangeChronological: async () => rangeChronologicalResult,
       getLastBefore: async () => lastBeforeResult,
@@ -139,7 +139,7 @@ beforeEach(() => {
   // re-fire forecast/drift/trend for a historical backfill), this mock has
   // no such export and the call throws, failing the test loudly.
   mock.module('../../services/processedService.js', {
-    exports: {
+    namedExports: {
       saveProcessedReading: async (data) => {
         const row = { id: 999, ...data };
         saveProcessedReadingCalls.push(data);

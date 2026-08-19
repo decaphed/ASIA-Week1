@@ -36,17 +36,24 @@ function fileFilter(_req, file, cb) {
   // before any bytes are parsed. Real content validation (RFC4180
   // structure, a real time axis, etc.) happens in Stage A, on the actual
   // parsed content, not the file's stated type.
+  //
+  // Every rejection here carries .status = 400 explicitly — a plain Error
+  // (or an un-annotated MulterError) falls through to the shared error
+  // handler's `err.status || 500` default, surfacing a wrong file type as
+  // a 500 rather than the 400 it actually is (found live: a .png upload
+  // returned 500, not 400 — the server logged correctly and stayed
+  // healthy, but the response code was misleading).
   const ext = path.extname(file.originalname).toLowerCase();
   if (ext !== '.csv') {
-    return cb(new Error('only .csv files are accepted'));
+    return cb(Object.assign(new Error('only .csv files are accepted'), { status: 400 }));
   }
   if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
-    return cb(new Error(`unsupported content type: ${file.mimetype}`));
+    return cb(Object.assign(new Error(`unsupported content type: ${file.mimetype}`), { status: 400 }));
   }
   return cb(null, true);
 }
 
-export const uploadCsv = multer({
+const uploadCsvMulter = multer({
   storage,
   fileFilter,
   limits: {
@@ -54,3 +61,22 @@ export const uploadCsv = multer({
     files: 1,
   },
 });
+
+/**
+ * Wraps multer's own single-file middleware to tag ITS errors (e.g.
+ * LIMIT_FILE_SIZE when a file exceeds PDM_UPLOAD_MAX_BYTES) with a status
+ * too — multer.MulterError instances have no .status of their own either,
+ * so without this they'd hit the same 500-instead-of-4xx gap fileFilter's
+ * errors did.
+ */
+export const uploadCsv = {
+  single: (fieldName) => (req, res, next) => {
+    uploadCsvMulter.single(fieldName)(req, res, (err) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(Object.assign(err, { status: err.code === 'LIMIT_FILE_SIZE' ? 413 : 400 }));
+      }
+      return next(err); // already tagged (fileFilter's own errors) or a genuine 500
+    });
+  },
+};
