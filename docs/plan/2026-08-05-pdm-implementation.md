@@ -1695,9 +1695,14 @@ design:
    `featureSnapshot` becomes a training example, and a trained Tier 2 model classifying a new
    candidate against that learned signature *is* the auto-labeling. No separate mechanism is
    being proposed here — this is a restatement of the plan's existing Tier 2 purpose, called
-   out explicitly because it was raised as if it were a new requirement. Until Tier 2 is
-   trained (§1: not yet), every occurrence — repeat or not — still goes through HITL review
-   per (2); there is no nearer-term signature-matching shortcut in scope.
+   out explicitly because it was raised as if it were a new requirement. **§15 note — which
+   Tier 2 model matters here:** §15.1's bootstrap model (fit from `train.csv`) is binary
+   fault/no-fault; it cannot auto-label *which* fault type recurred, only that something looks
+   wrong again. Genuine "auto-labeled as `BEARING`/`SEAL_LEAK`/etc." auto-labeling needs a
+   `training_corpus`-trained model (§15.2) — which, per §15.4's corrected framing, is
+   multi-class from its very first run, not a distant future state. Until *that* exists, every
+   occurrence — repeat or not — still goes through HITL review per (2); the bootstrap model
+   alone does not close this gap, only flags that a window looks abnormal.
 
 **`dominantFaultType` (aggregation.js) and `fault_classifier.py`'s upstream-diagnosed-fault
 short-circuit are both affected, harmlessly.** Both already treat a missing/falsy `faultType`
@@ -1849,8 +1854,16 @@ each step tied to an existing module to reuse rather than reinvent:
    for evaluation against real `fault_events` data, consistent with §10.5's champion/challenger
    gate being defined in terms of a real held-out corpus, not this one.
 8. Wire the trained artifact into `pdm/app/model.py`'s `score()` stub as an augmenting, not
-   replacing, verdict — per §3.5's existing tiered design. This is the eventual integration
-   point already scaffolded there; nothing new needs to be invented for it.
+   replacing, verdict — per §3.5's existing tiered design. **§15 note: this line, read
+   literally, now reads like it authorizes deploying the synthetic-trained artifact to
+   production `score()`. It doesn't, and never did** — §14.10.3 (written later, authoritative)
+   is explicit that anything this corpus produces is "never inserted into `training_runs`,"
+   which is what `model.py` actually loads from (D26) — so a synthetic artifact structurally
+   cannot become champion. This step describes wiring within the **offline smoke-test
+   script** §14.10.3 specifies, exercising the same `score()` code path in isolation, not the
+   real deployed `pdm/app/model.py` module. The actual production wiring is §15.1 (bootstrap
+   from `train.csv`) and, later, §15.2's `training_corpus`-trained models — `data/pump-telemetry/`
+   is never an input to either.
 
 ### 13.5 Open items this does not resolve
 
@@ -1896,6 +1909,12 @@ reopened here.
 Every claim below was checked against the actual repo before this section was written. Several
 contradict what a reader would infer from §10.5's prose alone, and the plan depends on the
 corrected version.
+
+**§15 note:** items 1, 2, and 5 below describe the pre-model state this whole section (and
+§15) exists to close — §15.1/D51 is what actually fits and loads a model and fixes item 5's
+`/process-window` gap, for the bootstrap model specifically. Read as "true when §14 was
+written, and true again for §14's own fitting path in §14.2 until §15.1 supersedes it for the
+bootstrap"; not stale, just no longer describing the deployed end state once §15 lands.
 
 1. **`pdm/app/model.py::score()` returns `None` unconditionally.** No artifact load, no
    feature vectorization, no model object. Confirmed.
@@ -2009,8 +2028,12 @@ corrected version.
   exercising machinery, not for producing a model whose numbers get reported as evidence. It is
   not an entry point into `training_corpus` and this plan does not add one. It *is* usable to
   smoke-test §14.2's fitting code offline (§14.10.3).
-- **No Tier 2 replacing Tier 1.** Tier 2 augments, never replaces, per §3.5. Tier 1 remains
-  the sole flagging authority; Tier 2 contributes a predicted label and confidence alongside it.
+- **No Tier 2 replacing Tier 1 for the scoring verdict.** Tier 2 augments, never replaces,
+  per §3.5 — `tier1Verdict` (§14.3.4) stays authoritative for the `/process-window` response;
+  Tier 2 contributes a predicted label and confidence alongside it, never overriding it. **This
+  is scoped to scoring, not to HITL review:** §15.4/D54 later gives Tier 2 its own
+  `fault_events` review path, independent of Tier 1's flags — "sole flagging authority" as
+  originally written here doesn't survive that decision unqualified; see §15.4.
 - **No scheduler/cron for retraining.** Admin-triggered only. A cadence can be added later once
   there's evidence about how often the corpus actually grows.
 - **No multi-pump support**, per §1.
@@ -2020,6 +2043,19 @@ corrected version.
 ## 14.2 Design: the fitting code
 
 ### 14.2.1 D19 — a separate, explicit `features.py`; no ad-hoc flattening at either call site
+
+**§15 note — two feature spaces coexist, deliberately, not by accident.** This 54-feature
+`FEATURE_ORDER` is what a model trained from `training_corpus` uses (admin-uploaded CSVs,
+mapped/validated through §10.4's Stage A/B/C into a real `featureSnapshot` per row — §15.2/
+D52). It is **not** what §15.1/D51's bootstrap model uses: `train.csv` has six raw values, no
+window statistics to derive 54 features from, so the bootstrap model has its own, separate,
+much smaller `FEATURE_ORDER` in the same-named `pdm/app/features.py` file. Whichever model is
+currently the deployed champion determines which vector shape `model.py::score()` actually
+builds at serve time — `metadata.json`'s persisted `feature_order` (this section, below) is
+what tells the loader which one it's looking at, and the hard-fail-on-mismatch behavior this
+section specifies is exactly what catches a champion swap that changes vector shape, not just
+a code-vintage mismatch within one shape. This is a real architectural fact to keep straight
+during implementation, not just documentation to reconcile.
 
 `featureSnapshot` is a nested JSON object (§3.3's fixed composition: full
 `precapFeaturesByMetric` + full `metricStats`, all six metrics, identical across event types).
@@ -2279,6 +2315,14 @@ deleted by the same pass.
 
 ### 14.4.1 D30 — `decide_promotion()` becomes a recommendation, and is *necessary but not sufficient*
 
+**§15 note:** everything below assumes champion and candidate share a label taxonomy — true
+for every case this section was written against. §15.5/D55 resolves the one case that doesn't
+(the planned binary-bootstrap → multi-class transition): `decide_promotion()` gains one
+taxonomy-mismatch branch that bypasses the per-class floor with its own reason string, rather
+than misreporting a taxonomy change as a regression. The mechanics/`recommendation`/override
+rules below are otherwise unchanged, and the "`promotion.py` is not modified" line further
+down is superseded by exactly that one addition — see §15.5 for the full mechanics.
+
 The question posed was whether `decide_promotion()` stays authoritative with an admin override,
 or becomes a recommendation an admin confirms. **Chosen: recommendation. No run is ever
 promoted without an explicit human action.**
@@ -2438,6 +2482,12 @@ in the same conditional `DO $$` form `005` uses (D26).
 New `model_promotion_events` table (D32). New `tier2_predictions` table (§14.6.2). Down migration
 drops the new tables and columns and reverses the grant.
 
+**§15 addition, a separate migration on `fault_events` (not this one — `fault_events` isn't
+touched by `007_model_ops.sql`):** `predictionSource TEXT NOT NULL DEFAULT 'TIER1_RULE'`
+(§15.4/D54), `tier2FaultStatus INTEGER` and `tier2Confidence REAL` (§15.3/D53), both nullable.
+Called out here so it isn't missed by only reading this section — `fault_events` schema changes
+live in §15, not §14.5.1's migration.
+
 ### 14.5.2 Models
 
 - `trainingRunModel.js` — `insertRun()` extended for the new columns; `getChampion()` reordered
@@ -2510,9 +2560,11 @@ each one needs:
    `predictedLabel` to `faultType`; report a confusion breakdown. This is the Tier 2 analogue of
    §3.6's `GET /pdm/fault-events/stats` and belongs beside it conceptually.
    **Caveat that must be rendered on the page, not just written here:** ground truth only ever
-   arrives for windows Tier 1 flagged (or a human manually entered), so this is *agreement on
-   reviewed windows*, a biased sample — never "live accuracy". Labeling it accuracy would be
-   exactly the fabricated confidence §13.3 refused for the synthetic corpus.
+   arrives for windows *some* review path reviewed — originally Tier 1's flags or a human
+   manually entering one; §15.4/D54 widens this to Tier-2-only flags too, since the join above
+   is on any `CONFIRMED` row regardless of `predictionSource`. This is *agreement on reviewed
+   windows*, a biased sample — never "live accuracy". Labeling it accuracy would be exactly the
+   fabricated confidence §13.3 refused for the synthetic corpus.
    Second caveat: §10.5's auto-labeling path (migration 003, `autoLabeled = true`) produces
    `CONFIRMED` rows no human actually reviewed. Those must be **excluded** from the agreement
    numerator/denominator, or the metric partly measures Tier 1's rule-matching against itself.
@@ -2542,7 +2594,9 @@ the page polls it on a slow interval (60s, matching `faultEventStats`'s existing
 
 Tier 2 predicts on **every** closed window; `fault_events` only has rows for flagged windows and
 periodic negative samples. Hanging predictions off `fault_events` would discard the majority of
-them and make metric 2 (distribution over time) impossible.
+them and make metric 2 (distribution over time) impossible. (§15.3/D53 also puts
+`tier2FaultStatus`/`tier2Confidence` on `fault_events` — that's additive, scoped to rows that
+already exist for other reasons, not a replacement for this table; see §15.3's correction.)
 
 ```
 tier2_predictions (
@@ -2873,10 +2927,10 @@ assigned that corpus.
 ## 14.12 Definition of done
 
 **Fitting and artifacts**
-- [ ] `features.py` derives a 54-feature order from `pump-physics.yaml`; a missing/non-numeric key raises; the order used at fit time is persisted in the artifact and verified at load
+- [ ] `features.py` derives a 54-feature order from `pump-physics.yaml` for `training_corpus`-trained models; a missing/non-numeric key raises; the order used at fit time is persisted in the artifact and verified at load. The bootstrap model (§15.1) uses its own separate 6-feature order in the same file — both coexist by design (§14.2.1's note), not a conflict
 - [ ] `training.py` fits a Random Forest by default, XGBoost via `PDM_MODEL_FAMILY`, hyperparameters from a versioned `training_config.yaml`, and records `modelFamily`/`trainingConfigVersion`/`seed` on the run
 - [ ] Two fits over the same corpus manifest and config version produce byte-identical artifacts
-- [ ] No class is dropped for thin support; `promotion.py` is unmodified; `evaluate_candidate`'s `predict_fn` contract is unchanged
+- [ ] No class is dropped for thin support; `promotion.py`'s only change is D55's taxonomy-mismatch branch (§15.5) — no other modification; `evaluate_candidate`'s `predict_fn` contract is unchanged
 - [ ] Artifacts land on the `pdm_artifacts` volume under `<trainedAt>-<corpusHash>/`, with `metadata.json` + `SHA256SUM`; `training_runs.artifactPath` holds the path **relative** to `PDM_ARTIFACT_ROOT`
 - [ ] The artifact is written before the promotion decision, so a non-recommended candidate is still inspectable and still approvable
 - [ ] The pruner never removes the champion or any ever-promoted run; orphaned artifacts are swept
@@ -2885,9 +2939,9 @@ assigned that corpus.
 **Load and serving**
 - [ ] `pdm` resolves its champion from `training_runs` at startup and loads the artifact; every failure mode leaves it unloaded with a specific logged reason, `score()` returning `None`, and `/health` ok
 - [ ] Tier 2 augmentation happens in `/process-window` (the live path) as well as `/score`, through one shared `augment()`
-- [ ] `ScoreResponse` declares the Tier 2 fields; a no-model response is byte-identical to today's
+- [ ] `ScoreResponse` declares the Tier 2 fields (`tier2Label`/`tier2Probability`/`tier2ModelRunId`/`tier2ArtifactSha256`, per §15.1/D56 — one shape for both the bootstrap and any later corpus-trained model); a no-model response is byte-identical to today's
 - [ ] `POST /model/reload` swaps atomically; `GET /model/status` reports loaded run id, checksum and last error
-- [ ] Tier 1 remains the sole flagging authority; Tier 2 only adds a label + probability (§3.5)
+- [ ] Tier 1 remains the sole authority for the `/process-window` scoring verdict; Tier 2 only adds a label + probability there (§3.5) — **but** Tier 2 can independently open its own `fault_events` review row per §15.4/D54, which is a separate, HITL-facing concept from scoring authority
 
 **Promotion**
 - [ ] No code path promotes a run without an explicit admin action
@@ -3055,6 +3109,16 @@ metric 3 measures agreement only on the intersection of "flagged by Tier 1" and 
 by a human" — a subset of a subset. No new machinery, just an honest label, matching the
 discipline metric 3's first caveat already applies.
 
+**§15 update — this blind spot narrows, but does not close, once §15.4/D54 ships.** §15.4 gives
+Tier 2 its own path to a `fault_events` row (`predictionSource = 'TIER2_MODEL'`), independent of
+Tier 1. Metric 3's join is on `status = 'CONFIRMED'` regardless of `predictionSource`, so once
+Tier-2-only flags start getting reviewed, ground truth *does* start accumulating for exactly the
+population D47 called invisible. The caveat text (§14.6.1, updated) now says so. **What's still
+genuinely unaddressed:** a window *neither* tier flags is still never reviewed by anyone, so
+metric 3's ground truth is now "flagged by Tier 1 or Tier 2, and later confirmed" — a larger but
+still biased sample, not the full population. D47's fix (an honest caveat, not new machinery)
+still stands; only the precise scope of what remains unmeasured has changed.
+
 ### D48 — monitoring metric 4 (drift) is marginal-only; the consequence for a tree ensemble should be stated explicitly
 
 The `|Δmean|/σ_train` per-metric reduction (six numbers instead of a 54-feature KS/PSI battery)
@@ -3125,3 +3189,336 @@ own, but D46/D47/D49 in particular are cheap (UI/label/one-more-SQL-metric chang
 plan already computes or persists) and worth folding in during implementation rather than
 deferring, since they close gaps identified against this plan's own stated goals rather than
 introducing new scope.
+
+---
+
+## 15. Real training data arrives: bootstrap from a CSV, Tier 2 gets its own review queue
+
+**Status:** planning only — nothing here has been executed yet.
+
+**Trigger:** the project owner supplied a real labeled dataset (`train.csv`, 15,627 rows: six
+raw metric readings — `Engine_rpm`→`rpm`, `suctionPressure`, `dischargePressure`, `flowRate`,
+`motorTemp`, `vibration` — plus a binary `Engine_Condition` label, no timestamp, no
+fault-type breakdown, no episode/buffer structure). This section is the single record of what
+changes because of that; it supersedes/refines the relevant pieces of §10–§14 below and
+should be read as the current state, not those sections' original text.
+
+### 15.1 D51 — Tier 2 bootstraps from `train.csv`, outside `training_corpus`
+
+`train.csv`'s shape doesn't fit `training_corpus` (no timestamp, no window structure, six raw
+values instead of the 54-feature `precapFeaturesByMetric`/`metricStats` snapshot) — forcing it
+through that pipeline would mean fabricating 48 features that were never collected. Instead:
+
+- New `pdm/app/features.py`: a fixed, hand-written `FEATURE_ORDER = ["rpm",
+  "suctionPressure", "dischargePressure", "flowRate", "motorTemp", "vibration"]`, matching
+  `train.csv`'s columns 1:1. `to_vector()` raises on a missing/non-numeric field — same
+  "no silent zero-fill" principle §14.2.1 (D19) already established.
+- New `pdm/app/training.py::fit_model(train_csv_path, *, config) -> FittedModel` — loads the
+  CSV directly, does a **stratified** train/test split (not walk-forward; there's no time
+  axis here to leak across), fits `RandomForestClassifier` (default) / XGBoost
+  (config-gated, per §14.2.2/D20's family choice, unchanged), and writes `model.joblib` +
+  `metadata.json` to the same artifact store §14.3 already specced (`pdm_artifacts` volume,
+  `training_runs.artifactPath`) — this is just the *first* artifact that ever lands there,
+  not a different storage mechanism.
+- **D56 — `score()`'s wire format is §14.3.4/D27's existing generic naming, not a
+  bootstrap-specific one.** This section's original text had `model.py::score()` return
+  `{"tier2FaultStatus": 0 | 1, "tier2Confidence": float}` — a field pair invented independently
+  of, and incompatible with, what §14.3.4/D27 already specced for `ScoreResponse`
+  (`tier2Label`, `tier2Probability`, `tier2ModelRunId`, `tier2ArtifactSha256`) and what
+  §14.6.2/D36's `tier2_predictions` table already expects to persist (`predictedLabel`,
+  `probability`, plus per-prediction model attribution). Reusing D27's naming instead —
+  corrected here — means: (a) no second, incompatible `ScoreResponse` shape to reconcile
+  later, (b) the bootstrap model's predictions carry `tier2ModelRunId`/`tier2ArtifactSha256`
+  from day one, which `tier2_predictions` needs to attribute a prediction to a specific run and
+  which the original text omitted entirely, and (c) it composes with D55: `decide_promotion()`
+  already compares label *strings*, and a later multi-class candidate's `tier2Label` values
+  slot into the exact same field the bootstrap model already populates, no schema change at the
+  transition. `pdm/app/model.py` loads the artifact once at startup (mirrors
+  `thresholds.yaml`'s load-once pattern) and `score(record)` returns
+  `{"tier2Label": "NORMAL" | "FAULT", "tier2Probability": float, "tier2ModelRunId": int,
+  "tier2ArtifactSha256": str}` — `tier2Label` values match the `"NORMAL"`/`"FAULT"` naming D55
+  already settled on for this model's training-time labels. `None` if the artifact failed to
+  load — Tier 1 unaffected, same fallback posture as always.
+- **The `fault_events.tier2FaultStatus`/`tier2Confidence` integer columns (§15.3, per the
+  project owner's explicit request to store fault status as 0/1) are a persistence-layer
+  derivation, not the wire format:** `pdmService.js` sets `tier2FaultStatus = tier2Label ===
+  'NORMAL' ? 0 : 1` and `tier2Confidence = tier2Probability` when writing/extending a
+  `fault_events` row. This satisfies the 0/1 requirement exactly where it was asked for — a
+  human reviewing a specific event — without forcing the generic wire/monitoring layer into a
+  binary-only shape that the planned multi-class transition would immediately outgrow.
+- `ScoreResponse` (`schemas.py`) gains these four fields as optional — the same fix §14.0
+  item 6 already flagged as mandatory (FastAPI's `response_model` silently drops undeclared
+  keys). This is exactly §14.3.4/D27's field list; no separate schema change for the bootstrap
+  model.
+- `preprocessing/pipeline.py`'s `/process-window` path must actually call `model.score()` —
+  §14.0 item 5's finding (the live path stopped calling `/score` and never invokes
+  `model.score()` at all) still applies verbatim and must be fixed regardless of training
+  source.
+
+### 15.2 D52 — all retraining after the bootstrap is admin-CSV-upload-driven; §10/§14's machinery is confirmed in scope, not deleted
+
+An earlier pass through this decision considered deleting `training_corpus`, its
+materialization, `promotion.py`'s champion/challenger gate, the artifact store, and §14's
+admin page entirely, on the assumption that future retraining would just be "swap in a new
+flat CSV, refit, redeploy" with no comparison step. That assumption doesn't hold: the actual
+requirement is a champion/challenger workflow driven from the dashboard — an admin uploads a
+CSV, it's mapped/preprocessed/validated, a candidate is fit, and it's compared against the
+currently-deployed model before a human promotes it. That's exactly what §10.4 (Stage A/B/C
+upload), §10.5 (`training_corpus`, evaluation gate, promotion), and §14 (fitting, artifact
+store, admin approve/reject/rollback page) already provide. **None of it is removed.**
+
+- Retraining flow, confirmed: admin uploads a CSV from the dashboard → Stage A (structural
+  validation) → Stage B (column mapping, unit/range checks) → Stage C (physics-aware quality
+  gate, reusing `/process-window`) → materializes into `training_corpus` → `retrain.py` fits a
+  candidate → `promotion.py` compares it against the champion → human approves/rejects/rolls
+  back from §14.7's admin page.
+- **Open item to resolve at implementation time:** `corpusMaterializationService.js`
+  materializes `training_corpus` rows from `fault_events`, but `externalUploadService.js`
+  already has its own materialization step for admin-uploaded CSVs (§10.4 D10). Confirm
+  whether `corpusMaterializationService.js` is still exercised by anything under this design,
+  or whether it's now dead code duplicating what the upload service already does.
+- **Split strategy for admin-uploaded training rows:** they do carry a real timestamp
+  (Stage A/B requires one), so §10.5's walk-forward/episode split *could* still apply — but a
+  plain stratified split may be simpler and sufficient at this project's scale. Decide at
+  implementation time; `check_evaluation_gate`'s minimum-row-count purpose is kept either way.
+- §1's "dedicated `pdm-python` CT" language is stale — actual topology is **one Proxmox CT
+  running the whole application, with one Docker container per component** (server, client,
+  pdm, node-red, db, etc.), not a CT per service. `pdm` stays its own container/service;
+  nothing about how it's built or reached over HTTP changes.
+
+### 15.3 D53 — Tier 2's verdict is persisted, not just returned over HTTP; §14.6.2's `tier2_predictions` is the every-window log, `fault_events` is not
+
+**Correction to this section's original text:** it said `tier2FaultStatus`/`tier2Confidence`
+get written to `fault_events` "on every scored window." That's wrong, and §14.6.2/D36 already
+explains why: Tier 2 scores every closed window, but `fault_events` only ever has rows for
+flagged windows and periodic negative samples (§3.3.1) — even after §15.4/D54 lets Tier 2 open
+its own rows, most quiet windows (Tier 1 silent, Tier 2 predicting 0) still have no
+`fault_events` row to attach anything to. Hanging a per-window Tier 2 log off `fault_events`
+would silently drop most of it, exactly the failure mode D36 was written to avoid.
+
+**Corrected design — two separate, non-contradicting things:**
+
+- **Every-window log:** `tier2_predictions` (§14.6.2, unchanged) is where Tier 2's output for
+  every closed window actually lives — `predictedLabel`, `probability`, keyed by
+  `processedTelemetryId`. This is what monitoring (§14.6.1) reads from.
+- **On a `fault_events` row specifically** (one exists — Tier 1 flagged it, Tier 2 flagged it
+  per §15.4, or it's a negative sample): `tier2FaultStatus INTEGER` (0/1, nullable) and
+  `tier2Confidence REAL` are still added as columns, **derived from `tier2Label`/
+  `tier2Probability` per §15.1/D56** (not the model's own output shape) at the moment that row
+  is written/extended — this is the value a HITL reviewer sees next to a specific event, not a
+  substitute for the complete log. No interaction with `fault_events.status`'s
+  `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A` lifecycle (§3.3), which
+  stays HITL-owned and untouched by this.
+
+### 15.4 D54 — Tier 2 gets its own Predicted Faults review queue
+
+**Why:** Tier 1 only fires once a hard threshold is actually crossed — it's reactive. Tier 2
+is the genuinely predictive layer: it can flag a suspicious multivariate pattern before any
+single metric breaches Tier 1's fixed limits. Under §3.5's original design, Tier 2's output
+was only ever columns bolted onto whatever row Tier 1 happened to create — a window Tier 2
+flags on its own, with Tier 1 silent, never reached a human at all. §3.5's "Tier 2 augments,
+never replaces, the rule verdict" stays true for the *scoring response*, but it no longer
+means "Tier 2 has no review path of its own."
+
+- `fault_events` gains `predictionSource TEXT NOT NULL DEFAULT 'TIER1_RULE'` —
+  `TIER1_RULE` | `TIER2_MODEL` | `BOTH`. A Tier-2-only flag opens its own row
+  (`predictionSource = 'TIER2_MODEL'`), through the same coalescing logic (§3.3.2) so a
+  sustained Tier 2 flag doesn't spam duplicates either. A window where both flag opens/extends
+  one row with `predictionSource = 'BOTH'`. `tier2FaultStatus`/`tier2Confidence` (§15.3) stay
+  as columns on the row regardless — useful context, just no longer the only visibility Tier 2
+  gets.
+- **Dashboard visibility** — these rows show the actual metric readings behind the flag (e.g.
+  `motorTemp = 180`), not a black-box score, so a person can eyeball the numbers and judge for
+  themselves. A read surface over the existing HITL endpoints (§3.6), not a new backend
+  concept. **§15.6 corrects how this actually renders:** not a dedicated new "Predicted Faults"
+  tab as first sketched here — the existing "Needs Review"/"Fault Detection" tabs in
+  `PredictionsPage.jsx` already cover this, and just need a `predictionSource` badge plus a fix
+  to the metric-display helpers, which currently only know how to read Tier 1's
+  `triggeredRules`.
+- **Review labels the fault properly, not just confirm/reject:** the reviewer picks the actual
+  `faultType`, writes `rootCause`, writes `resolution` — all already existing `fault_events`
+  columns, no schema change needed there. On save, `status` moves `PENDING_REVIEW` →
+  `CONFIRMED`, and the UI groups `CONFIRMED` rows under an **"Escalated"** view — what actually
+  notifies maintenance to act. No new `status` value; "Escalated" is a dashboard-level grouping
+  of `CONFIRMED` rows, not a new backend state.
+- **This is the path toward multi-class Tier 2 — and correcting this section's original
+  framing, not a distant, contingent future state.** Every escalated row is a real labeled
+  example with an actual fault-type label, not just 0/1 — exactly what `training_corpus`
+  materialization accumulates. **Checked against §10.4/D1, not assumed:** §10.4's Entry
+  point 2 (admin CSV upload, §15.2's kept retraining path) already requires the uploading
+  operator to supply a real `faultType` at upload time, and §10.5/D1 makes `training_corpus.label
+  = fault_events.faultType` (or `'NORMAL'`) unconditionally — there is no binary-labeled
+  path into `training_corpus` at all, from HITL escalation *or* admin upload. This means the
+  **very first** candidate ever fit via §15.2's retraining pipeline is already multi-class, not
+  a some-day event gated on accumulated diversity. What *is* gradual is whether any given
+  class has enough held-out support to be gate-decisive — `promotion.py`'s
+  `min_support_per_class` floor (§10.5) already handles that by excluding thin-support classes
+  from the decision while still reporting them, per-class, not by delaying the taxonomy switch
+  itself. The binary bootstrap (§15.1) is deployed only until the *first* admin-triggered
+  retrain is approved — likely soon, not "eventually" — at which point D55's taxonomy-mismatch
+  bypass (§15.5) fires exactly once, as designed, and every model after that is multi-class.
+  `OTHER` remains the catch-all for anything that doesn't cleanly fit an existing type
+  (§10.5 D1), unchanged.
+
+### 15.5 D55 — resolved: a label-taxonomy mismatch bypasses the per-class gate and is reported as such, not as a regression
+
+**Chosen: detect the mismatch explicitly in `decide_promotion()` and give it its own reason
+string — a light version of both options previously listed, not a new `promotionStatus` state
+or admin-facing UI concept.** Reasoning:
+
+- D30 already made promotion **always** require an explicit human action, regardless of what
+  `recommendation` says — "no run is ever promoted without an explicit human action" applies
+  identically whether the gate passed, failed, or (this case) didn't apply. So bypassing the
+  per-class floor on a taxonomy change doesn't weaken the actual safeguard; the human still
+  clicks approve or reject either way, on either kind of decision. Building a whole separate
+  `promotionStatus` value for this (the previously-listed second option) would add a new
+  lifecycle state, new UI branching, and new tests for a case that changes *why* a human is
+  deciding, not *whether* one is.
+- Silently reusing the existing "no champion yet" path was rejected as the resolution, though:
+  it would print "no champion yet — first candidate promotes unconditionally" next to a
+  comparison table that has an actual champion sitting right there, which is actively
+  misleading to the admin looking at the page — they'd reasonably wonder why the system thinks
+  there's no champion. The fix needs its own honest reason string, not a borrowed one.
+- Partial-overlap reconciliation (comparing on a shared "no fault" label while treating the
+  rest as incomparable) was considered and rejected as unnecessary complexity: this transition
+  happens once, deliberately, under direct human supervision — building careful partial-set
+  logic for a rare, supervised event isn't worth the extra code path and its own tests. **Any**
+  label-set difference between champion and candidate — not just full disjointness — triggers
+  the same bypass.
+
+**Mechanics — this is the one place §14.4.1's "`promotion.py` is not modified" claim doesn't
+hold; `decide_promotion()` gains one new branch, nothing else in the module changes:**
+
+```python
+def decide_promotion(candidate, champion, *, min_support_per_class=..., margin_factor=...):
+    if champion is None:
+        return PromotionDecision(promote=True, reason="no champion yet — ...", per_class_comparison={})
+
+    champion_labels = set(champion.per_class) - EXCLUDED_FROM_GATE
+    candidate_labels = set(candidate.per_class) - EXCLUDED_FROM_GATE
+    if champion_labels != candidate_labels:
+        return PromotionDecision(
+            promote=True,
+            reason=(
+                "candidate's label taxonomy differs from the champion's "
+                f"(champion: {sorted(champion_labels)}, candidate: {sorted(candidate_labels)}) — "
+                "per-class gate not applicable; treat as a new baseline under human review"
+            ),
+            per_class_comparison={},  # side-by-side per-class metrics for BOTH still shown
+        )                             # on the admin page from EvalMetrics directly, not this dict
+
+    # existing per-class comparison loop, unchanged, for the same-taxonomy case
+    ...
+```
+
+- `recommendation` comes back `True` here, same as "no champion" — but the **reason string is
+  distinct**, so the admin page can render it as its own visible state ("taxonomy changed —
+  gate bypassed, review manually") rather than looking identical to a genuine first promotion.
+  This is a display-layer distinction (§14.7.4's comparison panel reads `reason`), not a new
+  backend enum.
+- `per_class_comparison` is empty for this case — there is no meaningful pairwise comparison to
+  show — but §14.7.4's panel still has `EvalMetrics.per_class` for *both* candidate and
+  champion independently (already computed by `evaluate_candidate()`, already passed to
+  `decide_promotion()`), so the admin page shows each model's own per-class numbers
+  side-by-side without pretending they're comparable pairs. No new data is needed to render
+  this; it's a rendering choice on data already available.
+- **Bootstrap labeling, settled as part of this resolution:** `train.csv`'s binary label is
+  emitted as `"NORMAL"` / `"FAULT"` (not bare `"0"`/`"1"`) from `training.py`'s `FittedModel`,
+  so a reader of `training_runs` history can tell at a glance what a given run's labels meant
+  without cross-referencing which model generation produced it. This does **not** attempt
+  partial-overlap comparison against the multi-class taxonomy's `NORMAL`/`OTHER`-style labels
+  even if the strings happen to coincide later — per the rejected-partial-overlap reasoning
+  above, any set difference still triggers the bypass branch, deliberately, even a
+  single-label one.
+- This resolution only ever fires for a genuine taxonomy change. The ordinary binary
+  bootstrap→binary-retrain path (§15.2/D52, admin CSV uploads that stay binary) never hits this
+  branch — `champion_labels == candidate_labels` for every same-taxonomy comparison, and
+  §14.4's existing per-class floor applies exactly as originally designed.
+
+### 15.6 Frontend implementation — most of it already exists; the gap is Tier 2 has no representation in it
+
+**Checked against the actual client code, not assumed.** `client/src/pages/PredictionsPage.jsx`
+already has a "Needs Review" tab (`ReviewTab`) backed by `fault_events` `PENDING_REVIEW` rows,
+a "Fault Detection" tab (`DetectTab`) showing the full audit log with status pills, and
+`ReviewDrawer.jsx` already collects `faultType`/`rootCause`/`resolution` on confirm — exactly
+§15.4's "review labels the fault properly" requirement, already built, for whatever created the
+row. **§15.4 does not need a new page.** What it needs is for these existing pieces to know
+Tier 2 exists at all — right now they don't, and the gap is concrete, not hypothetical:
+
+- **`client/src/utils/faultEvents.js`'s `eventMetrics()`, `metricsLabel()`, and `eventTitle()`
+  are derived entirely from `triggeredRules`** (line 20's `parseRules()` reads
+  `row.triggeredRules`) — a Tier-1-only field. A `predictionSource = 'TIER2_MODEL'` row has no
+  `triggeredRules`, so today it would render `metricsLabel()` as `"—"` and `eventTitle()` as
+  the generic fallback `"Automated detection"` — literally the opposite of what was asked for:
+  seeing `motorTemp = 180` and judging it directly. **Fix:** these three functions need a
+  Tier-2 code path — when `triggeredRules` is empty and `predictionSource` includes
+  `TIER2_MODEL`, derive the displayed metric(s)/title from the row's raw feature values
+  instead (whatever `fault_events` already stores for the row — the six raw metric readings,
+  not `triggeredRules`), e.g. picking the metric(s) furthest from its normal range as the
+  "why" shown to the reviewer. This is a presentation-layer function change only; no new
+  backend field beyond `predictionSource` itself (§15.4) is required to make this possible.
+- **`ReviewDrawer.jsx`'s `EvidenceChart` defaults to `metricKey = eventMetrics(event)[0] ||
+  'vibration'`** — for a Tier-2-only row (`eventMetrics()` returning `[]` today), it silently
+  charts vibration regardless of which metric actually drove the flag. Once `eventMetrics()` is
+  fixed per the point above, this resolves itself — flagged here so it isn't mistaken for a
+  separate bug once the underlying cause is fixed.
+- **A "Source" badge**, next to the existing status pill in `ReviewTab`/`DetectTab`'s rows and
+  `ReviewDrawer`'s header: `predictionSource` rendered as "Tier 1" / "Tier 2" / "Tier 1 + 2" —
+  small, reuses the existing pill styling (`sevPill`/`pillFor` pattern already in
+  `faultEvents.js`/`constants.js`), not a new component.
+- **"Escalated" is a filter, not a new tab.** `DetectTab`'s existing "All detections" list
+  already shows every `status`, including `CONFIRMED`. Add `CONFIRMED` as a distinguishable
+  filter/segment (or a small "notify maintenance" indicator on `CONFIRMED` rows) inside
+  `DetectTab`, using the existing `FilterBar`/`filterEvents()` machinery
+  (`utils/faultEvents.js:filterEvents`) rather than building a second list component — matches
+  §15.4's "no new backend state, dashboard-level grouping only."
+- **Reviewer form (`ReviewDrawer.jsx`) needs no changes** — `faultType`/`rootCause`/
+  `resolution` capture and its `canConfirm` validation (line 202) already match §15.4's
+  requirement exactly, for any row regardless of what created it.
+
+**The admin side (`ModelOpsPage.jsx`, §14.7/§14.8) needs no new design** — it was already
+specced in full (five panels, upload flow, comparison view) before §15 existed, and nothing in
+§15 changes its shape. Two things carry over from decisions already made in this section:
+
+- The comparison panel (§14.7.4/D40) must render D55/§15.5's taxonomy-mismatch reason as its
+  own visible state (already a DoD item under §15.5, not repeated here).
+- The "Deployed model" panel's empty state ("No Tier 2 model is deployed — Tier 1 rules only",
+  §14.7.3 panel 1) is what a fresh install shows until §15.1's bootstrap artifact is fit and
+  promoted — no wording change needed, it already describes this state correctly.
+
+### 15.7 Definition of done
+
+**Bootstrap:**
+- [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
+- [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
+- [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
+- [ ] `pdm/app/model.py::score()` returns `tier2Label`/`tier2Probability`/`tier2ModelRunId`/`tier2ArtifactSha256` — §14.3.4/D27's existing field names, not a bootstrap-specific pair (§15.1/D56)
+- [ ] `ScoreResponse` schema extended with those four fields, verified they survive `response_model` filtering
+- [ ] `tier2_predictions` (§14.6.2) is the every-window Tier 2 log, populated from `tier2Label`/`tier2Probability` directly; `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration, derived (`'FAULT' → 1`, `'NORMAL' → 0`) and populated only on rows that already exist (§15.3's correction — not "every scored window")
+
+**Retraining (§10.5/§14's existing work items apply; not repeated here):**
+- [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
+- [ ] `corpusMaterializationService.js`'s role confirmed against `externalUploadService.js`'s own materialization step — dead code removed if redundant, kept if not
+- [ ] Split strategy for admin-uploaded training data decided (walk-forward vs. row-count floor)
+
+**Predicted Faults review queue (backend, §15.4):**
+- [ ] `fault_events.predictionSource` column added (`TIER1_RULE`/`TIER2_MODEL`/`BOTH`), populated correctly for Tier-2-only, Tier-1-only, and both-flag windows
+- [ ] A Tier-2-only flag opens its own coalescing-aware `fault_events` row, independent of Tier 1
+- [ ] Reviewer can set `faultType`/`rootCause`/`resolution` and the row surfaces under an "Escalated" view once `CONFIRMED`
+- [ ] Escalated, labeled rows flow into `training_corpus` materialization same as any other confirmed event
+
+**Frontend (§15.6 — additive to the existing pages, not a new one):**
+- [ ] `faultEvents.js`'s `eventMetrics()`/`metricsLabel()`/`eventTitle()` have a Tier-2 code path: when `triggeredRules` is empty and `predictionSource` includes `TIER2_MODEL`, derive the displayed metric(s) from the row's raw feature values instead of falling back to `"—"`/"Automated detection"
+- [ ] `ReviewDrawer.jsx`'s `EvidenceChart` charts the metric that actually drove a Tier-2-only flag, not the hardcoded `'vibration'` fallback (resolves once the point above is fixed)
+- [ ] A "Source" badge (Tier 1 / Tier 2 / Tier 1 + 2) renders in `ReviewTab`/`DetectTab` rows and `ReviewDrawer`'s header, reusing the existing pill styling
+- [ ] `DetectTab` exposes an "Escalated"/`CONFIRMED` filter or indicator via the existing `FilterBar`/`filterEvents()` machinery — no new list component
+- [ ] `ModelOpsPage.jsx`'s comparison panel (§14.7.4) renders D55's taxonomy-mismatch state distinctly (cross-referenced from §15.5's DoD, not a separate item to redo)
+
+**Unaffected:**
+- [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
+- [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
+
+**Not required for §15 itself, but needed before the eventual binary→multi-class transition (§15.5/D55):**
+- [ ] `decide_promotion()`'s taxonomy-mismatch branch implemented (compares `champion_labels`/`candidate_labels` sets, bypasses the per-class floor with its own reason string, per §15.5)
+- [ ] Admin comparison page renders the taxonomy-mismatch reason as its own visible state, and shows each model's independent per-class metrics side-by-side when `per_class_comparison` is empty for this reason
+- [ ] `training.py`'s bootstrap fit emits `"NORMAL"`/`"FAULT"` labels, not bare `"0"`/`"1"`
