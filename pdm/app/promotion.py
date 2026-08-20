@@ -123,6 +123,17 @@ def decide_promotion(
     min_support_per_class: int = DEFAULT_MIN_SUPPORT_PER_CLASS,
     margin_factor: float = DEFAULT_MARGIN_FACTOR,
 ) -> PromotionDecision:
+    # TODO(§15.5/D55): once the first training_corpus-trained (multi-class)
+    # candidate is fit via the admin upload path, this function needs a new
+    # branch, inserted right after the `champion is None` check below:
+    # compare set(champion.per_class) - EXCLUDED_FROM_GATE against
+    # set(candidate.per_class) - EXCLUDED_FROM_GATE; on any difference,
+    # return PromotionDecision(promote=True, reason=<taxonomy-mismatch
+    # string>, per_class_comparison={}) — bypassing the per-class floor with
+    # its own honest reason string, not silently reusing "no champion yet".
+    # Not implemented yet: the bootstrap model (§15.1) is binary-only, so
+    # this branch can't fire until an actual taxonomy change is fit. See
+    # §15.5's full mechanics/reasoning before implementing.
     """Per-class-floor promotion decision with support-scaled tolerance
     (see module docstring). First-ever candidate (no champion) promotes
     unconditionally. A class is only INCLUDED in the pass/fail decision
