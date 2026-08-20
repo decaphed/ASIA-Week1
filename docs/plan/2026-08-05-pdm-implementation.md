@@ -2298,6 +2298,13 @@ deleted by the same pass.
 
 ### 14.4.1 D30 — `decide_promotion()` becomes a recommendation, and is *necessary but not sufficient*
 
+**§15 note:** everything below assumes champion and candidate share a label taxonomy — true
+for every case this section was written against. §15.5/D55 flags a specific gap this
+assumption doesn't cover: a candidate whose label set genuinely differs from the champion's
+(the planned binary-bootstrap → multi-class transition), where the per-class gate below
+currently can't distinguish "structurally different labels" from "regressed." Not resolved
+here; see §15.5.
+
 The question posed was whether `decide_promotion()` stays authoritative with an admin override,
 or becomes a recommendation an admin confirms. **Chosen: recommendation. No run is ever
 promoted without an explicit human action.**
@@ -3282,7 +3289,43 @@ means "Tier 2 has no review path of its own."
   trustworthy multi-class classifier. `OTHER` remains the catch-all for anything that doesn't
   cleanly fit an existing type (§10.5 D1), unchanged.
 
-### 15.5 Definition of done
+### 15.5 D55 — `decide_promotion()`'s per-class gate breaks across the binary→multi-class transition §15.4 plans for
+
+**Gap, not yet resolved — flagged here rather than papered over.** §14.4.1/D30's promotion
+gate (`promotion.py::decide_promotion()`) is a **per-class** comparison: any class the
+champion was evaluated on that the candidate has zero support/predictions for is an automatic
+blocking regression (the second loop in `decide_promotion()`, checked against the actual code
+— not a paraphrase). That's correct when champion and candidate share a label taxonomy. It
+silently breaks the moment they don't, which is exactly what §15.4/D54 plans for: the
+bootstrap champion's labels are `train.csv`'s binary `0`/`1`; the first multi-class candidate
+(once escalated review data accumulates enough per-type examples) predicts `THERMAL`/
+`CAVITATION`/`BEARING`/`OTHER`/etc. — a candidate that never predicts `0`/`1` **by
+construction**, not because it's worse. Under the current code, `decide_promotion()` would
+flag every one of the champion's classes as "candidate has zero support for a class the
+champion was evaluated on" and block promotion unconditionally, regardless of how good the
+multi-class candidate actually is. The gate cannot currently distinguish "genuinely worse"
+from "structurally different label space."
+
+This needs an explicit decision before that transition happens, not before §15 as a whole —
+the binary bootstrap→binary-retrain path (§15.2/D52, ordinary admin CSV uploads that stay
+binary) is unaffected, since same-taxonomy comparisons work exactly as §14.4 already designs.
+Options, not chosen here:
+
+- Treat the first multi-class candidate like `decide_promotion()`'s existing "no champion yet"
+  case (§14.4.1: "first-ever candidate promotes unconditionally") — i.e. a taxonomy change is
+  itself grounds to bypass the per-class floor once, with the human approval step (D30) as the
+  actual safeguard for that one decision, same as the true first-ever promotion already relies
+  on human judgment rather than a gate.
+- Detect a label-set mismatch between champion and candidate explicitly and route it to a
+  distinct admin-facing state ("taxonomy change — gate not applicable, human decision
+  required") rather than letting it fall through the existing zero-support-is-a-regression path
+  and produce a misleading "regressed" reason string.
+- Whatever is chosen, `bootstrap`'s binary labels should be named consistently with whatever
+  the multi-class taxonomy's "no fault" class is called (§10.5's taxonomy — confirm the exact
+  string), not left as bare `"0"`/`"1"`, so a *partial* overlap (both have a not-faulted class)
+  is at least representable even before the full transition.
+
+### 15.6 Definition of done
 
 **Bootstrap:**
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
@@ -3306,3 +3349,6 @@ means "Tier 2 has no review path of its own."
 **Unaffected:**
 - [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
 - [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
+
+**Not required for §15 itself, but blocks the eventual binary→multi-class transition (§15.5/D55):**
+- [ ] A decision made on how `decide_promotion()` handles a candidate whose label taxonomy differs from the champion's, before the first multi-class candidate is ever fit
