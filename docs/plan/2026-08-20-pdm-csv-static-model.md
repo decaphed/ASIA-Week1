@@ -276,7 +276,59 @@ is just the first thing that ever lands in that same volume, not a different mec
 
 ---
 
-## 6. Definition of done (for whenever this is implemented)
+## 6. Predicted Faults review queue — Tier 2 gets its own HITL path
+
+**Why:** Tier 1 only fires once a hard threshold is actually crossed — it's reactive. Tier 2
+is the thing that's actually predictive: it can flag a suspicious multivariate pattern before
+any single metric breaches Tier 1's fixed limits. If only Tier 1 can open a review row, Tier
+2's entire value — catching it earlier — never reaches a human. §0's "Tier 2 augments, never
+replaces, the rule verdict" stays true for the *scoring* response, but it can no longer mean
+"Tier 2 has no review path of its own."
+
+**6.1 D — Tier 2 predictions get their own `fault_events` row, not just columns on Tier 1's.**
+Reverses §3.4's original design (`tier2FaultStatus`/`tier2Confidence` as columns bolted onto
+whatever row Tier 1 already created). Instead:
+
+- `fault_events` gains `predictionSource TEXT NOT NULL DEFAULT 'TIER1_RULE'` —
+  `TIER1_RULE` | `TIER2_MODEL` | `BOTH`. A window where only Tier 2 flags
+  (`tier2FaultStatus = 1`, Tier 1 silent) opens its own row with `predictionSource =
+  'TIER2_MODEL'`, going through the same coalescing logic (§3.3.2 of the base plan) so a
+  sustained Tier 2 flag doesn't spam duplicate rows either. A window where both flag opens
+  (or extends) one row with `predictionSource = 'BOTH'`.
+- `tier2FaultStatus`/`tier2Confidence` (§3.4) stay as columns on the row either way — they're
+  still useful context (how confident was Tier 2), just no longer the only way Tier 2's
+  output is visible.
+
+**6.2 Dashboard: a "Predicted Faults" tab.** Lists `PENDING_REVIEW` rows where
+`predictionSource` includes `TIER2_MODEL`, showing the actual metric readings that drove the
+flag (e.g. `motorTemp = 180`) — not a black-box score, the raw numbers a person can eyeball
+and judge for themselves. This is a read surface over the existing HITL endpoints (§3.6 of
+the base plan), not a new backend concept.
+
+**6.3 Review labels the fault properly, not just confirm/reject.** The reviewer:
+- Picks the actual fault type (`faultType` — already a `fault_events` column, no schema
+  change needed there).
+- Writes a reason (`rootCause` — already exists).
+- Writes a resolution (`resolution` — already exists).
+- On save, the row's `status` moves from `PENDING_REVIEW` to `CONFIRMED`, and the UI groups
+  `CONFIRMED` rows under an **"Escalated"** view/tab — this is what actually notifies
+  maintenance to go act on it. No new `status` enum value; "Escalated" is a dashboard-level
+  grouping of `CONFIRMED` rows, not a new backend state, to avoid duplicating what `status`
+  already encodes.
+
+**6.4 This is what builds toward multi-class Tier 2, not just binary.** Every escalated row
+is now a real labeled example with an actual fault-type label, not just 0/1 — this is exactly
+what `training_corpus`/materialization (§0) accumulates over time, and exactly the kind of
+per-class support `promotion.py`'s existing `min_support_per_class` gate (base plan §10.5) was
+built to require before trusting a class. **"IF POSSIBLE," explicitly:** the binary bootstrap
+model (§3.2) stays the deployed baseline until there's enough labeled diversity *per fault
+type* to train a trustworthy multi-class classifier — not a hard deadline, not assumed to
+happen on any timeline. `OTHER` remains the catch-all for anything that doesn't cleanly fit an
+existing type (base plan §10.5 D1), same as already designed.
+
+---
+
+## 7. Definition of done (for whenever this is implemented)
 
 **Bootstrap:**
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
@@ -289,6 +341,13 @@ is just the first thing that ever lands in that same volume, not a different mec
 - [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
 - [ ] `corpusMaterializationService.js`'s actual role confirmed against `externalUploadService.js`'s own materialization step (§3.1's open note) — dead code removed if redundant, kept if not
 - [ ] Split strategy for admin-uploaded training data decided (walk-forward vs. row-count floor — §3.1's open note)
+
+**Predicted Faults review queue (§6):**
+- [ ] `fault_events.predictionSource` column added (`TIER1_RULE`/`TIER2_MODEL`/`BOTH`), populated correctly by `pdmService.js` for Tier-2-only, Tier-1-only, and both-flag windows
+- [ ] A Tier-2-only flag opens its own coalescing-aware `fault_events` row, independent of Tier 1
+- [ ] Dashboard "Predicted Faults" tab lists Tier-2-sourced `PENDING_REVIEW` rows with the raw metric readings shown
+- [ ] Reviewer can set `faultType`/`rootCause`/`resolution` and the row surfaces under an "Escalated" view once `CONFIRMED`
+- [ ] Escalated, labeled rows flow into `training_corpus` materialization same as any other confirmed event
 
 **Unaffected:**
 - [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
