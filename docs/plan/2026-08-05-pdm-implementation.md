@@ -3296,25 +3296,38 @@ means "Tier 2 has no review path of its own."
   one row with `predictionSource = 'BOTH'`. `tier2FaultStatus`/`tier2Confidence` (§15.3) stay
   as columns on the row regardless — useful context, just no longer the only visibility Tier 2
   gets.
-- **Dashboard: a "Predicted Faults" tab** — lists `PENDING_REVIEW` rows where
-  `predictionSource` includes `TIER2_MODEL`, showing the actual metric readings behind the
-  flag (e.g. `motorTemp = 180`), not a black-box score — a person can eyeball the numbers and
-  judge for themselves. A read surface over the existing HITL endpoints (§3.6), not a new
-  backend concept.
+- **Dashboard visibility** — these rows show the actual metric readings behind the flag (e.g.
+  `motorTemp = 180`), not a black-box score, so a person can eyeball the numbers and judge for
+  themselves. A read surface over the existing HITL endpoints (§3.6), not a new backend
+  concept. **§15.6 corrects how this actually renders:** not a dedicated new "Predicted Faults"
+  tab as first sketched here — the existing "Needs Review"/"Fault Detection" tabs in
+  `PredictionsPage.jsx` already cover this, and just need a `predictionSource` badge plus a fix
+  to the metric-display helpers, which currently only know how to read Tier 1's
+  `triggeredRules`.
 - **Review labels the fault properly, not just confirm/reject:** the reviewer picks the actual
   `faultType`, writes `rootCause`, writes `resolution` — all already existing `fault_events`
   columns, no schema change needed there. On save, `status` moves `PENDING_REVIEW` →
   `CONFIRMED`, and the UI groups `CONFIRMED` rows under an **"Escalated"** view — what actually
   notifies maintenance to act. No new `status` value; "Escalated" is a dashboard-level grouping
   of `CONFIRMED` rows, not a new backend state.
-- **This is the path toward multi-class Tier 2, not just binary.** Every escalated row is a
-  real labeled example with an actual fault-type label, not just 0/1 — exactly what
-  `training_corpus` materialization accumulates, and exactly the per-class support
-  `promotion.py`'s `min_support_per_class` gate (§10.5) was built to require before trusting a
-  class. **Explicitly conditional, not a deadline:** the binary bootstrap model (§15.1) stays
-  the deployed baseline until there's enough labeled diversity *per fault type* to train a
-  trustworthy multi-class classifier. `OTHER` remains the catch-all for anything that doesn't
-  cleanly fit an existing type (§10.5 D1), unchanged.
+- **This is the path toward multi-class Tier 2 — and correcting this section's original
+  framing, not a distant, contingent future state.** Every escalated row is a real labeled
+  example with an actual fault-type label, not just 0/1 — exactly what `training_corpus`
+  materialization accumulates. **Checked against §10.4/D1, not assumed:** §10.4's Entry
+  point 2 (admin CSV upload, §15.2's kept retraining path) already requires the uploading
+  operator to supply a real `faultType` at upload time, and §10.5/D1 makes `training_corpus.label
+  = fault_events.faultType` (or `'NORMAL'`) unconditionally — there is no binary-labeled
+  path into `training_corpus` at all, from HITL escalation *or* admin upload. This means the
+  **very first** candidate ever fit via §15.2's retraining pipeline is already multi-class, not
+  a some-day event gated on accumulated diversity. What *is* gradual is whether any given
+  class has enough held-out support to be gate-decisive — `promotion.py`'s
+  `min_support_per_class` floor (§10.5) already handles that by excluding thin-support classes
+  from the decision while still reporting them, per-class, not by delaying the taxonomy switch
+  itself. The binary bootstrap (§15.1) is deployed only until the *first* admin-triggered
+  retrain is approved — likely soon, not "eventually" — at which point D55's taxonomy-mismatch
+  bypass (§15.5) fires exactly once, as designed, and every model after that is multi-class.
+  `OTHER` remains the catch-all for anything that doesn't cleanly fit an existing type
+  (§10.5 D1), unchanged.
 
 ### 15.5 D55 — resolved: a label-taxonomy mismatch bypasses the per-class gate and is reported as such, not as a regression
 
@@ -3391,7 +3404,58 @@ def decide_promotion(candidate, champion, *, min_support_per_class=..., margin_f
   branch — `champion_labels == candidate_labels` for every same-taxonomy comparison, and
   §14.4's existing per-class floor applies exactly as originally designed.
 
-### 15.6 Definition of done
+### 15.6 Frontend implementation — most of it already exists; the gap is Tier 2 has no representation in it
+
+**Checked against the actual client code, not assumed.** `client/src/pages/PredictionsPage.jsx`
+already has a "Needs Review" tab (`ReviewTab`) backed by `fault_events` `PENDING_REVIEW` rows,
+a "Fault Detection" tab (`DetectTab`) showing the full audit log with status pills, and
+`ReviewDrawer.jsx` already collects `faultType`/`rootCause`/`resolution` on confirm — exactly
+§15.4's "review labels the fault properly" requirement, already built, for whatever created the
+row. **§15.4 does not need a new page.** What it needs is for these existing pieces to know
+Tier 2 exists at all — right now they don't, and the gap is concrete, not hypothetical:
+
+- **`client/src/utils/faultEvents.js`'s `eventMetrics()`, `metricsLabel()`, and `eventTitle()`
+  are derived entirely from `triggeredRules`** (line 20's `parseRules()` reads
+  `row.triggeredRules`) — a Tier-1-only field. A `predictionSource = 'TIER2_MODEL'` row has no
+  `triggeredRules`, so today it would render `metricsLabel()` as `"—"` and `eventTitle()` as
+  the generic fallback `"Automated detection"` — literally the opposite of what was asked for:
+  seeing `motorTemp = 180` and judging it directly. **Fix:** these three functions need a
+  Tier-2 code path — when `triggeredRules` is empty and `predictionSource` includes
+  `TIER2_MODEL`, derive the displayed metric(s)/title from the row's raw feature values
+  instead (whatever `fault_events` already stores for the row — the six raw metric readings,
+  not `triggeredRules`), e.g. picking the metric(s) furthest from its normal range as the
+  "why" shown to the reviewer. This is a presentation-layer function change only; no new
+  backend field beyond `predictionSource` itself (§15.4) is required to make this possible.
+- **`ReviewDrawer.jsx`'s `EvidenceChart` defaults to `metricKey = eventMetrics(event)[0] ||
+  'vibration'`** — for a Tier-2-only row (`eventMetrics()` returning `[]` today), it silently
+  charts vibration regardless of which metric actually drove the flag. Once `eventMetrics()` is
+  fixed per the point above, this resolves itself — flagged here so it isn't mistaken for a
+  separate bug once the underlying cause is fixed.
+- **A "Source" badge**, next to the existing status pill in `ReviewTab`/`DetectTab`'s rows and
+  `ReviewDrawer`'s header: `predictionSource` rendered as "Tier 1" / "Tier 2" / "Tier 1 + 2" —
+  small, reuses the existing pill styling (`sevPill`/`pillFor` pattern already in
+  `faultEvents.js`/`constants.js`), not a new component.
+- **"Escalated" is a filter, not a new tab.** `DetectTab`'s existing "All detections" list
+  already shows every `status`, including `CONFIRMED`. Add `CONFIRMED` as a distinguishable
+  filter/segment (or a small "notify maintenance" indicator on `CONFIRMED` rows) inside
+  `DetectTab`, using the existing `FilterBar`/`filterEvents()` machinery
+  (`utils/faultEvents.js:filterEvents`) rather than building a second list component — matches
+  §15.4's "no new backend state, dashboard-level grouping only."
+- **Reviewer form (`ReviewDrawer.jsx`) needs no changes** — `faultType`/`rootCause`/
+  `resolution` capture and its `canConfirm` validation (line 202) already match §15.4's
+  requirement exactly, for any row regardless of what created it.
+
+**The admin side (`ModelOpsPage.jsx`, §14.7/§14.8) needs no new design** — it was already
+specced in full (five panels, upload flow, comparison view) before §15 existed, and nothing in
+§15 changes its shape. Two things carry over from decisions already made in this section:
+
+- The comparison panel (§14.7.4/D40) must render D55/§15.5's taxonomy-mismatch reason as its
+  own visible state (already a DoD item under §15.5, not repeated here).
+- The "Deployed model" panel's empty state ("No Tier 2 model is deployed — Tier 1 rules only",
+  §14.7.3 panel 1) is what a fresh install shows until §15.1's bootstrap artifact is fit and
+  promoted — no wording change needed, it already describes this state correctly.
+
+### 15.7 Definition of done
 
 **Bootstrap:**
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
@@ -3406,12 +3470,18 @@ def decide_promotion(candidate, champion, *, min_support_per_class=..., margin_f
 - [ ] `corpusMaterializationService.js`'s role confirmed against `externalUploadService.js`'s own materialization step — dead code removed if redundant, kept if not
 - [ ] Split strategy for admin-uploaded training data decided (walk-forward vs. row-count floor)
 
-**Predicted Faults review queue:**
+**Predicted Faults review queue (backend, §15.4):**
 - [ ] `fault_events.predictionSource` column added (`TIER1_RULE`/`TIER2_MODEL`/`BOTH`), populated correctly for Tier-2-only, Tier-1-only, and both-flag windows
 - [ ] A Tier-2-only flag opens its own coalescing-aware `fault_events` row, independent of Tier 1
-- [ ] Dashboard "Predicted Faults" tab lists Tier-2-sourced `PENDING_REVIEW` rows with the raw metric readings shown
 - [ ] Reviewer can set `faultType`/`rootCause`/`resolution` and the row surfaces under an "Escalated" view once `CONFIRMED`
 - [ ] Escalated, labeled rows flow into `training_corpus` materialization same as any other confirmed event
+
+**Frontend (§15.6 — additive to the existing pages, not a new one):**
+- [ ] `faultEvents.js`'s `eventMetrics()`/`metricsLabel()`/`eventTitle()` have a Tier-2 code path: when `triggeredRules` is empty and `predictionSource` includes `TIER2_MODEL`, derive the displayed metric(s) from the row's raw feature values instead of falling back to `"—"`/"Automated detection"
+- [ ] `ReviewDrawer.jsx`'s `EvidenceChart` charts the metric that actually drove a Tier-2-only flag, not the hardcoded `'vibration'` fallback (resolves once the point above is fixed)
+- [ ] A "Source" badge (Tier 1 / Tier 2 / Tier 1 + 2) renders in `ReviewTab`/`DetectTab` rows and `ReviewDrawer`'s header, reusing the existing pill styling
+- [ ] `DetectTab` exposes an "Escalated"/`CONFIRMED` filter or indicator via the existing `FilterBar`/`filterEvents()` machinery — no new list component
+- [ ] `ModelOpsPage.jsx`'s comparison panel (§14.7.4) renders D55's taxonomy-mismatch state distinctly (cross-referenced from §15.5's DoD, not a separate item to redo)
 
 **Unaffected:**
 - [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
