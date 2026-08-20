@@ -68,6 +68,11 @@ def _load_artifact() -> Optional[dict[str, Any]]:
         )
         return None
 
+    artifact_sha256 = metadata.get("artifactSha256")
+    if artifact_sha256 is None:
+        logger.error("model.py: %s has no artifactSha256 — Tier 1 only", metadata_path)
+        return None
+
     try:
         import joblib
 
@@ -79,7 +84,7 @@ def _load_artifact() -> Optional[dict[str, Any]]:
     return {
         "estimator": estimator,
         "runId": run_id,
-        "artifactSha256": metadata["artifactSha256"],
+        "artifactSha256": artifact_sha256,
     }
 
 

@@ -45,6 +45,22 @@ class ProcessedRecordIn(BaseModel):
     motorTempMin: float
     motorTempMax: float
 
+    # §15.1/D51 — model.score() reads these *Mean fields (via
+    # model.py's _PROCESSED_RECORD_FEATURE_FIELDS) to build its feature
+    # vector. Without them declared here, extra="ignore" would silently
+    # drop them from record.model_dump() on this endpoint's /score fallback
+    # path, leaving Tier 2 permanently unable to build a vector (every
+    # value None -> to_vector() raises -> score() logs and returns None) —
+    # never loudly wrong, just silently inert. Declared required (not
+    # Optional) like the existing *Min/*Max fields above: main.py's /score
+    # handler needs them whether or not a Tier 2 model happens to be loaded.
+    flowRateMean: float
+    rpmMean: float
+    vibrationMean: float
+    suctionPressureMean: float
+    dischargePressureMean: float
+    motorTempMean: float
+
     model_config = ConfigDict(extra="ignore")
 
 
