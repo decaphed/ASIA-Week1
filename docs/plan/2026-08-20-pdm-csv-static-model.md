@@ -1,17 +1,56 @@
-# PdM Tier 2 — replace the `training_corpus` pipeline with a static, CSV-trained model
+# PdM Tier 2 — bootstrap from a static CSV, retrain via admin-uploaded, human-approved CSVs
 
 **Status:** planning only — nothing here has been executed yet.
 
-**Supersedes:** §10 (`training_corpus`/corpus materialization), §10.5 (evaluation gate,
-walk-forward split, champion/challenger promotion), §11 (Python-owned feature computation
-insofar as it feeds Tier 2), §12/§13 (fault taxonomy, synthetic corpus), and all of §14
-(Tier 2 Model Ops: fitting, artifact store, admin promotion UI, monitoring) in
-`docs/plan/2026-08-05-pdm-implementation.md`. §1–§9 (Tier 1 rule engine, `fault_events`,
-HITL review) are **unchanged** — this plan only replaces how Tier 2 gets trained and served.
+## 0. Revision — §10/§14's corpus, promotion, and admin-upload machinery is KEPT, not deleted
+
+**This reverses §1–§3 below (the original version of this plan), which said to delete
+`training_corpus`, `corpusMaterializationService.js`, `promotion.py`, the artifact store, and
+§14's admin Model Ops page. That reasoning is stale — left in place below as the record of
+what was considered and why it changed, not as the current plan.** Read this section as the
+authoritative one; §1–§3 is superseded history.
+
+**What changed:** the original version assumed future retraining would be "swap in a new flat
+CSV, refit, redeploy" with no comparison step — under that assumption, `training_corpus`,
+promotion, and the artifact store had nothing left to do. The actual requirement is a
+**champion/challenger workflow from the dashboard**: an admin uploads a CSV, it gets mapped,
+preprocessed, and validated, a candidate model is fit from it, and that candidate is compared
+against the currently-deployed model before anything is promoted. That's a real comparison
+step with a real need to hold two models and a real human decision point — which is precisely
+what `training_corpus` + `promotion.py`'s champion/challenger gate + the `pdm_artifacts` store
++ §14's admin page were already designed for. Deleting them and rebuilding equivalent
+machinery under a different name would just be redoing the same work.
+
+**Final architecture:**
+
+1. **Bootstrap (one-time, unchanged from §3.2 below):** the initial Tier 2 model is fit
+   directly from `train.csv` — six raw metrics, binary label, no timestamp — via a standalone
+   `training.py` fit path, *outside* `training_corpus`. `train.csv`'s shape doesn't fit that
+   table (no timestamp, no window structure), so it isn't forced through the corpus
+   pipeline; it's a separate, simpler seed step that produces the first deployed artifact.
+2. **All retraining after that goes through the existing upload pipeline, kept as originally
+   designed (§10.4/§14.8 in the base plan):** admin uploads a CSV from the dashboard →
+   Stage A (structural validation) → Stage B (column mapping, unit/range checks) → Stage C
+   (physics-aware quality gate, reusing `/process-window`) → materialized into
+   `training_corpus` → `retrain.py` fits a candidate → `promotion.py` compares it against the
+   current champion → a human approves/rejects/rolls back from the admin-only page (§14.7).
+   None of this is deleted; it is exactly §10.4/§10.5/§14 as originally specced, confirmed
+   back in scope.
+3. **HITL reviews predicted faults** (Tier 1/Tier 2 flags on live windows) — unchanged from
+   the base plan, and separate from the retraining pipeline above. Worth restating the open
+   point from earlier in this conversation: today only Tier 1 opens a `fault_events` row: if
+   you want Tier 2 to be able to independently flag something Tier 1's rules miss for human
+   review, that's still an explicit decision to make, not something this reversal changes.
+
+**What stays dropped from the original §1–§3 version:** the `export.csv` idea
+(`GET /api/pdm/fault-events/export.csv`, §3.5 below) — that existed to manufacture a
+retraining CSV out of `fault_events` for a flow that no longer exists now that retraining is
+admin-upload-driven from the dashboard, not derived from HITL review data. `fault_events`
+stays exactly what it already was: the HITL triage/confirm log, nothing more.
 
 ---
 
-## 1. Why the switch
+## 1. Why the switch (superseded — see §0)
 
 The project owner supplied a labeled training set (`data/train.csv` — actually delivered as
 an uploaded CSV, 15,627 rows): six numeric columns (`Engine_rpm`, `suctionPressure`,
@@ -79,19 +118,29 @@ than a human handing over another CSV.
 
 ## 3. What changes, and to what
 
-### 3.1 Delete (unused, superseded)
+### 3.1 Delete (unused, superseded) — **STALE, see §0. Nothing in this table is actually deleted.**
 
-| Current | Why it goes |
+`training_corpus`, `corpus.py`, `promotion.py`, `retrain.py`, `corpusMaterializationService.js`,
+`corpusModel.js`, `trainingRunModel.js`, `recordTrainingRun.js`, and the `training_runs` table
+are all **kept** — §0 explains why. `evaluation/episodes.py`'s walk-forward/episode split is
+the one piece that genuinely doesn't apply to admin-uploaded CSVs either (they're still
+window-mapped rows with a real timestamp per §10.4's Stage A/B, so a time-aware split *could*
+apply — but a plain stratified split is simpler and adequate for this project's scale; keep
+`check_evaluation_gate`'s minimum-episode-count purpose but decide at implementation time
+whether it's still walk-forward-shaped or just a row-count floor). Original table below, left
+for the reasoning trail only:
+
+| Current | Original (superseded) reasoning |
 |---|---|
-| `pdm/app/corpus.py` | Reads `training_corpus` from Postgres — no longer the training source. |
-| `pdm/app/promotion.py` | Champion/challenger gate over repeated retrains — nothing to arbitrate with a one-shot static model. |
-| `pdm/app/retrain.py` | Orchestrates gate → split → evaluate → promote against `training_corpus` — replaced by a one-off fit script (§3.2). |
-| `pdm/app/evaluation/episodes.py` (`walk_forward_split`, `check_evaluation_gate`) | Time-series/episode-aware splitting — meaningless on i.i.d. rows with no time axis. |
-| `server/database/migrations/005_training_corpus.sql` (table + `pdm_corpus_readonly` role) | Nothing populates or reads `training_corpus` anymore. New migration drops the table and role (see §3.3). |
-| `server/services/corpusMaterializationService.js` | Turns `fault_events` into `training_corpus` rows — no longer needed. |
-| `server/models/corpusModel.js` | Model layer for the now-removed table. |
-| `server/models/trainingRunModel.js` + the `training_runs` table (part of 005) | Tracked champion/challenger runs; no longer a concept. |
-| `server/scripts/recordTrainingRun.js` | Persisted `retrain.py`'s output into `training_runs` — nothing produces that output anymore. |
+| `pdm/app/corpus.py` | Reads `training_corpus` from Postgres — was going to be the training source. |
+| `pdm/app/promotion.py` | Champion/challenger gate — was going to have nothing to arbitrate with a one-shot static model. |
+| `pdm/app/retrain.py` | Orchestrates gate → split → evaluate → promote against `training_corpus`. |
+| `pdm/app/evaluation/episodes.py` (`walk_forward_split`, `check_evaluation_gate`) | Time-series/episode-aware splitting — reconsider split strategy per note above, don't delete outright. |
+| `server/database/migrations/005_training_corpus.sql` (table + `pdm_corpus_readonly` role) | Was going to be unused. |
+| `server/services/corpusMaterializationService.js` | Turns `fault_events` into `training_corpus` rows — **note:** under §0's final design this service's *source* is wrong (it materializes from `fault_events`, but retraining data now comes from admin CSV uploads via `externalUploadService.js`, which already materializes into `training_corpus` directly, per §10.4 D10). Confirm at implementation time whether `corpusMaterializationService.js` is actually exercised by anything in the kept design, or whether `externalUploadService.js`'s own materialization step already covers it and this file is dead code regardless. |
+| `server/models/corpusModel.js` | Model layer for `training_corpus` — kept. |
+| `server/models/trainingRunModel.js` + the `training_runs` table (part of 005) | Tracks champion/challenger runs — kept, this is exactly what §0's comparison step needs. |
+| `server/scripts/recordTrainingRun.js` | Persists `retrain.py`'s output into `training_runs` — kept. |
 | §14 in full (artifact store lifecycle, admin promotion endpoints, `ModelOpsPage`, `PDM_ADMIN_GROUP`, `tier2_predictions` monitoring table) | Built to supervise continuous retraining against a live corpus; doesn't apply to a static, manually-replaced artifact. If you later want visibility into what Tier 2 predicted, that's a much smaller, separate ask than the full admin lifecycle §14 specced — call it out explicitly if wanted. |
 
 ### 3.2 Add (the actual training path)
@@ -157,30 +206,24 @@ HITL-owned and untouched.
 - `db/init/03-create-pdm-corpus-readonly-role.sh` — remove; the role it creates no longer
   has anything to read.
 
-### 3.5 Future retraining: export `fault_events` to the same CSV shape
+### 3.5 ~~Future retraining: export `fault_events` to the same CSV shape~~ — DROPPED, see §0
 
-Confirmed workflow: the *next* training run also starts from a CSV — this time exported
-from `fault_events` rather than supplied externally — then goes through the exact same
-`training.py` fit path already built for `train.csv` (§3.2). Nothing in §3.2 needs to change
-for this; what's needed is the export itself, and making sure its shape matches:
+Superseded: retraining data comes from an admin-uploaded CSV via the dashboard (§10.4/§14.8's
+existing upload → map → validate → materialize flow), not from an export generated out of
+`fault_events`. `GET /api/pdm/fault-events/export.csv` is **not built** — `fault_events` stays
+the HITL triage log only, with no CSV-export responsibility. Left below for the reasoning
+trail, not as something to implement:
 
-- **`GET /api/pdm/fault-events/export.csv`** — new endpoint (the base plan's §3.3 deferred a
-  similar per-event `buffer.csv` idea; this is the corpus-level equivalent, now with an
-  actual use). Owned by `faultEventService.js`/`faultEventModel.js` like the other HITL
-  endpoints.
-- **Columns:** the six raw metric readings (`rpm`, `suctionPressure`, `dischargePressure`,
-  `flowRate`, `motorTemp`, `vibration`) — pulled from `raw_telemetry`/`processed_telemetry`
-  at `triggerWindowEnd`, **not** the 54-field `featureSnapshot` — so the export is
-  column-for-column identical to `train.csv` and `training.py` needs no branching per source.
-- **Label:** derived, not stored verbatim — `status = 'CONFIRMED'` → `1`,
-  `eventType = 'NEGATIVE_SAMPLE'` → `0`. `faultType` (THERMAL/CAVITATION/BEARING/OTHER) is
-  **not** exported — this model is binary fault/no-fault by design (§2), so a richer HITL
-  label gets collapsed to match, not carried through. Rows still `PENDING_REVIEW` or
-  `REJECTED` are excluded — only human-confirmed rows contribute positive examples, same
-  "don't fabricate confidence" posture the base plan already applies elsewhere.
-- This is why HITL review stays valuable despite the CSV-static-model shift: it's the thing
-  that keeps producing correctly-labeled positive examples for the *next* export, even though
-  today's model doesn't consume `fault_events` directly.
+<details>
+<summary>Original (superseded) design</summary>
+
+Starts from a CSV exported from `fault_events`, going through the same `training.py` fit path
+built for `train.csv`: six raw metric readings pulled at `triggerWindowEnd`, label derived
+from `status = 'CONFIRMED'` → `1` / `eventType = 'NEGATIVE_SAMPLE'` → `0`, `faultType` dropped
+to keep the label binary. Abandoned because retraining input is now an admin-uploaded CSV
+through the existing Stage A/B/C pipeline instead.
+
+</details>
 
 ### 3.6 Untouched
 
@@ -204,10 +247,12 @@ running the whole application, with one Docker container per component** (server
 pdm, node-red, db, etc.) inside that single CT, presumably on a shared Docker network. `pdm`
 stays its own container/service — nothing about how it's built or how Node reaches it over
 HTTP changes — only the "separate CT per service" framing in §1 is wrong and should be
-corrected there. The static-artifact approach in this plan is actually a better fit for that
-topology than the artifact-volume/hot-reload design in §14.3: a model file baked into the
-`pdm` image (or mounted read-only) at container build/start is simpler than a shared
-`pdm_artifacts` volume designed for a live promotion pipeline that no longer exists.
+corrected there.
+
+Per §0's reversal, §14.3's `pdm_artifacts` volume + hot-reload-on-promotion design is back in
+scope as-is — it's what holds both the champion and a candidate during comparison, which the
+bootstrap-only static-file approach can't support. The bootstrap artifact (from `train.csv`)
+is just the first thing that ever lands in that same volume, not a different mechanism.
 
 ---
 
@@ -216,13 +261,13 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
 1. **Where does `train.csv` live long-term?** Committed into the repo under `data/`, or
    supplied at deploy time as a mounted file/build arg? Committing it is simplest and matches
    "static, manually-replaced artifact"; keeping it out of git avoids repo bloat if it grows.
-2. ~~Retraining cadence going forward.~~ **Resolved:** future retraining data is also a
-   manually-produced CSV — exported from `fault_events` (see §3.6), not streamed
-   automatically. Process is "export CSV → run the same fit script (§3.2) → rebuild/redeploy
-   `pdm` with the new artifact" — no live retrain trigger, no admin lifecycle. This is the
-   reason `corpus_materialization`/`training_corpus`/promotion/retrain stay deleted rather
-   than kept dormant, per the earlier discussion: that machinery automates a DB→corpus
-   pipeline nothing here actually needs, since the export step is manual either way.
+2. ~~Retraining cadence going forward.~~ **Re-resolved, see §0 (supersedes the note below):**
+   retraining is admin-triggered from the dashboard — upload a CSV, it's mapped/validated
+   into `training_corpus`, `retrain.py` fits a candidate, `promotion.py` compares it to the
+   champion, and a human approves/rejects/rolls back from §14.7's admin page. Not a rebuild
+   of the `pdm` image, not export-driven. *(Superseded reasoning, kept for the record: an
+   earlier version of this answer assumed retraining meant "export a CSV from `fault_events`,
+   refit, rebuild the image" — see the struck-through §3.5 above for why that was dropped.)*
 3. **Class balance.** `train.csv` is ~63%/37% (1/0) — not extreme, but worth deciding whether
    `class_weight='balanced'` is used by default (§14.2.2's reasoning for it still applies).
 4. ~~Visibility into Tier 2 predictions.~~ **Resolved (§3.5):** persisted as
@@ -233,13 +278,18 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
 
 ## 6. Definition of done (for whenever this is implemented)
 
-- [ ] `training_corpus`, `training_runs` tables and `pdm_corpus_readonly` role dropped via migration
-- [ ] `corpus.py`, `promotion.py`, `retrain.py`, `evaluation/episodes.py`, `corpusMaterializationService.js`, `corpusModel.js`, `trainingRunModel.js`, `recordTrainingRun.js` removed
+**Bootstrap:**
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
 - [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
 - [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
 - [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
 - [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window (§3.4)
-- [ ] `GET /api/pdm/fault-events/export.csv` returns rows column-matched to `train.csv` (six raw metrics + derived 0/1 label from CONFIRMED/NEGATIVE_SAMPLE), consumable by `training.py` unchanged (§3.5)
-- [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged/unaffected by any of the above
+
+**Retraining (kept, per §0 — `training_corpus`/promotion/artifact-store/admin-page work items are §10.5/§14's existing ones, not repeated here):**
+- [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
+- [ ] `corpusMaterializationService.js`'s actual role confirmed against `externalUploadService.js`'s own materialization step (§3.1's open note) — dead code removed if redundant, kept if not
+- [ ] Split strategy for admin-uploaded training data decided (walk-forward vs. row-count floor — §3.1's open note)
+
+**Unaffected:**
+- [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
 - [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
