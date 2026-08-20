@@ -1695,9 +1695,14 @@ design:
    `featureSnapshot` becomes a training example, and a trained Tier 2 model classifying a new
    candidate against that learned signature *is* the auto-labeling. No separate mechanism is
    being proposed here — this is a restatement of the plan's existing Tier 2 purpose, called
-   out explicitly because it was raised as if it were a new requirement. Until Tier 2 is
-   trained (§1: not yet), every occurrence — repeat or not — still goes through HITL review
-   per (2); there is no nearer-term signature-matching shortcut in scope.
+   out explicitly because it was raised as if it were a new requirement. **§15 note — which
+   Tier 2 model matters here:** §15.1's bootstrap model (fit from `train.csv`) is binary
+   fault/no-fault; it cannot auto-label *which* fault type recurred, only that something looks
+   wrong again. Genuine "auto-labeled as `BEARING`/`SEAL_LEAK`/etc." auto-labeling needs a
+   `training_corpus`-trained model (§15.2) — which, per §15.4's corrected framing, is
+   multi-class from its very first run, not a distant future state. Until *that* exists, every
+   occurrence — repeat or not — still goes through HITL review per (2); the bootstrap model
+   alone does not close this gap, only flags that a window looks abnormal.
 
 **`dominantFaultType` (aggregation.js) and `fault_classifier.py`'s upstream-diagnosed-fault
 short-circuit are both affected, harmlessly.** Both already treat a missing/falsy `faultType`
@@ -1849,8 +1854,16 @@ each step tied to an existing module to reuse rather than reinvent:
    for evaluation against real `fault_events` data, consistent with §10.5's champion/challenger
    gate being defined in terms of a real held-out corpus, not this one.
 8. Wire the trained artifact into `pdm/app/model.py`'s `score()` stub as an augmenting, not
-   replacing, verdict — per §3.5's existing tiered design. This is the eventual integration
-   point already scaffolded there; nothing new needs to be invented for it.
+   replacing, verdict — per §3.5's existing tiered design. **§15 note: this line, read
+   literally, now reads like it authorizes deploying the synthetic-trained artifact to
+   production `score()`. It doesn't, and never did** — §14.10.3 (written later, authoritative)
+   is explicit that anything this corpus produces is "never inserted into `training_runs`,"
+   which is what `model.py` actually loads from (D26) — so a synthetic artifact structurally
+   cannot become champion. This step describes wiring within the **offline smoke-test
+   script** §14.10.3 specifies, exercising the same `score()` code path in isolation, not the
+   real deployed `pdm/app/model.py` module. The actual production wiring is §15.1 (bootstrap
+   from `train.csv`) and, later, §15.2's `training_corpus`-trained models — `data/pump-telemetry/`
+   is never an input to either.
 
 ### 13.5 Open items this does not resolve
 
