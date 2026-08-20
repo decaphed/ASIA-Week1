@@ -50,6 +50,14 @@ services:
       # pdm-corpus-readonly-role.sh). Never DATABASE_URL/pdm_app — that
       # role is backend's, not pdm's.
       PDM_CORPUS_DB_URL: postgresql://pdm_corpus_readonly:${PDM_CORPUS_READONLY_PASSWORD:?PDM_CORPUS_READONLY_PASSWORD must be set}@postgres:5432/pump_telemetry
+      # §15.1/D51 — the bootstrap artifact store, a small first slice of
+      # §14.3's full artifact-store design (hot reload / retention pruning
+      # NOT built here, out of this task's scope). training.py writes
+      # model.joblib + metadata.json here; model.py reads them back at
+      # import time. Same directory as the container path below so a local
+      # (non-Docker) `python -m pdm.app.training fit ...` run and the
+      # containerized service agree without extra config.
+      PDM_ARTIFACT_DIR: /app/artifacts
     # No ports: — internal only.
     volumes:
       # Shared physics RANGES (§11.6.1) — pdm/app/physics.py resolves this
@@ -58,6 +66,12 @@ services:
       # at the repo root, outside ./pdm's build context — bind-mount instead,
       # same convention as db/init and node-red/flow.json below.
       - ./pump-physics.yaml:/pump-physics.yaml:ro
+      # §15.1/D51 bootstrap artifact store — rw since this same container
+      # both fits (python -m pdm.app.training, run via `docker compose exec`)
+      # and serves (model.py, loaded once at import) the artifact; see
+      # training.py's module docstring for the full fit -> stamp-run-id
+      # handoff sequence.
+      - pdm_artifacts:/app/artifacts
     mem_limit: 512m
     cpus: 1.0
     cap_drop:
@@ -357,6 +371,7 @@ networks:
 
 volumes:
   pg_data:
+  pdm_artifacts:
   authentik_redis_data:
   authentik_media:
   authentik_certs:

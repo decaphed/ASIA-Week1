@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .. import rules
+from .. import model, rules
 from ..physics import load_ranges
 from ._stats import now_iso, parse_ts_ms
 from .aggregation import aggregate_window
@@ -220,5 +220,13 @@ def process_window(
         processed_record[f"{metric}Last"] = agg["stats"][metric]["last"]
 
     tier1_verdict = rules.evaluate(processed_record, thresholds)
+
+    # Tier 2 (§15.1/D51) augments, never replaces, the rule verdict — same
+    # merge main.py's /score handler already does; this is the live
+    # /process-window path's fix for §14.0 item 5's gap (it never called
+    # model.score() at all before this).
+    tier2_verdict = model.score(processed_record)
+    if tier2_verdict is not None:
+        tier1_verdict = {**tier1_verdict, **tier2_verdict}
 
     return {"processedRecord": processed_record, "tier1Verdict": tier1_verdict}

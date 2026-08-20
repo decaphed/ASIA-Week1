@@ -11,6 +11,10 @@ ip.txt
 # Local-only training data, not part of the tracked corpus
 data/train.csv
 
+# Tier 2 bootstrap artifact (§15.1/D51) — locally-fit model.joblib +
+# metadata.json, written by pdm/app/training.py, not source, not tracked.
+pdm/app/artifacts/
+
 # Traefik persistent access log directory (docker-compose.auth.yml). The
 # *.log entry further down already ignores file contents; this keeps the
 # directory itself present in a fresh clone.

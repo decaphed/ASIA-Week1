@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────
+# training_config.yaml — Tier 2 fitting hyperparameters (§15.1/D51),
+# mirroring thresholds.yaml's versioned-config pattern: bump `version` on
+# every retune so a given training_runs row can record which revision
+# produced it.
+#
+# modelFamily is config-gated, not a second code path (§14.2.2/D20,
+# unchanged): "random_forest" is the default; "xgboost" is only used when
+# PDM_MODEL_FAMILY=xgboost is set in the environment, which overrides this
+# file's modelFamily value — see training.py::fit_model().
+# ─────────────────────────────────────────────────────────────────────────
+
+version: "1"
+
+modelFamily: random_forest
+
+testSize: 0.2
+randomState: 42
+
+randomForest:
+  nEstimators: 200
+  maxDepth: 12
+  minSamplesLeaf: 2
+  classWeight: balanced
+
+xgboost:
+  nEstimators: 200
+  maxDepth: 6
+  learningRate: 0.1

@@ -58,6 +58,15 @@ class ScoreResponse(BaseModel):
     # way to learn which thresholds.yaml revision was active for this verdict.
     thresholdsVersion: str
 
+    # Tier 2 fields (§14.3.4/D27, §15.1/D56) — all Optional[...] = None so
+    # every existing consumer/test is unaffected when no model is loaded.
+    # Field naming is deliberately generic, not bootstrap-specific: a later
+    # multi-class candidate's tier2Label values slot into the same field.
+    tier2Label: Optional[Literal["NORMAL", "FAULT"]] = None
+    tier2Probability: Optional[float] = None
+    tier2ModelRunId: Optional[int] = None
+    tier2ArtifactSha256: Optional[str] = None
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # POST /process-window (§11.6.2) — request/response models. WindowSampleIn
