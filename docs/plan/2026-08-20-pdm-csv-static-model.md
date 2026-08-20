@@ -121,8 +121,13 @@ than a human handing over another CSV.
 - **`pdm/app/model.py`** — no longer a permanent stub. Loads `model.joblib` once at module
   import (same "load once at startup" pattern `thresholds.yaml` already uses), and
   `score(record)` builds the 6-value vector via `features.to_vector()` and returns
-  `{"tier2Flagged": bool, "tier2Confidence": float}` (or `None` if the artifact failed to
-  load — Tier 1 stays unaffected, same fallback posture as today).
+  `{"tier2FaultStatus": 0 | 1, "tier2Confidence": float}` (or `None` if the artifact failed
+  to load — Tier 1 stays unaffected, same fallback posture as today).
+  **`tier2FaultStatus` is an integer 0/1, not a boolean** — deliberately matching
+  `train.csv`'s own `Engine_Condition` encoding (0 = normal, 1 = fault), so there's no
+  boolean↔0/1 translation between what the model was trained on, what it emits, and what
+  gets persisted (§3.5 below). `tier2Confidence` is the classifier's predicted probability
+  for the predicted class, kept separate from `tier2FaultStatus` rather than folded into it.
 - **`pdm/app/schemas.py`: `ScoreResponse`** gains the two Tier 2 fields above as optional —
   same fix §14.0 item 6 already identified as mandatory (FastAPI's `response_model` silently
   drops undeclared keys), just against a smaller field set than §14 specced.
@@ -130,6 +135,19 @@ than a human handing over another CSV.
   same way `/score` does — §14.0 item 5's finding (the live path stopped calling `/score` and
   never invokes `model.score()` at all) still applies verbatim and must be fixed here,
   regardless of which Tier 2 training approach is used.
+
+### 3.5 Persisting Tier 2's verdict (resolves §5 open question 4)
+
+Confirmed: persist Tier 2's prediction, not just serve it in the HTTP response. Add a
+`tier2FaultStatus INTEGER` column (values `0`/`1`, nullable — null when no artifact is
+loaded or a row's feature vector failed `to_vector()`) plus `tier2Confidence REAL` to
+`fault_events` via a new migration, written by `pdmService.js` alongside the existing
+Tier 1 fields on every scored window — not just on windows Tier 1 already flagged, since
+Tier 2 runs independently and its 0/1 read is a distinct signal worth keeping even when
+Tier 1 stays quiet. This is a plain integer column, not a new `eventType` or `status`
+value — it does not interact with `fault_events.status`'s existing
+`PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A` lifecycle (§3.3 of the base plan), which stays
+HITL-owned and untouched.
 
 ### 3.3 Migration housekeeping
 
@@ -179,9 +197,9 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
    Either is far simpler than §14's admin lifecycle — just needs a decision.
 3. **Class balance.** `train.csv` is ~63%/37% (1/0) — not extreme, but worth deciding whether
    `class_weight='balanced'` is used by default (§14.2.2's reasoning for it still applies).
-4. **Visibility into Tier 2 predictions.** §14.6's full monitoring page is out of scope per
-   §3.1, but "log/expose what Tier 2 said per window" is a much smaller ask if wanted at all
-   — flag explicitly if so, otherwise this plan assumes none.
+4. ~~Visibility into Tier 2 predictions.~~ **Resolved (§3.5):** persisted as
+   `fault_events.tier2FaultStatus` (0/1) + `tier2Confidence`, written on every scored window.
+   §14.6's full monitoring *page* is still out of scope — this is storage only, no UI.
 
 ---
 
@@ -192,6 +210,7 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
 - [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
 - [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
-- [ ] `ScoreResponse` schema extended with the two Tier 2 fields, verified they survive `response_model` filtering
-- [ ] Tier 1 verdict is unchanged/unaffected by any of the above
+- [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
+- [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window (§3.5)
+- [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged/unaffected by any of the above
 - [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
