@@ -136,7 +136,7 @@ than a human handing over another CSV.
   never invokes `model.score()` at all) still applies verbatim and must be fixed here,
   regardless of which Tier 2 training approach is used.
 
-### 3.5 Persisting Tier 2's verdict (resolves §5 open question 4)
+### 3.4 Persisting Tier 2's verdict (resolves §5 open question 4)
 
 Confirmed: persist Tier 2's prediction, not just serve it in the HTTP response. Add a
 `tier2FaultStatus INTEGER` column (values `0`/`1`, nullable — null when no artifact is
@@ -157,7 +157,32 @@ HITL-owned and untouched.
 - `db/init/03-create-pdm-corpus-readonly-role.sh` — remove; the role it creates no longer
   has anything to read.
 
-### 3.4 Untouched
+### 3.5 Future retraining: export `fault_events` to the same CSV shape
+
+Confirmed workflow: the *next* training run also starts from a CSV — this time exported
+from `fault_events` rather than supplied externally — then goes through the exact same
+`training.py` fit path already built for `train.csv` (§3.2). Nothing in §3.2 needs to change
+for this; what's needed is the export itself, and making sure its shape matches:
+
+- **`GET /api/pdm/fault-events/export.csv`** — new endpoint (the base plan's §3.3 deferred a
+  similar per-event `buffer.csv` idea; this is the corpus-level equivalent, now with an
+  actual use). Owned by `faultEventService.js`/`faultEventModel.js` like the other HITL
+  endpoints.
+- **Columns:** the six raw metric readings (`rpm`, `suctionPressure`, `dischargePressure`,
+  `flowRate`, `motorTemp`, `vibration`) — pulled from `raw_telemetry`/`processed_telemetry`
+  at `triggerWindowEnd`, **not** the 54-field `featureSnapshot` — so the export is
+  column-for-column identical to `train.csv` and `training.py` needs no branching per source.
+- **Label:** derived, not stored verbatim — `status = 'CONFIRMED'` → `1`,
+  `eventType = 'NEGATIVE_SAMPLE'` → `0`. `faultType` (THERMAL/CAVITATION/BEARING/OTHER) is
+  **not** exported — this model is binary fault/no-fault by design (§2), so a richer HITL
+  label gets collapsed to match, not carried through. Rows still `PENDING_REVIEW` or
+  `REJECTED` are excluded — only human-confirmed rows contribute positive examples, same
+  "don't fabricate confidence" posture the base plan already applies elsewhere.
+- This is why HITL review stays valuable despite the CSV-static-model shift: it's the thing
+  that keeps producing correctly-labeled positive examples for the *next* export, even though
+  today's model doesn't consume `fault_events` directly.
+
+### 3.6 Untouched
 
 - Tier 1 rule engine (`rules.py`, `thresholds.yaml`), `fault_events`, HITL review endpoints,
   `pdmService.js`, the fire-and-forget POST contract, `pump-physics.yaml` — none of this
@@ -191,10 +216,13 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
 1. **Where does `train.csv` live long-term?** Committed into the repo under `data/`, or
    supplied at deploy time as a mounted file/build arg? Committing it is simplest and matches
    "static, manually-replaced artifact"; keeping it out of git avoids repo bloat if it grows.
-2. **Retraining cadence going forward.** If a new/larger CSV shows up later, is the process
-   "rebuild the `pdm` image with the new file and redeploy," or should there be a minimal
-   manual trigger (e.g. a CLI script an operator runs by hand) that doesn't require a rebuild?
-   Either is far simpler than §14's admin lifecycle — just needs a decision.
+2. ~~Retraining cadence going forward.~~ **Resolved:** future retraining data is also a
+   manually-produced CSV — exported from `fault_events` (see §3.6), not streamed
+   automatically. Process is "export CSV → run the same fit script (§3.2) → rebuild/redeploy
+   `pdm` with the new artifact" — no live retrain trigger, no admin lifecycle. This is the
+   reason `corpus_materialization`/`training_corpus`/promotion/retrain stay deleted rather
+   than kept dormant, per the earlier discussion: that machinery automates a DB→corpus
+   pipeline nothing here actually needs, since the export step is manual either way.
 3. **Class balance.** `train.csv` is ~63%/37% (1/0) — not extreme, but worth deciding whether
    `class_weight='balanced'` is used by default (§14.2.2's reasoning for it still applies).
 4. ~~Visibility into Tier 2 predictions.~~ **Resolved (§3.5):** persisted as
@@ -211,6 +239,7 @@ topology than the artifact-volume/hot-reload design in §14.3: a model file bake
 - [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
 - [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
 - [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
-- [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window (§3.5)
+- [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window (§3.4)
+- [ ] `GET /api/pdm/fault-events/export.csv` returns rows column-matched to `train.csv` (six raw metrics + derived 0/1 label from CONFIRMED/NEGATIVE_SAMPLE), consumable by `training.py` unchanged (§3.5)
 - [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged/unaffected by any of the above
 - [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
