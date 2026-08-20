@@ -8,8 +8,6 @@ dist/
 # Local network recon output (ip addr, etc.) — must never be committed
 ip.txt
 
-# Local-only training data, not part of the tracked corpus
-data/train.csv
 
 # Tier 2 bootstrap artifact (§15.1/D51) — locally-fit model.joblib +
 # metadata.json, written by pdm/app/training.py, not source, not tracked.
