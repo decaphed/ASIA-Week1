@@ -98,7 +98,13 @@ export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
 
   const extendedId = await model.extendOpenEvent({
     triggerWindowEnd,
-    triggeredRules: triggeredRulesJson,
+    // Raw array, not triggeredRulesJson — extendOpenEvent's own SQL call
+    // does JSON.stringify(triggeredRules) internally; passing the already-
+    // stringified string here double-encodes it into a jsonb *string*
+    // scalar (e.g. '"[]"' instead of '[]'), which jsonb_array_length/
+    // jsonb_array_elements_text then reject with "cannot get array length
+    // of a scalar" — breaks coalescing for every flag, Tier 1 or Tier 2.
+    triggeredRules,
     lookbackBound: bound,
     predictionSource,
     tier2FaultStatus,
