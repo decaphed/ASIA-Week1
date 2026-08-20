@@ -30,10 +30,10 @@ export async function insertFaultEvent(record) {
        "triggeredRules", "confidence", "featureSnapshot", "thresholdsVersion",
        "faultStart", "faultEnd", "bufferStart", "bufferEnd", "status",
        "faultType", "rootCause", resolution, "reviewedBy", "reviewedAt", notes,
-       "autoLabeled", "autoLabeledFromEventId")
+       "autoLabeled", "autoLabeledFromEventId", "predictionSource", "tier2FaultStatus", "tier2Confidence")
      VALUES
       ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-       $16, $17, $18, $19, $20, $21, $22, $23)
+       $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
      RETURNING id`,
     [
       record.processedTelemetryId, record.eventType, record.sourceType ?? 'TIER1_FLAGGED', record.detectedAt, record.triggerWindowEnd, record.lastSeenWindowEnd,
@@ -42,6 +42,7 @@ export async function insertFaultEvent(record) {
       record.faultType ?? null, record.rootCause ?? null, record.resolution ?? null,
       record.reviewedBy ?? null, record.reviewedAt ?? null, record.notes ?? null,
       record.autoLabeled ?? false, record.autoLabeledFromEventId ?? null,
+      record.predictionSource ?? 'TIER1_RULE', record.tier2FaultStatus ?? null, record.tier2Confidence ?? null,
     ],
   );
   return { lastInsertRowid: result.rows[0]?.id };
@@ -89,28 +90,62 @@ export async function findOverlappingFaultEvents(faultStart, faultEnd) {
  * query); it does not repair the malformed data itself — a one-time
  * backfill/cleanup of those specific rows is a separate follow-up that
  * needs direct DB access to identify and fix.
+ *
+ * §15.4/D54's Tier-2-only path needs a SECOND matching branch: a
+ * Tier-2-only flag has triggeredRules = [] (Tier 1 never fired), so the
+ * rule-intersection EXISTS above is always empty for it — every window a
+ * Tier-2-only fault persists would otherwise open a brand-new row instead
+ * of coalescing (exactly the duplicate-spam §3.3.2 exists to prevent).
+ * When the INCOMING event has no triggered rules, match instead against an
+ * open row that ALSO has no triggered rules AND was itself a Tier-2-only
+ * (or already-BOTH) detection — never coalesces a bare Tier-2 flag into an
+ * unrelated Tier-1 row that merely has an empty rules array by accident
+ * (there isn't one today, but the predictionSource check keeps it that way
+ * even if one existed). On a match, predictionSource is promoted to
+ * 'BOTH' only if it actually changes (a same-source extend leaves it
+ * alone), and tier2FaultStatus/tier2Confidence are refreshed to the
+ * incoming window's read rather than left stale at flag-open time.
  * @returns the extended row's id, or undefined if no open row matched.
  */
-export async function extendOpenEvent({ triggerWindowEnd, triggeredRules, lookbackBound }) {
+export async function extendOpenEvent({
+  triggerWindowEnd, triggeredRules, lookbackBound, predictionSource, tier2FaultStatus, tier2Confidence,
+}) {
   const result = await pool.query(
     `UPDATE fault_events
      SET "faultEnd" = $1,
          "triggerWindowEnd" = $1,
-         "lastSeenWindowEnd" = $1
+         "lastSeenWindowEnd" = $1,
+         "predictionSource" = CASE WHEN "predictionSource" = $4 THEN "predictionSource" ELSE 'BOTH' END,
+         "tier2FaultStatus" = COALESCE($5, "tier2FaultStatus"),
+         "tier2Confidence" = COALESCE($6, "tier2Confidence")
      WHERE id = (
        SELECT fe.id FROM fault_events fe
        WHERE fe.status = 'PENDING_REVIEW'
          AND fe."lastSeenWindowEnd" >= $2
-         AND jsonb_typeof(fe."triggeredRules") = 'array'
-         AND EXISTS (
-           SELECT 1 FROM jsonb_array_elements_text(fe."triggeredRules") existing
-           JOIN jsonb_array_elements_text($3::jsonb) incoming ON existing = incoming
+         AND (
+           (
+             jsonb_typeof(fe."triggeredRules") = 'array'
+             AND jsonb_array_length($3::jsonb) > 0
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements_text(fe."triggeredRules") existing
+               JOIN jsonb_array_elements_text($3::jsonb) incoming ON existing = incoming
+             )
+           )
+           OR (
+             jsonb_array_length($3::jsonb) = 0
+             AND (fe."triggeredRules" IS NULL OR jsonb_typeof(fe."triggeredRules") != 'array' OR jsonb_array_length(fe."triggeredRules") = 0)
+             AND fe."predictionSource" IN ('TIER2_MODEL', 'BOTH')
+             AND $4 IN ('TIER2_MODEL', 'BOTH')
+           )
          )
        ORDER BY fe."lastSeenWindowEnd" DESC
        LIMIT 1
      )
      RETURNING id`,
-    [triggerWindowEnd, lookbackBound, JSON.stringify(triggeredRules)],
+    [
+      triggerWindowEnd, lookbackBound, JSON.stringify(triggeredRules),
+      predictionSource ?? 'TIER1_RULE', tier2FaultStatus ?? null, tier2Confidence ?? null,
+    ],
   );
   return result.rows[0]?.id;
 }

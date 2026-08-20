@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as faultEventService from './faultEventService.js';
+import * as tier2PredictionModel from '../models/tier2PredictionModel.js';
 import { logger } from '../utils/logger.js';
 
 const PDM_SERVICE_URL = process.env.PDM_SERVICE_URL || 'http://localhost:8000';
@@ -60,7 +61,28 @@ export function onNewProcessedRecord(data, processedTelemetryId, precomputedVerd
 
   verdictPromise
     .then(async (verdict) => {
-      if (verdict.flagged) {
+      // §14.6.2/D36, §15.3's correction — the every-window Tier 2 log is
+      // independent of whether this window ever gets a fault_events row
+      // (most don't). Own try/catch: must never affect ingestion, same
+      // discipline as recordNegativeSample below.
+      if (verdict.tier2Label != null) {
+        try {
+          await tier2PredictionModel.insertPrediction({
+            processedTelemetryId,
+            predictedLabel: verdict.tier2Label,
+            probability: verdict.tier2Probability,
+            modelRunId: verdict.tier2ModelRunId,
+            artifactSha256: verdict.tier2ArtifactSha256,
+          });
+        } catch (err) {
+          logger.error(`tier2PredictionModel.insertPrediction failed: ${err.stack || err.message}`);
+        }
+      }
+
+      // §15.4/D54 — Tier 2 gets its own review path: a Tier-2-only flag
+      // (Tier 1 silent) must reach faultEventService too, not just a Tier 1
+      // flag as before.
+      if (verdict.flagged || verdict.tier2Label === 'FAULT') {
         // recordNegativeSample already catches its own errors internally
         // (§3.3.1: must never affect ingestion); recordFlaggedEvent does
         // not, so an await + catch here is required to avoid an unhandled

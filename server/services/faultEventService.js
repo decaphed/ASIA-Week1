@@ -57,13 +57,31 @@ async function findAutoLabelSource(triggeredRules) {
 }
 
 /**
- * Record a Tier 1 flag: extend an already-open matching event (§3.3.2), or
- * insert a new row if none is open — CONFIRMED and auto-labeled if this
- * exact rule signature has been human-reviewed before, otherwise
- * PENDING_REVIEW as usual.
+ * §15.4/D54: which tier(s) actually flagged this window — verdict.flagged
+ * is Tier 1's own boolean; verdict.tier2Label === 'FAULT' is Tier 2's.
+ * Callers only reach recordFlaggedEvent when at least one is true
+ * (pdmService.js's gate), so exactly one of TIER1_RULE/TIER2_MODEL/BOTH
+ * always applies here — never a silent default.
+ */
+function derivePredictionSource(verdict) {
+  const tier1 = !!verdict.flagged;
+  const tier2 = verdict.tier2Label === 'FAULT';
+  if (tier1 && tier2) return 'BOTH';
+  if (tier2) return 'TIER2_MODEL';
+  return 'TIER1_RULE';
+}
+
+/**
+ * Record a flag — Tier 1, Tier 2, or both (§15.4/D54): extend an already-
+ * open matching event (§3.3.2, extended to also coalesce Tier-2-only
+ * detections — see faultEventModel.js::extendOpenEvent), or insert a new
+ * row if none is open — CONFIRMED and auto-labeled if this exact rule
+ * signature has been human-reviewed before, otherwise PENDING_REVIEW as
+ * usual.
  * @param data flat processedRecord (same shape POSTed to pdm/'s /score)
  * @param processedTelemetryId the triggering window's processed_telemetry.id
- * @param verdict { confidence, triggeredRules, thresholdsVersion }
+ * @param verdict { confidence, triggeredRules, thresholdsVersion,
+ *   flagged, tier2Label?, tier2Probability? }
  */
 export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
   const triggerWindowEnd = data.windowEnd;
@@ -71,10 +89,20 @@ export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
   const triggeredRulesJson = JSON.stringify(triggeredRules);
   const bound = lookbackBound(triggerWindowEnd);
 
+  const predictionSource = derivePredictionSource(verdict);
+  // §15.1/D56, persistence-layer derivation (§15.3) — NOT the model's own
+  // wire shape (tier2Label/tier2Probability): 0/1 + a bare confidence
+  // number, exactly what a HITL reviewer sees next to this specific event.
+  const tier2FaultStatus = verdict.tier2Label != null ? (verdict.tier2Label === 'FAULT' ? 1 : 0) : null;
+  const tier2Confidence = verdict.tier2Probability ?? null;
+
   const extendedId = await model.extendOpenEvent({
     triggerWindowEnd,
     triggeredRules: triggeredRulesJson,
     lookbackBound: bound,
+    predictionSource,
+    tier2FaultStatus,
+    tier2Confidence,
   });
   if (extendedId) {
     return { id: extendedId, coalesced: true, autoLabeled: false };
@@ -101,6 +129,9 @@ export async function recordFlaggedEvent(data, processedTelemetryId, verdict) {
     bufferStart,
     bufferEnd: null,
     status: 'PENDING_REVIEW',
+    predictionSource,
+    tier2FaultStatus,
+    tier2Confidence,
   };
 
   if (autoLabelSource) {
