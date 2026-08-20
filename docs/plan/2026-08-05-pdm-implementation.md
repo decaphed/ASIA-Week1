@@ -2015,8 +2015,12 @@ bootstrap"; not stale, just no longer describing the deployed end state once §1
   exercising machinery, not for producing a model whose numbers get reported as evidence. It is
   not an entry point into `training_corpus` and this plan does not add one. It *is* usable to
   smoke-test §14.2's fitting code offline (§14.10.3).
-- **No Tier 2 replacing Tier 1.** Tier 2 augments, never replaces, per §3.5. Tier 1 remains
-  the sole flagging authority; Tier 2 contributes a predicted label and confidence alongside it.
+- **No Tier 2 replacing Tier 1 for the scoring verdict.** Tier 2 augments, never replaces,
+  per §3.5 — `tier1Verdict` (§14.3.4) stays authoritative for the `/process-window` response;
+  Tier 2 contributes a predicted label and confidence alongside it, never overriding it. **This
+  is scoped to scoring, not to HITL review:** §15.4/D54 later gives Tier 2 its own
+  `fault_events` review path, independent of Tier 1's flags — "sole flagging authority" as
+  originally written here doesn't survive that decision unqualified; see §15.4.
 - **No scheduler/cron for retraining.** Admin-triggered only. A cadence can be added later once
   there's evidence about how often the corpus actually grows.
 - **No multi-pump support**, per §1.
@@ -2902,10 +2906,10 @@ assigned that corpus.
 ## 14.12 Definition of done
 
 **Fitting and artifacts**
-- [ ] `features.py` derives a 54-feature order from `pump-physics.yaml`; a missing/non-numeric key raises; the order used at fit time is persisted in the artifact and verified at load
+- [ ] `features.py` derives a 54-feature order from `pump-physics.yaml` for `training_corpus`-trained models; a missing/non-numeric key raises; the order used at fit time is persisted in the artifact and verified at load. The bootstrap model (§15.1) uses its own separate 6-feature order in the same file — both coexist by design (§14.2.1's note), not a conflict
 - [ ] `training.py` fits a Random Forest by default, XGBoost via `PDM_MODEL_FAMILY`, hyperparameters from a versioned `training_config.yaml`, and records `modelFamily`/`trainingConfigVersion`/`seed` on the run
 - [ ] Two fits over the same corpus manifest and config version produce byte-identical artifacts
-- [ ] No class is dropped for thin support; `promotion.py` is unmodified; `evaluate_candidate`'s `predict_fn` contract is unchanged
+- [ ] No class is dropped for thin support; `promotion.py`'s only change is D55's taxonomy-mismatch branch (§15.5) — no other modification; `evaluate_candidate`'s `predict_fn` contract is unchanged
 - [ ] Artifacts land on the `pdm_artifacts` volume under `<trainedAt>-<corpusHash>/`, with `metadata.json` + `SHA256SUM`; `training_runs.artifactPath` holds the path **relative** to `PDM_ARTIFACT_ROOT`
 - [ ] The artifact is written before the promotion decision, so a non-recommended candidate is still inspectable and still approvable
 - [ ] The pruner never removes the champion or any ever-promoted run; orphaned artifacts are swept
@@ -2914,9 +2918,9 @@ assigned that corpus.
 **Load and serving**
 - [ ] `pdm` resolves its champion from `training_runs` at startup and loads the artifact; every failure mode leaves it unloaded with a specific logged reason, `score()` returning `None`, and `/health` ok
 - [ ] Tier 2 augmentation happens in `/process-window` (the live path) as well as `/score`, through one shared `augment()`
-- [ ] `ScoreResponse` declares the Tier 2 fields; a no-model response is byte-identical to today's
+- [ ] `ScoreResponse` declares the Tier 2 fields (`tier2Label`/`tier2Probability`/`tier2ModelRunId`/`tier2ArtifactSha256`, per §15.1/D56 — one shape for both the bootstrap and any later corpus-trained model); a no-model response is byte-identical to today's
 - [ ] `POST /model/reload` swaps atomically; `GET /model/status` reports loaded run id, checksum and last error
-- [ ] Tier 1 remains the sole flagging authority; Tier 2 only adds a label + probability (§3.5)
+- [ ] Tier 1 remains the sole authority for the `/process-window` scoring verdict; Tier 2 only adds a label + probability there (§3.5) — **but** Tier 2 can independently open its own `fault_events` review row per §15.4/D54, which is a separate, HITL-facing concept from scoring authority
 
 **Promotion**
 - [ ] No code path promotes a run without an explicit admin action
@@ -3185,15 +3189,36 @@ through that pipeline would mean fabricating 48 features that were never collect
   `metadata.json` to the same artifact store §14.3 already specced (`pdm_artifacts` volume,
   `training_runs.artifactPath`) — this is just the *first* artifact that ever lands there,
   not a different storage mechanism.
-- `pdm/app/model.py` stops being a permanent stub: loads the artifact once at startup (mirrors
+- **D56 — `score()`'s wire format is §14.3.4/D27's existing generic naming, not a
+  bootstrap-specific one.** This section's original text had `model.py::score()` return
+  `{"tier2FaultStatus": 0 | 1, "tier2Confidence": float}` — a field pair invented independently
+  of, and incompatible with, what §14.3.4/D27 already specced for `ScoreResponse`
+  (`tier2Label`, `tier2Probability`, `tier2ModelRunId`, `tier2ArtifactSha256`) and what
+  §14.6.2/D36's `tier2_predictions` table already expects to persist (`predictedLabel`,
+  `probability`, plus per-prediction model attribution). Reusing D27's naming instead —
+  corrected here — means: (a) no second, incompatible `ScoreResponse` shape to reconcile
+  later, (b) the bootstrap model's predictions carry `tier2ModelRunId`/`tier2ArtifactSha256`
+  from day one, which `tier2_predictions` needs to attribute a prediction to a specific run and
+  which the original text omitted entirely, and (c) it composes with D55: `decide_promotion()`
+  already compares label *strings*, and a later multi-class candidate's `tier2Label` values
+  slot into the exact same field the bootstrap model already populates, no schema change at the
+  transition. `pdm/app/model.py` loads the artifact once at startup (mirrors
   `thresholds.yaml`'s load-once pattern) and `score(record)` returns
-  `{"tier2FaultStatus": 0 | 1, "tier2Confidence": float}` — **an integer 0/1, not a boolean**,
-  deliberately matching `train.csv`'s own `Engine_Condition` encoding end to end, so there's
-  no boolean↔0/1 translation anywhere between training, serving, and persistence (§15.3).
-  `None` if the artifact failed to load — Tier 1 unaffected, same fallback posture as always.
-- `ScoreResponse` (`schemas.py`) gains these two fields as optional — the same fix §14.0
+  `{"tier2Label": "NORMAL" | "FAULT", "tier2Probability": float, "tier2ModelRunId": int,
+  "tier2ArtifactSha256": str}` — `tier2Label` values match the `"NORMAL"`/`"FAULT"` naming D55
+  already settled on for this model's training-time labels. `None` if the artifact failed to
+  load — Tier 1 unaffected, same fallback posture as always.
+- **The `fault_events.tier2FaultStatus`/`tier2Confidence` integer columns (§15.3, per the
+  project owner's explicit request to store fault status as 0/1) are a persistence-layer
+  derivation, not the wire format:** `pdmService.js` sets `tier2FaultStatus = tier2Label ===
+  'NORMAL' ? 0 : 1` and `tier2Confidence = tier2Probability` when writing/extending a
+  `fault_events` row. This satisfies the 0/1 requirement exactly where it was asked for — a
+  human reviewing a specific event — without forcing the generic wire/monitoring layer into a
+  binary-only shape that the planned multi-class transition would immediately outgrow.
+- `ScoreResponse` (`schemas.py`) gains these four fields as optional — the same fix §14.0
   item 6 already flagged as mandatory (FastAPI's `response_model` silently drops undeclared
-  keys), just against this smaller field set rather than the full 54-feature one.
+  keys). This is exactly §14.3.4/D27's field list; no separate schema change for the bootstrap
+  model.
 - `preprocessing/pipeline.py`'s `/process-window` path must actually call `model.score()` —
   §14.0 item 5's finding (the live path stopped calling `/score` and never invokes
   `model.score()` at all) still applies verbatim and must be fixed regardless of training
@@ -3247,10 +3272,11 @@ would silently drop most of it, exactly the failure mode D36 was written to avoi
   `processedTelemetryId`. This is what monitoring (§14.6.1) reads from.
 - **On a `fault_events` row specifically** (one exists — Tier 1 flagged it, Tier 2 flagged it
   per §15.4, or it's a negative sample): `tier2FaultStatus INTEGER` (0/1, nullable) and
-  `tier2Confidence REAL` are still added as columns, populated from the same verdict at the
-  moment that row is written/extended — this is the value a HITL reviewer sees next to a
-  specific event, not a substitute for the complete log. No interaction with
-  `fault_events.status`'s `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A` lifecycle (§3.3), which
+  `tier2Confidence REAL` are still added as columns, **derived from `tier2Label`/
+  `tier2Probability` per §15.1/D56** (not the model's own output shape) at the moment that row
+  is written/extended — this is the value a HITL reviewer sees next to a specific event, not a
+  substitute for the complete log. No interaction with `fault_events.status`'s
+  `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A` lifecycle (§3.3), which
   stays HITL-owned and untouched by this.
 
 ### 15.4 D54 — Tier 2 gets its own Predicted Faults review queue
@@ -3371,8 +3397,9 @@ def decide_promotion(candidate, champion, *, min_support_per_class=..., margin_f
 - [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
 - [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
 - [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
-- [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
-- [ ] `tier2_predictions` (§14.6.2) is the every-window Tier 2 log; `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated only on rows that already exist (§15.3's correction — not "every scored window")
+- [ ] `pdm/app/model.py::score()` returns `tier2Label`/`tier2Probability`/`tier2ModelRunId`/`tier2ArtifactSha256` — §14.3.4/D27's existing field names, not a bootstrap-specific pair (§15.1/D56)
+- [ ] `ScoreResponse` schema extended with those four fields, verified they survive `response_model` filtering
+- [ ] `tier2_predictions` (§14.6.2) is the every-window Tier 2 log, populated from `tier2Label`/`tier2Probability` directly; `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration, derived (`'FAULT' → 1`, `'NORMAL' → 0`) and populated only on rows that already exist (§15.3's correction — not "every scored window")
 
 **Retraining (§10.5/§14's existing work items apply; not repeated here):**
 - [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
