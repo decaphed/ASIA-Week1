@@ -8,6 +8,7 @@ import { pts, line, bandPath, range } from '../utils/geometry.js';
 import {
   eventId, eventTitle, metricsLabel, modelLine, severityOf, sevPill,
   confidenceLabel, shortStamp, filterEvents, RECENCY_OPTIONS, DEFAULT_FILTERS,
+  sourceLabel, sourcePill,
 } from '../utils/faultEvents.js';
 
 const X0 = 52;
@@ -386,7 +387,7 @@ function ForecastTab({ forecast, points, bucketSeconds, metricKey, setMetricKey,
 // Shared by ReviewTab and DetectTab — same three axes filter either list.
 function FilterBar({ filters, setFilters, resultCount, totalCount }) {
   const selectStyle = { border: '1px solid #d3dbe2', borderRadius: 6, padding: '6px 10px', fontSize: 12.5, background: '#ffffff', color: '#1a2530' };
-  const isDefault = filters.severity === 'ALL' && filters.metric === 'ALL' && filters.recency === 'all';
+  const isDefault = filters.severity === 'ALL' && filters.metric === 'ALL' && filters.recency === 'all' && (filters.escalated ?? 'ALL') === 'ALL';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
       <select
@@ -415,6 +416,17 @@ function FilterBar({ filters, setFilters, resultCount, totalCount }) {
         style={selectStyle}
       >
         {RECENCY_OPTIONS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+      </select>
+      {/* §15.4/D54 — "Escalated" is a dashboard-level grouping of
+          status=CONFIRMED rows, not a new backend state. */}
+      <select
+        aria-label="Filter by escalation"
+        value={filters.escalated ?? 'ALL'}
+        onChange={(e) => setFilters((f) => ({ ...f, escalated: e.target.value }))}
+        style={selectStyle}
+      >
+        <option value="ALL">All statuses</option>
+        <option value="ESCALATED">Escalated only</option>
       </select>
       {!isDefault && (
         <button
@@ -517,6 +529,9 @@ function DetectTab({ queue, audit, stats }) {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 99, padding: '3px 10px', background: pill.bg, color: pill.color, border: `1px solid ${pill.border}` }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: pill.color }} />{pill.label}
+                </span>
+                <span style={{ fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: sourcePill(d).bg, color: sourcePill(d).color }}>
+                  {sourceLabel(d)}
                 </span>
                 {d.autoLabeled && (
                   <span
@@ -634,8 +649,11 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
             </span>
             <span style={{ color: '#5f6f7e', fontSize: 12.5 }}>{metricsLabel(q)}</span>
             <span style={{ color: '#5f6f7e', fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{shortStamp(q.detectedAt)}</span>
-            <span>
+            <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '3px 9px', background: sp.bg, color: sp.color }}>{sev}</span>
+              <span style={{ fontSize: 10.5, fontWeight: 600, borderRadius: 99, padding: '3px 9px', background: sourcePill(q).bg, color: sourcePill(q).color }}>
+                {sourceLabel(q)}
+              </span>
             </span>
             <span style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
