@@ -2482,6 +2482,12 @@ in the same conditional `DO $$` form `005` uses (D26).
 New `model_promotion_events` table (D32). New `tier2_predictions` table (§14.6.2). Down migration
 drops the new tables and columns and reverses the grant.
 
+**§15 addition, a separate migration on `fault_events` (not this one — `fault_events` isn't
+touched by `007_model_ops.sql`):** `predictionSource TEXT NOT NULL DEFAULT 'TIER1_RULE'`
+(§15.4/D54), `tier2FaultStatus INTEGER` and `tier2Confidence REAL` (§15.3/D53), both nullable.
+Called out here so it isn't missed by only reading this section — `fault_events` schema changes
+live in §15, not §14.5.1's migration.
+
 ### 14.5.2 Models
 
 - `trainingRunModel.js` — `insertRun()` extended for the new columns; `getChampion()` reordered
@@ -2554,9 +2560,11 @@ each one needs:
    `predictedLabel` to `faultType`; report a confusion breakdown. This is the Tier 2 analogue of
    §3.6's `GET /pdm/fault-events/stats` and belongs beside it conceptually.
    **Caveat that must be rendered on the page, not just written here:** ground truth only ever
-   arrives for windows Tier 1 flagged (or a human manually entered), so this is *agreement on
-   reviewed windows*, a biased sample — never "live accuracy". Labeling it accuracy would be
-   exactly the fabricated confidence §13.3 refused for the synthetic corpus.
+   arrives for windows *some* review path reviewed — originally Tier 1's flags or a human
+   manually entering one; §15.4/D54 widens this to Tier-2-only flags too, since the join above
+   is on any `CONFIRMED` row regardless of `predictionSource`. This is *agreement on reviewed
+   windows*, a biased sample — never "live accuracy". Labeling it accuracy would be exactly the
+   fabricated confidence §13.3 refused for the synthetic corpus.
    Second caveat: §10.5's auto-labeling path (migration 003, `autoLabeled = true`) produces
    `CONFIRMED` rows no human actually reviewed. Those must be **excluded** from the agreement
    numerator/denominator, or the metric partly measures Tier 1's rule-matching against itself.
@@ -3100,6 +3108,16 @@ Tier 2's behavior on windows Tier 1 never flags is not measured by any current m
 metric 3 measures agreement only on the intersection of "flagged by Tier 1" and "later confirmed
 by a human" — a subset of a subset. No new machinery, just an honest label, matching the
 discipline metric 3's first caveat already applies.
+
+**§15 update — this blind spot narrows, but does not close, once §15.4/D54 ships.** §15.4 gives
+Tier 2 its own path to a `fault_events` row (`predictionSource = 'TIER2_MODEL'`), independent of
+Tier 1. Metric 3's join is on `status = 'CONFIRMED'` regardless of `predictionSource`, so once
+Tier-2-only flags start getting reviewed, ground truth *does* start accumulating for exactly the
+population D47 called invisible. The caveat text (§14.6.1, updated) now says so. **What's still
+genuinely unaddressed:** a window *neither* tier flags is still never reviewed by anyone, so
+metric 3's ground truth is now "flagged by Tier 1 or Tier 2, and later confirmed" — a larger but
+still biased sample, not the full population. D47's fix (an honest caveat, not new machinery)
+still stands; only the precise scope of what remains unmeasured has changed.
 
 ### D48 — monitoring metric 4 (drift) is marginal-only; the consequence for a tree ensemble should be stated explicitly
 
