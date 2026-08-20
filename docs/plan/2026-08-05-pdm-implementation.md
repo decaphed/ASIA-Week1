@@ -3125,3 +3125,149 @@ own, but D46/D47/D49 in particular are cheap (UI/label/one-more-SQL-metric chang
 plan already computes or persists) and worth folding in during implementation rather than
 deferring, since they close gaps identified against this plan's own stated goals rather than
 introducing new scope.
+
+---
+
+## 15. Real training data arrives: bootstrap from a CSV, Tier 2 gets its own review queue
+
+**Status:** planning only — nothing here has been executed yet.
+
+**Trigger:** the project owner supplied a real labeled dataset (`train.csv`, 15,627 rows: six
+raw metric readings — `Engine_rpm`→`rpm`, `suctionPressure`, `dischargePressure`, `flowRate`,
+`motorTemp`, `vibration` — plus a binary `Engine_Condition` label, no timestamp, no
+fault-type breakdown, no episode/buffer structure). This section is the single record of what
+changes because of that; it supersedes/refines the relevant pieces of §10–§14 below and
+should be read as the current state, not those sections' original text.
+
+### 15.1 D51 — Tier 2 bootstraps from `train.csv`, outside `training_corpus`
+
+`train.csv`'s shape doesn't fit `training_corpus` (no timestamp, no window structure, six raw
+values instead of the 54-feature `precapFeaturesByMetric`/`metricStats` snapshot) — forcing it
+through that pipeline would mean fabricating 48 features that were never collected. Instead:
+
+- New `pdm/app/features.py`: a fixed, hand-written `FEATURE_ORDER = ["rpm",
+  "suctionPressure", "dischargePressure", "flowRate", "motorTemp", "vibration"]`, matching
+  `train.csv`'s columns 1:1. `to_vector()` raises on a missing/non-numeric field — same
+  "no silent zero-fill" principle §14.2.1 (D19) already established.
+- New `pdm/app/training.py::fit_model(train_csv_path, *, config) -> FittedModel` — loads the
+  CSV directly, does a **stratified** train/test split (not walk-forward; there's no time
+  axis here to leak across), fits `RandomForestClassifier` (default) / XGBoost
+  (config-gated, per §14.2.2/D20's family choice, unchanged), and writes `model.joblib` +
+  `metadata.json` to the same artifact store §14.3 already specced (`pdm_artifacts` volume,
+  `training_runs.artifactPath`) — this is just the *first* artifact that ever lands there,
+  not a different storage mechanism.
+- `pdm/app/model.py` stops being a permanent stub: loads the artifact once at startup (mirrors
+  `thresholds.yaml`'s load-once pattern) and `score(record)` returns
+  `{"tier2FaultStatus": 0 | 1, "tier2Confidence": float}` — **an integer 0/1, not a boolean**,
+  deliberately matching `train.csv`'s own `Engine_Condition` encoding end to end, so there's
+  no boolean↔0/1 translation anywhere between training, serving, and persistence (§15.3).
+  `None` if the artifact failed to load — Tier 1 unaffected, same fallback posture as always.
+- `ScoreResponse` (`schemas.py`) gains these two fields as optional — the same fix §14.0
+  item 6 already flagged as mandatory (FastAPI's `response_model` silently drops undeclared
+  keys), just against this smaller field set rather than the full 54-feature one.
+- `preprocessing/pipeline.py`'s `/process-window` path must actually call `model.score()` —
+  §14.0 item 5's finding (the live path stopped calling `/score` and never invokes
+  `model.score()` at all) still applies verbatim and must be fixed regardless of training
+  source.
+
+### 15.2 D52 — all retraining after the bootstrap is admin-CSV-upload-driven; §10/§14's machinery is confirmed in scope, not deleted
+
+An earlier pass through this decision considered deleting `training_corpus`, its
+materialization, `promotion.py`'s champion/challenger gate, the artifact store, and §14's
+admin page entirely, on the assumption that future retraining would just be "swap in a new
+flat CSV, refit, redeploy" with no comparison step. That assumption doesn't hold: the actual
+requirement is a champion/challenger workflow driven from the dashboard — an admin uploads a
+CSV, it's mapped/preprocessed/validated, a candidate is fit, and it's compared against the
+currently-deployed model before a human promotes it. That's exactly what §10.4 (Stage A/B/C
+upload), §10.5 (`training_corpus`, evaluation gate, promotion), and §14 (fitting, artifact
+store, admin approve/reject/rollback page) already provide. **None of it is removed.**
+
+- Retraining flow, confirmed: admin uploads a CSV from the dashboard → Stage A (structural
+  validation) → Stage B (column mapping, unit/range checks) → Stage C (physics-aware quality
+  gate, reusing `/process-window`) → materializes into `training_corpus` → `retrain.py` fits a
+  candidate → `promotion.py` compares it against the champion → human approves/rejects/rolls
+  back from §14.7's admin page.
+- **Open item to resolve at implementation time:** `corpusMaterializationService.js`
+  materializes `training_corpus` rows from `fault_events`, but `externalUploadService.js`
+  already has its own materialization step for admin-uploaded CSVs (§10.4 D10). Confirm
+  whether `corpusMaterializationService.js` is still exercised by anything under this design,
+  or whether it's now dead code duplicating what the upload service already does.
+- **Split strategy for admin-uploaded training rows:** they do carry a real timestamp
+  (Stage A/B requires one), so §10.5's walk-forward/episode split *could* still apply — but a
+  plain stratified split may be simpler and sufficient at this project's scale. Decide at
+  implementation time; `check_evaluation_gate`'s minimum-row-count purpose is kept either way.
+- §1's "dedicated `pdm-python` CT" language is stale — actual topology is **one Proxmox CT
+  running the whole application, with one Docker container per component** (server, client,
+  pdm, node-red, db, etc.), not a CT per service. `pdm` stays its own container/service;
+  nothing about how it's built or reached over HTTP changes.
+
+### 15.3 D53 — Tier 2's verdict is persisted on `fault_events`, not just returned over HTTP
+
+`fault_events` gains `tier2FaultStatus INTEGER` (0/1, nullable — null when no artifact is
+loaded or a row's feature vector fails `to_vector()`) and `tier2Confidence REAL`, written by
+`pdmService.js` on **every** scored window, not only ones Tier 1 already flagged — Tier 2 runs
+independently and its read is worth keeping even when Tier 1 stays quiet. Plain integer
+columns; no interaction with `fault_events.status`'s `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/
+`N/A` lifecycle (§3.3), which stays HITL-owned and untouched by this.
+
+### 15.4 D54 — Tier 2 gets its own Predicted Faults review queue
+
+**Why:** Tier 1 only fires once a hard threshold is actually crossed — it's reactive. Tier 2
+is the genuinely predictive layer: it can flag a suspicious multivariate pattern before any
+single metric breaches Tier 1's fixed limits. Under §3.5's original design, Tier 2's output
+was only ever columns bolted onto whatever row Tier 1 happened to create — a window Tier 2
+flags on its own, with Tier 1 silent, never reached a human at all. §3.5's "Tier 2 augments,
+never replaces, the rule verdict" stays true for the *scoring response*, but it no longer
+means "Tier 2 has no review path of its own."
+
+- `fault_events` gains `predictionSource TEXT NOT NULL DEFAULT 'TIER1_RULE'` —
+  `TIER1_RULE` | `TIER2_MODEL` | `BOTH`. A Tier-2-only flag opens its own row
+  (`predictionSource = 'TIER2_MODEL'`), through the same coalescing logic (§3.3.2) so a
+  sustained Tier 2 flag doesn't spam duplicates either. A window where both flag opens/extends
+  one row with `predictionSource = 'BOTH'`. `tier2FaultStatus`/`tier2Confidence` (§15.3) stay
+  as columns on the row regardless — useful context, just no longer the only visibility Tier 2
+  gets.
+- **Dashboard: a "Predicted Faults" tab** — lists `PENDING_REVIEW` rows where
+  `predictionSource` includes `TIER2_MODEL`, showing the actual metric readings behind the
+  flag (e.g. `motorTemp = 180`), not a black-box score — a person can eyeball the numbers and
+  judge for themselves. A read surface over the existing HITL endpoints (§3.6), not a new
+  backend concept.
+- **Review labels the fault properly, not just confirm/reject:** the reviewer picks the actual
+  `faultType`, writes `rootCause`, writes `resolution` — all already existing `fault_events`
+  columns, no schema change needed there. On save, `status` moves `PENDING_REVIEW` →
+  `CONFIRMED`, and the UI groups `CONFIRMED` rows under an **"Escalated"** view — what actually
+  notifies maintenance to act. No new `status` value; "Escalated" is a dashboard-level grouping
+  of `CONFIRMED` rows, not a new backend state.
+- **This is the path toward multi-class Tier 2, not just binary.** Every escalated row is a
+  real labeled example with an actual fault-type label, not just 0/1 — exactly what
+  `training_corpus` materialization accumulates, and exactly the per-class support
+  `promotion.py`'s `min_support_per_class` gate (§10.5) was built to require before trusting a
+  class. **Explicitly conditional, not a deadline:** the binary bootstrap model (§15.1) stays
+  the deployed baseline until there's enough labeled diversity *per fault type* to train a
+  trustworthy multi-class classifier. `OTHER` remains the catch-all for anything that doesn't
+  cleanly fit an existing type (§10.5 D1), unchanged.
+
+### 15.5 Definition of done
+
+**Bootstrap:**
+- [ ] `pdm/app/model.py` loads a real artifact fit from `train.csv` and returns a non-None verdict
+- [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
+- [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
+- [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
+- [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window
+
+**Retraining (§10.5/§14's existing work items apply; not repeated here):**
+- [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
+- [ ] `corpusMaterializationService.js`'s role confirmed against `externalUploadService.js`'s own materialization step — dead code removed if redundant, kept if not
+- [ ] Split strategy for admin-uploaded training data decided (walk-forward vs. row-count floor)
+
+**Predicted Faults review queue:**
+- [ ] `fault_events.predictionSource` column added (`TIER1_RULE`/`TIER2_MODEL`/`BOTH`), populated correctly for Tier-2-only, Tier-1-only, and both-flag windows
+- [ ] A Tier-2-only flag opens its own coalescing-aware `fault_events` row, independent of Tier 1
+- [ ] Dashboard "Predicted Faults" tab lists Tier-2-sourced `PENDING_REVIEW` rows with the raw metric readings shown
+- [ ] Reviewer can set `faultType`/`rootCause`/`resolution` and the row surfaces under an "Escalated" view once `CONFIRMED`
+- [ ] Escalated, labeled rows flow into `training_corpus` materialization same as any other confirmed event
+
+**Unaffected:**
+- [ ] Tier 1 verdict, `fault_events.status` HITL lifecycle, and the HITL review endpoints are unchanged
+- [ ] §1's CT topology note corrected to "one CT, one Docker container per component"
