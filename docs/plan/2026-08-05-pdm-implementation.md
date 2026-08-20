@@ -1897,6 +1897,12 @@ Every claim below was checked against the actual repo before this section was wr
 contradict what a reader would infer from §10.5's prose alone, and the plan depends on the
 corrected version.
 
+**§15 note:** items 1, 2, and 5 below describe the pre-model state this whole section (and
+§15) exists to close — §15.1/D51 is what actually fits and loads a model and fixes item 5's
+`/process-window` gap, for the bootstrap model specifically. Read as "true when §14 was
+written, and true again for §14's own fitting path in §14.2 until §15.1 supersedes it for the
+bootstrap"; not stale, just no longer describing the deployed end state once §15 lands.
+
 1. **`pdm/app/model.py::score()` returns `None` unconditionally.** No artifact load, no
    feature vectorization, no model object. Confirmed.
 2. **Nothing fits a model anywhere in the repo.** `retrain.py::run_retrain()` takes a
@@ -2020,6 +2026,19 @@ corrected version.
 ## 14.2 Design: the fitting code
 
 ### 14.2.1 D19 — a separate, explicit `features.py`; no ad-hoc flattening at either call site
+
+**§15 note — two feature spaces coexist, deliberately, not by accident.** This 54-feature
+`FEATURE_ORDER` is what a model trained from `training_corpus` uses (admin-uploaded CSVs,
+mapped/validated through §10.4's Stage A/B/C into a real `featureSnapshot` per row — §15.2/
+D52). It is **not** what §15.1/D51's bootstrap model uses: `train.csv` has six raw values, no
+window statistics to derive 54 features from, so the bootstrap model has its own, separate,
+much smaller `FEATURE_ORDER` in the same-named `pdm/app/features.py` file. Whichever model is
+currently the deployed champion determines which vector shape `model.py::score()` actually
+builds at serve time — `metadata.json`'s persisted `feature_order` (this section, below) is
+what tells the loader which one it's looking at, and the hard-fail-on-mismatch behavior this
+section specifies is exactly what catches a champion swap that changes vector shape, not just
+a code-vintage mismatch within one shape. This is a real architectural fact to keep straight
+during implementation, not just documentation to reconcile.
 
 `featureSnapshot` is a nested JSON object (§3.3's fixed composition: full
 `precapFeaturesByMetric` + full `metricStats`, all six metrics, identical across event types).
@@ -2542,7 +2561,9 @@ the page polls it on a slow interval (60s, matching `faultEventStats`'s existing
 
 Tier 2 predicts on **every** closed window; `fault_events` only has rows for flagged windows and
 periodic negative samples. Hanging predictions off `fault_events` would discard the majority of
-them and make metric 2 (distribution over time) impossible.
+them and make metric 2 (distribution over time) impossible. (§15.3/D53 also puts
+`tier2FaultStatus`/`tier2Confidence` on `fault_events` — that's additive, scoped to rows that
+already exist for other reasons, not a replacement for this table; see §15.3's correction.)
 
 ```
 tier2_predictions (
@@ -3201,14 +3222,28 @@ store, admin approve/reject/rollback page) already provide. **None of it is remo
   pdm, node-red, db, etc.), not a CT per service. `pdm` stays its own container/service;
   nothing about how it's built or reached over HTTP changes.
 
-### 15.3 D53 — Tier 2's verdict is persisted on `fault_events`, not just returned over HTTP
+### 15.3 D53 — Tier 2's verdict is persisted, not just returned over HTTP; §14.6.2's `tier2_predictions` is the every-window log, `fault_events` is not
 
-`fault_events` gains `tier2FaultStatus INTEGER` (0/1, nullable — null when no artifact is
-loaded or a row's feature vector fails `to_vector()`) and `tier2Confidence REAL`, written by
-`pdmService.js` on **every** scored window, not only ones Tier 1 already flagged — Tier 2 runs
-independently and its read is worth keeping even when Tier 1 stays quiet. Plain integer
-columns; no interaction with `fault_events.status`'s `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/
-`N/A` lifecycle (§3.3), which stays HITL-owned and untouched by this.
+**Correction to this section's original text:** it said `tier2FaultStatus`/`tier2Confidence`
+get written to `fault_events` "on every scored window." That's wrong, and §14.6.2/D36 already
+explains why: Tier 2 scores every closed window, but `fault_events` only ever has rows for
+flagged windows and periodic negative samples (§3.3.1) — even after §15.4/D54 lets Tier 2 open
+its own rows, most quiet windows (Tier 1 silent, Tier 2 predicting 0) still have no
+`fault_events` row to attach anything to. Hanging a per-window Tier 2 log off `fault_events`
+would silently drop most of it, exactly the failure mode D36 was written to avoid.
+
+**Corrected design — two separate, non-contradicting things:**
+
+- **Every-window log:** `tier2_predictions` (§14.6.2, unchanged) is where Tier 2's output for
+  every closed window actually lives — `predictedLabel`, `probability`, keyed by
+  `processedTelemetryId`. This is what monitoring (§14.6.1) reads from.
+- **On a `fault_events` row specifically** (one exists — Tier 1 flagged it, Tier 2 flagged it
+  per §15.4, or it's a negative sample): `tier2FaultStatus INTEGER` (0/1, nullable) and
+  `tier2Confidence REAL` are still added as columns, populated from the same verdict at the
+  moment that row is written/extended — this is the value a HITL reviewer sees next to a
+  specific event, not a substitute for the complete log. No interaction with
+  `fault_events.status`'s `PENDING_REVIEW`/`CONFIRMED`/`REJECTED`/`N/A` lifecycle (§3.3), which
+  stays HITL-owned and untouched by this.
 
 ### 15.4 D54 — Tier 2 gets its own Predicted Faults review queue
 
@@ -3254,7 +3289,7 @@ means "Tier 2 has no review path of its own."
 - [ ] `pdm/app/features.py`'s 6-field `FEATURE_ORDER` matches `train.csv` columns exactly, mapped to this codebase's existing metric names
 - [ ] `/process-window` actually calls `model.score()` (§14.0 item 5's gap, fixed)
 - [ ] `ScoreResponse` schema extended with `tier2FaultStatus` (int 0/1) and `tier2Confidence`, verified they survive `response_model` filtering
-- [ ] `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated by `pdmService.js` on every scored window
+- [ ] `tier2_predictions` (§14.6.2) is the every-window Tier 2 log; `fault_events.tier2FaultStatus`/`tier2Confidence` columns added via migration and populated only on rows that already exist (§15.3's correction — not "every scored window")
 
 **Retraining (§10.5/§14's existing work items apply; not repeated here):**
 - [ ] Admin CSV upload (§10.4/§14.8) → `training_corpus` materialization → `retrain.py` → `promotion.py` champion/challenger comparison → admin approve/reject/rollback (§14.4/§14.7) all function end-to-end
