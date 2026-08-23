@@ -83,23 +83,26 @@ def assess(df: pd.DataFrame) -> dict[str, Any]:
     duplicate_rate = duplicate_count / row_count if row_count else 0.0
 
     ranges = load_ranges()
-    out_of_range_count = 0
-    total_checked = 0
+    out_of_range_row_mask = pd.Series(False, index=df.index)
     for csv_column, metric_name in TRAIN_CSV_COLUMN_MAP.items():
         bounds = ranges.get(metric_name)
         if bounds is None or csv_column not in df.columns:
             continue
-        values = df[csv_column].dropna()
-        total_checked += len(values)
-        out_of_range_count += int(((values < bounds["min"]) | (values > bounds["max"])).sum())
-    out_of_range_rate = out_of_range_count / total_checked if total_checked else 0.0
+        column_out_of_range = (df[csv_column] < bounds["min"]) | (df[csv_column] > bounds["max"])
+        out_of_range_row_mask = out_of_range_row_mask | column_out_of_range.fillna(False)
+    out_of_range_rate = float(out_of_range_row_mask.sum()) / row_count if row_count else 0.0
 
+    # Weights are 0.34/0.33/0.33 (not an even 1/3 split): a 0.3-weighted
+    # dimension can only ever cost 30 points, landing a fully-bad dimension
+    # AT exactly PASS_THRESHOLD (70) — still a PASS. Each dimension here can
+    # cost slightly more than 30 points, so a fully-bad dimension alone is
+    # enough to cross below PASS_THRESHOLD on its own.
     quality_score = _round2(
         100
         * (
-            0.4 * (1 - missing_rate)
-            + 0.3 * (1 - duplicate_rate)
-            + 0.3 * (1 - out_of_range_rate)
+            0.34 * (1 - missing_rate)
+            + 0.33 * (1 - duplicate_rate)
+            + 0.33 * (1 - out_of_range_rate)
         )
     )
 

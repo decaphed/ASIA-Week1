@@ -8,15 +8,17 @@ from app.training_quality import MIN_MINORITY_SHARE, MIN_ROWS, assess
 
 
 def _good_df(n=300):
-    # Alternating labels keeps the minority share well above MIN_MINORITY_SHARE
-    # and every row inside pump-physics.yaml's normal ranges.
+    # Per-row jitter keeps every row unique (no accidental duplicates) while
+    # staying comfortably inside pump-physics.yaml's ranges (rpm 0-5000,
+    # suctionPressure 0-10, dischargePressure 0-25, flowRate 0-500,
+    # motorTemp 0-150, vibration 0-25).
     return pd.DataFrame({
-        "Engine_rpm": [1800.0] * n,
-        "suctionPressure": [4.5] * n,
-        "dischargePressure": [5.2] * n,
-        "flowRate": [90.0] * n,
-        "motorTemp": [70.0] * n,
-        "vibration": [2.0] * n,
+        "Engine_rpm": [1800.0 + (i % 50) for i in range(n)],
+        "suctionPressure": [4.5 + (i % 10) * 0.01 for i in range(n)],
+        "dischargePressure": [5.2 + (i % 10) * 0.01 for i in range(n)],
+        "flowRate": [90.0 + (i % 20) for i in range(n)],
+        "motorTemp": [70.0 + (i % 15) for i in range(n)],
+        "vibration": [2.0 + (i % 5) * 0.1 for i in range(n)],
         "Engine_Condition": [0, 1] * (n // 2),
     })
 
@@ -44,23 +46,23 @@ def test_too_few_rows_is_hard_rejected():
 
 def test_high_missing_rate_drags_score_below_pass():
     df = _good_df(n=400)
-    df.loc[: int(len(df) * 0.6), "vibration"] = None
+    df.loc[: int(len(df) * 0.95), "vibration"] = None
     result = assess(df)
     assert result["verdict"] == "REJECTED"
     assert result["missingRate"] > 0
 
 
 def test_high_duplicate_rate_drags_score_below_pass():
-    base = _good_df(n=50)
-    df = pd.concat([base] * 8, ignore_index=True)  # 400 rows, almost all duplicates
+    base = _good_df(n=2)  # exactly one row per label — the minimum for the minority-share check to pass
+    df = pd.concat([base] * 500, ignore_index=True)  # 1000 rows, only 2 unique — duplicate rate ~0.998
     result = assess(df)
     assert result["verdict"] == "REJECTED"
-    assert result["duplicateRate"] > 0.5
+    assert result["duplicateRate"] > 0.9
 
 
 def test_out_of_range_values_drag_score_below_pass():
     df = _good_df(n=300)
-    df.loc[: int(len(df) * 0.5), "motorTemp"] = 9999.0  # far outside pump-physics.yaml's range
+    df.loc[: int(len(df) * 0.95), "motorTemp"] = 9999.0  # far outside pump-physics.yaml's 0-150 range
     result = assess(df)
     assert result["verdict"] == "REJECTED"
     assert result["outOfRangeRate"] > 0
