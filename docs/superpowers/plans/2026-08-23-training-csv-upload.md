@@ -541,7 +541,7 @@ git commit -m "pdm: candidate-dir fit_model() + model.py reset()/reload() for th
 
 **Interfaces:**
 - Consumes: `training_quality.assess()`/`clean()` (Task 2), `training.fit_model(..., artifact_dir=...)` (Task 3), `model.reload()`/`model.reset()` (Task 3), `training.TRAIN_CSV_COLUMN_MAP` (existing).
-- Produces: `POST /training/upload` → `{uploadId, verdict, qualityScore, reasons, rowCount}` (`201` on PASS, `422` on REJECTED). `POST /training/{uploadId}/fit` → `{uploadId, candidateMetrics, deployedMetrics}` (`deployedMetrics` is `null` if no live artifact). `POST /training/{uploadId}/deploy` → `{artifactSha256, trainedAt, metrics}`. `DELETE /training/{uploadId}` → `{deleted: true}`. `POST /training/reset` → `{reset: true}`. These four routes and their exact response shapes are what Task 5's Node proxy calls.
+- Produces: `POST /training/upload` → `{uploadId, verdict, qualityScore, reasons, rowCount}` (`201` on PASS, `422` on REJECTED). `POST /training/{uploadId}/fit` → `{uploadId, candidateMetrics, deployedMetrics}` (`deployedMetrics` is `null` if no live artifact). `POST /training/{uploadId}/deploy` → `{artifactSha256, trainedAt, metrics}`. `DELETE /training/{uploadId}` → `{deleted: true}`. `POST /training/reset` → `{reset: true}`. `POST /training/stamp-run-id` (body `{runId: int}`) → `{stamped: true, runId}` — design-review addition: `fit_model()` always writes `runId: null`, and `model._load_artifact()` refuses to load an artifact with a null `runId` (Tier 1-only fallback), so without this call Tier 2 would never activate for an upload-deployed model. These five routes and their exact response shapes are what Task 5's Node proxy calls.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -617,6 +617,14 @@ def test_upload_fit_deploy_happy_path():
     deploy_body = deploy_res.json()
     assert deploy_body["artifactSha256"]
 
+    # Design-review fix: fit_model() always writes runId: null, and
+    # model._load_artifact() refuses to load a null-runId artifact — /deploy
+    # alone leaves Tier 2 inactive. Node's real deployCandidate() (Task 5)
+    # calls this immediately after inserting the training_runs row; here we
+    # simulate that with a synthetic id.
+    stamp_res = client.post("/training/stamp-run-id", json={"runId": 1})
+    assert stamp_res.status_code == 200
+
     score_res = client.post("/score", json={
         "windowEnd": "2026-08-23T00:00:00Z", "dominantStatus": "RUNNING", "precapFeaturesByMetric": {},
         "flowRateMin": 80, "flowRateMax": 100, "rpmMin": 1700, "rpmMax": 1900,
@@ -626,7 +634,7 @@ def test_upload_fit_deploy_happy_path():
         "dischargePressureMean": 5.2, "motorTempMean": 70,
     })
     assert score_res.status_code == 200
-    assert score_res.json()["tier2Label"] is not None  # Tier 2 is live post-deploy
+    assert score_res.json()["tier2Label"] is not None  # Tier 2 is live post-deploy AND post-stamp
 
 
 def test_discard_removes_candidate_without_touching_live_artifact():
@@ -714,6 +722,10 @@ class TrainingDeployResponse(BaseModel):
     artifactSha256: str
     trainedAt: str
     metrics: ModelMetrics
+
+
+class StampRunIdRequest(BaseModel):
+    runId: int
 ```
 
 - [ ] **Step 4: Add the endpoints to `pdm/app/main.py`**
@@ -745,7 +757,7 @@ from . import model, rules, training, training_quality
 from .preprocessing.pipeline import AllSamplesInvalidError, process_window
 from .schemas import (
     ProcessedRecordIn, ProcessWindowRequest, ProcessWindowResponse, ScoreResponse,
-    TrainingDeployResponse, TrainingFitResponse, TrainingUploadResponse,
+    StampRunIdRequest, TrainingDeployResponse, TrainingFitResponse, TrainingUploadResponse,
 )
 ```
 
@@ -868,6 +880,25 @@ def discard_candidate(upload_id: str) -> dict:
 def reset_live_model() -> dict:
     model.reset()
     return {"reset": True}
+
+
+@app.post("/training/stamp-run-id")
+def stamp_live_run_id(payload: StampRunIdRequest) -> dict:
+    """Design-review finding, fixed here: fit_model() always writes
+    runId: null (training.py's own module docstring — "the id can only
+    ever be handed back this way, not looked up"), and model._load_artifact()
+    deliberately refuses to load any artifact with runId: null (Tier 1-only
+    fallback). Without this endpoint, /deploy's copy would carry that null
+    runId into the live directory forever, and Tier 2 would never activate
+    for an upload-deployed model. Node's deployCandidate() (Task 5) calls
+    this immediately after it inserts the training_runs row, passing back
+    the real Postgres id — the exact same fit -> insert -> stamp handoff
+    the CLI bootstrap flow already uses (recordBootstrapRun.js ->
+    `python -m pdm.app.training stamp-run-id`), just over HTTP instead of
+    a second CLI invocation."""
+    training.stamp_run_id(payload.runId)
+    model.reload()
+    return {"stamped": True, "runId": payload.runId}
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -987,7 +1018,7 @@ export async function deployCandidate(uploadId) {
   // scope"); revisit this if/when that loop is built for real — either
   // give upload-sourced runs a filterable marker getChampion() can
   // exclude, or make the two flows explicitly aware of each other.
-  await trainingRunModel.insertRun({
+  const { id: trainingRunId } = await trainingRunModel.insertRun({
     corpusContentHash: `bootstrap:upload:${result.artifactSha256}`,
     corpusRowManifest: JSON.stringify({ source: 'upload', uploadId }),
     corpusRowCount: 0,
@@ -999,7 +1030,26 @@ export async function deployCandidate(uploadId) {
     championRunIdAtEval: null,
   });
 
-  return result;
+  // Design-review finding, fixed: without this call, the live metadata.json
+  // pdm's /deploy just wrote keeps runId: null forever, and
+  // model._load_artifact() refuses to load a null-runId artifact — Tier 2
+  // would never activate. Same fit -> insert -> stamp handoff the CLI
+  // bootstrap flow already uses (recordBootstrapRun.js -> `python -m
+  // pdm.app.training stamp-run-id`), just over HTTP.
+  let stampRes;
+  try {
+    stampRes = await fetch(`${PDM_SERVICE_URL}/training/stamp-run-id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: trainingRunId }),
+      signal: AbortSignal.timeout(DEPLOY_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw httpError(502, `pdm /training/stamp-run-id call failed: ${err.message}`);
+  }
+  if (!stampRes.ok) throw httpError(stampRes.status, `pdm /training/stamp-run-id responded ${stampRes.status}`);
+
+  return { ...result, trainingRunId };
 }
 
 export async function discardCandidate(uploadId) {

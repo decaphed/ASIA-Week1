@@ -91,6 +91,36 @@ def _load_artifact() -> Optional[dict[str, Any]]:
 _artifact = _load_artifact()
 
 
+def reload() -> None:
+    """Re-runs _load_artifact() and swaps it into the module-level
+    _artifact in place — how /training/deploy (Task 4) makes a newly
+    written artifact live without a container restart.
+
+    SINGLE-WORKER ASSUMPTION: safe only because pdm's Dockerfile CMD runs
+    uvicorn with no --workers flag (1 worker, 1 process) — the module-level
+    _artifact global is single-writer/single-reader, and CPython's GIL
+    makes this one-line reassignment an atomic pointer swap (no torn read
+    for a concurrent /score call). If pdm is ever scaled to multiple
+    workers/processes, this reload() no longer reaches every process and
+    needs a real cross-process signal (e.g. a shared version file each
+    worker polls) instead — do not add --workers without also fixing this."""
+    global _artifact
+    _artifact = _load_artifact()
+
+
+def reset() -> None:
+    """Deletes the live artifact files (if present) and clears the loaded
+    model — the "start over" operation (§15.7). Idempotent: safe to call
+    when no artifact exists at all."""
+    global _artifact
+    artifact_dir = training._artifact_dir()
+    for filename in ("model.joblib", "metadata.json"):
+        path = artifact_dir / filename
+        if path.exists():
+            path.unlink()
+    _artifact = None
+
+
 def score(record: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Tier 2 entry point. Returns None if no artifact is loaded, or if the
     record is missing a required feature (logged, never raised)."""

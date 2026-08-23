@@ -7,6 +7,7 @@ const PAGE_TITLES = {
   analytics: 'Analytics & Trends',
   predictions: 'Predictions & Fault Review',
   reports: 'Reports & Audit',
+  train: 'Train Model',
 };
 
 function TopBar({ page, live, pendingCount, onOpenReview }) {

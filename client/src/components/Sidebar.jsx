@@ -29,6 +29,11 @@ const NAV_ICONS = {
       <path d="M5.4 8 L10.6 8 M5.4 10.8 L10.6 10.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   ),
+  train: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+      <path d="M8 1.8 L8 14.2 M2.5 5.5 L13.5 5.5 M2.5 10.5 L13.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 const PAGES = [
@@ -36,6 +41,7 @@ const PAGES = [
   { id: 'analytics', label: 'Analytics' },
   { id: 'predictions', label: 'Predictions' },
   { id: 'reports', label: 'Reports' },
+  { id: 'train', label: 'Train Model' },
 ];
 
 function Sidebar({ page, onNavigate, pendingCount, connected, reviewer, title, onLogout }) {

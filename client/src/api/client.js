@@ -28,6 +28,28 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Multipart upload needs its own fetch call — request()'s default
+// Content-Type: application/json / JSON.stringify body would break a CSV
+// upload; FormData needs the browser to set its own multipart boundary.
+async function uploadRequest(path, file) {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(BASE + path, { method: 'POST', body: form });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    // non-JSON response — fall through to the check below
+  }
+  if (!res.ok || (body && body.success === false)) {
+    const err = new Error(body?.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.details = body;
+    throw err;
+  }
+  return body;
+}
+
 export const api = {
   live: () => request('/live'),
   health: () => request('/health'),
@@ -51,4 +73,13 @@ export const api = {
   // directly rather than being parsed as JSON through request().
   faultEventBufferCsvUrl: (status) =>
     `${BASE}/pdm/fault-events/export/csv${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+  uploadTrainingCsv: (file) => uploadRequest('/pdm/training/upload', file),
+  fitTrainingCandidate: (uploadId) =>
+    request(`/pdm/training/${encodeURIComponent(uploadId)}/fit`, { method: 'POST', headers: {}, body: undefined }),
+  deployTrainingCandidate: (uploadId) =>
+    request(`/pdm/training/${encodeURIComponent(uploadId)}/deploy`, { method: 'POST', headers: {}, body: undefined }),
+  discardTrainingCandidate: (uploadId) =>
+    request(`/pdm/training/${encodeURIComponent(uploadId)}`, { method: 'DELETE', headers: {}, body: undefined }),
+  resetTrainingModel: () => request('/pdm/training/reset', { method: 'POST', headers: {}, body: undefined }),
+  trainingRuns: () => request('/pdm/training/runs'),
 };

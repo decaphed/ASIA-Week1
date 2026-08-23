@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import Card, { CardLabel, buttonReset } from '../components/Card.jsx';
 import ReviewDrawer from '../components/ReviewDrawer.jsx';
 import { api } from '../api/client.js';
@@ -553,11 +553,19 @@ function DetectTab({ queue, audit, stats }) {
 function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }) {
   const [selected, setSelected] = useState(() => new Set());
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [visibleCount, setVisibleCount] = useState(10);
 
   const sorted = filterEvents(queue, filters).sort((a, b) => {
     const rank = (e) => (severityOf(e) === 'CRITICAL' ? 0 : 1);
     return rank(a) - rank(b) || Date.parse(a.detectedAt) - Date.parse(b.detectedAt);
   });
+
+  const filtersKey = JSON.stringify(filters);
+  const prevFiltersKey = useRef(filtersKey);
+  if (prevFiltersKey.current !== filtersKey) {
+    prevFiltersKey.current = filtersKey;
+    setVisibleCount(10);
+  }
 
   const allSelected = sorted.length > 0 && sorted.every((q) => selected.has(q.id));
   const someSelected = sorted.some((q) => selected.has(q.id));
@@ -630,7 +638,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
         />
         <span>Event</span><span>Detection</span><span>Metric(s)</span><span>Detected</span><span>Severity</span><span />
       </div>
-      {sorted.map((q) => {
+      {sorted.slice(0, visibleCount).map((q) => {
         const sev = severityOf(q);
         const sp = sevPill(sev);
         const dismissing = dismissingIds.has(q.id);
@@ -680,6 +688,30 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
           </div>
         );
       })}
+      {sorted.length > visibleCount && (
+        <div style={{ textAlign: 'center', padding: '14px 0 4px' }}>
+          <button
+            type="button"
+            className="hover-ghost"
+            onClick={() => setVisibleCount((n) => Math.min(n + 10, sorted.length))}
+            style={{ ...buttonReset, color: '#1F3A6E', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, fontWeight: 600 }}
+          >
+            Show {Math.min(10, sorted.length - visibleCount)} more ({sorted.length - visibleCount} remaining)
+          </button>
+        </div>
+      )}
+      {visibleCount > 10 && sorted.length > 10 && (
+        <div style={{ textAlign: 'center', padding: '4px 0 4px' }}>
+          <button
+            type="button"
+            className="hover-ghost"
+            onClick={() => setVisibleCount(10)}
+            style={{ ...buttonReset, color: '#8a99a8', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, fontWeight: 600 }}
+          >
+            Show less
+          </button>
+        </div>
+      )}
       {queue.length === 0 && (
         <div style={{ padding: '36px 0', textAlign: 'center', color: '#8a99a8', fontSize: 13 }}>
           Queue clear. Every detection has been reviewed. <span style={{ color: '#177E4D', fontWeight: 600 }}>✓</span>

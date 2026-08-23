@@ -42,3 +42,16 @@ def test_stamp_run_id_rewrites_metadata(tmp_path, monkeypatch):
     with open(tmp_path / "metadata.json", "r", encoding="utf-8") as f:
         metadata = json.load(f)
     assert metadata["runId"] == 42
+
+
+def test_fit_model_writes_to_explicit_artifact_dir_not_env(tmp_path, monkeypatch):
+    env_dir = tmp_path / "env_dir"
+    explicit_dir = tmp_path / "explicit_dir"
+    monkeypatch.setenv("PDM_ARTIFACT_DIR", str(env_dir))
+
+    fitted = fit_model(str(FIXTURE_CSV), artifact_dir=explicit_dir)
+
+    assert (explicit_dir / "model.joblib").exists()
+    assert (explicit_dir / "metadata.json").exists()
+    assert not env_dir.exists()
+    assert fitted.artifact_path == str(explicit_dir / "model.joblib")

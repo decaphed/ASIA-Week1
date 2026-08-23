@@ -104,7 +104,9 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def fit_model(train_csv_path: str, *, config: Optional[dict[str, Any]] = None) -> FittedModel:
+def fit_model(
+    train_csv_path: str, *, config: Optional[dict[str, Any]] = None, artifact_dir: Optional[Path] = None,
+) -> FittedModel:
     """Loads train_csv_path directly (not through training_corpus), fits a
     binary classifier, and writes the artifact to PDM_ARTIFACT_DIR.
 
@@ -149,7 +151,7 @@ def fit_model(train_csv_path: str, *, config: Optional[dict[str, Any]] = None) -
     label_classes = sorted(set(y_train) | set(y_test))
     metrics = _per_class_metrics(y_test, list(y_pred), label_classes)
 
-    artifact_dir = _artifact_dir()
+    artifact_dir = artifact_dir or _artifact_dir()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = artifact_dir / "model.joblib"
 

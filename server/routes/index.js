@@ -21,6 +21,10 @@ import { getTrend } from '../controllers/trendController.js';
 import { createProcessedReading, getProcessedLive, getProcessedHistory } from '../controllers/processedController.js';
 import { listFaultEvents, getFaultEvent, reviewFaultEvent, getFaultEventStats, exportFaultEventBuffers, createManualBufferEvent } from '../controllers/pdmController.js';
 import { uploadExternalCsv, confirmExternalUpload } from '../controllers/externalUploadController.js';
+import {
+  uploadTrainingCsv, fitTrainingCandidate, deployTrainingCandidate,
+  discardTrainingCandidate, resetTrainingModel, listTrainingRuns,
+} from '../controllers/trainingController.js';
 import { uploadCsv } from '../middleware/uploadFile.js';
 import { getWhoami } from '../controllers/whoamiController.js';
 import { validateReadingMiddleware } from '../middleware/validateReading.js';
@@ -87,5 +91,16 @@ router.post('/pdm/fault-events/manual-buffer', requireTrustedProxy, requireGroup
 // DATA-trust bar differs, enforced by Stage C's quality gate, not auth).
 router.post('/pdm/fault-events/external-upload', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), uploadCsv.single('file'), uploadExternalCsv);
 router.post('/pdm/fault-events/external-upload/:uploadId/confirm', requireTrustedProxy, requireGroup(PDM_REVIEWER_GROUP), confirmExternalUpload);
+
+// §15.7 — open to any authenticated app user (requireTrustedProxy only,
+// deliberately no requireGroup): "make it possible for anyone to upload"
+// per the design spec. requireTrustedProxy still blocks any request that
+// bypassed Traefik/Authentik/nginx entirely, same as every other route here.
+router.post('/pdm/training/upload', requireTrustedProxy, uploadCsv.single('file'), uploadTrainingCsv);
+router.post('/pdm/training/:uploadId/fit', requireTrustedProxy, fitTrainingCandidate);
+router.post('/pdm/training/:uploadId/deploy', requireTrustedProxy, deployTrainingCandidate);
+router.delete('/pdm/training/:uploadId', requireTrustedProxy, discardTrainingCandidate);
+router.post('/pdm/training/reset', requireTrustedProxy, resetTrainingModel);
+router.get('/pdm/training/runs', requireTrustedProxy, listTrainingRuns);
 
 export default router;

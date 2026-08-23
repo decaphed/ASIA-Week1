@@ -5,11 +5,24 @@ not per-request — mirroring how the rest of this codebase avoids repeated
 file I/O on a hot path.
 """
 
-from fastapi import FastAPI, HTTPException
+import json
+import os
+import re
+import shutil
+import uuid
+from pathlib import Path
+from typing import Optional
 
-from . import model, rules
+import pandas as pd
+from fastapi import FastAPI, HTTPException, UploadFile
+
+from . import model, rules, training, training_quality
 from .preprocessing.pipeline import AllSamplesInvalidError, process_window
-from .schemas import ProcessedRecordIn, ProcessWindowRequest, ProcessWindowResponse, ScoreResponse
+from .schemas import (
+    DeleteResponse, ProcessedRecordIn, ProcessWindowRequest, ProcessWindowResponse, ResetResponse,
+    ScoreResponse, StampRunIdRequest, StampRunIdResponse, TrainingDeployResponse,
+    TrainingFitResponse, TrainingUploadResponse,
+)
 
 app = FastAPI(title="PdM Tier 1 Rule Engine")
 
@@ -72,3 +85,189 @@ def process_window_endpoint(payload: ProcessWindowRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return result
+
+
+def _candidates_dir() -> Path:
+    return training._artifact_dir() / "candidates"
+
+
+def _candidate_dir(upload_id: str) -> Path:
+    # upload_id is a raw FastAPI/Starlette path parameter (matches
+    # `[^/]+` by default, which includes "..") — NOT guaranteed to be a
+    # uuid4().hex we minted ourselves. Without this check, a caller could
+    # hit e.g. DELETE /training/.. and have _candidates_dir() / ".."
+    # resolve to PDM_ARTIFACT_DIR itself, letting shutil.rmtree() in
+    # discard_candidate() wipe the live model artifact. Validating the
+    # exact uuid4().hex shape (32 lowercase hex chars) before ever
+    # building a path is what makes the path construction below safe.
+    if not re.fullmatch(r"[0-9a-f]{32}", upload_id):
+        raise HTTPException(status_code=404, detail=f"invalid uploadId: {upload_id}")
+    return _candidates_dir() / upload_id
+
+
+def _live_metrics() -> Optional[dict]:
+    metadata_path = training._artifact_dir() / "metadata.json"
+    if not metadata_path.exists():
+        return None
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        return json.load(f).get("metrics")
+
+
+CANDIDATE_MAX_AGE_SECONDS = 24 * 60 * 60  # design-review finding: candidates/ lives on the
+# persistent pdm_artifacts Docker volume (docker-compose.yml), not ephemeral container storage —
+# an abandoned upload (never deployed, never explicitly discarded) would otherwise sit there
+# forever. Every /training/upload call sweeps stale candidate dirs first, since this route is
+# open to anyone with no auth gate and no other cleanup trigger exists.
+def _sweep_stale_candidates() -> None:
+    import time
+
+    candidates_dir = _candidates_dir()
+    if not candidates_dir.exists():
+        return
+    now = time.time()
+    for entry in candidates_dir.iterdir():
+        if entry.is_dir() and (now - entry.stat().st_mtime) > CANDIDATE_MAX_AGE_SECONDS:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+@app.post(
+    "/training/upload",
+    response_model=TrainingUploadResponse,
+    status_code=201,
+    responses={422: {"model": TrainingUploadResponse}},
+)
+def upload_training_csv(file: UploadFile) -> dict:
+    # Plain `def`, not `async def`: FastAPI runs sync handlers in a
+    # threadpool, but an `async def` handler runs directly on the event
+    # loop. pd.read_csv/training_quality.assess/cleaned.to_csv below are
+    # all blocking calls with no `await` in this function, so as `async
+    # def` this handler would stall the whole pdm process — including the
+    # live /score and /process-window paths — for the duration of parsing
+    # a large CSV.
+    _sweep_stale_candidates()
+
+    try:
+        df = pd.read_csv(file.file)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "verdict": "REJECTED",
+                "reasons": [f"could not parse CSV: {exc}"],
+                "qualityScore": 0.0,
+                "rowCount": 0,
+            },
+        ) from exc
+
+    report = training_quality.assess(df)
+
+    if report["verdict"] == "REJECTED":
+        raise HTTPException(status_code=422, detail=report)
+
+    upload_id = uuid.uuid4().hex
+    candidate_dir = _candidate_dir(upload_id)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    cleaned = training_quality.clean(df)
+    cleaned.to_csv(candidate_dir / "train.csv", index=False)
+
+    return {
+        "uploadId": upload_id, "verdict": report["verdict"], "qualityScore": report["qualityScore"],
+        "rowCount": report["rowCount"], "reasons": report["reasons"],
+    }
+
+
+@app.post("/training/{upload_id}/fit", response_model=TrainingFitResponse)
+def fit_candidate(upload_id: str) -> dict:
+    candidate_dir = _candidate_dir(upload_id)
+    train_csv_path = candidate_dir / "train.csv"
+    if not train_csv_path.exists():
+        raise HTTPException(status_code=404, detail=f"no upload found for uploadId={upload_id}")
+
+    try:
+        fitted = training.fit_model(str(train_csv_path), artifact_dir=candidate_dir)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"could not fit a model from this upload: {exc}"
+        ) from exc
+
+    return {
+        "uploadId": upload_id,
+        "candidateMetrics": fitted.metrics,
+        "deployedMetrics": _live_metrics(),
+    }
+
+
+@app.post("/training/{upload_id}/deploy", response_model=TrainingDeployResponse)
+def deploy_candidate(upload_id: str) -> dict:
+    candidate_dir = _candidate_dir(upload_id)
+    candidate_model = candidate_dir / "model.joblib"
+    candidate_metadata = candidate_dir / "metadata.json"
+    if not candidate_model.exists() or not candidate_metadata.exists():
+        raise HTTPException(status_code=404, detail=f"no fitted candidate found for uploadId={upload_id} — call /fit first")
+
+    # Design-review finding: copy to temp names first, then rename both into
+    # place — os.replace() is atomic on the same filesystem, so a failure
+    # partway through (disk full, permissions) never leaves the live
+    # directory with a new model.joblib but a stale/missing metadata.json.
+    try:
+        live_dir = training._artifact_dir()
+        live_dir.mkdir(parents=True, exist_ok=True)
+        tmp_model = live_dir / ".model.joblib.tmp"
+        tmp_metadata = live_dir / ".metadata.json.tmp"
+        shutil.copy2(candidate_model, tmp_model)
+        shutil.copy2(candidate_metadata, tmp_metadata)
+        # NOTE: the two replace() calls below are each individually atomic,
+        # but not atomic AS A PAIR — a process crash between them could leave
+        # a live directory with a new model.joblib but the previous
+        # deployment's metadata.json (or vice versa). Full pair-atomicity
+        # would need a manifest/generation-number scheme; out of scope here,
+        # but this is why model.reload() (called immediately after both) is
+        # the very next line — the window is microseconds.
+        os.replace(tmp_model, live_dir / "model.joblib")
+        os.replace(tmp_metadata, live_dir / "metadata.json")
+        model.reload()
+
+        with open(live_dir / "metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"deploy failed: {exc}") from exc
+
+    return {"artifactSha256": metadata["artifactSha256"], "trainedAt": metadata["trainedAt"], "metrics": metadata["metrics"]}
+
+
+@app.delete("/training/{upload_id}", response_model=DeleteResponse)
+def discard_candidate(upload_id: str) -> dict:
+    candidate_dir = _candidate_dir(upload_id)
+    if candidate_dir.exists():
+        shutil.rmtree(candidate_dir)
+    return {"deleted": True}
+
+
+@app.post("/training/reset", response_model=ResetResponse)
+def reset_live_model() -> dict:
+    model.reset()
+    return {"reset": True}
+
+
+@app.post("/training/stamp-run-id", response_model=StampRunIdResponse)
+def stamp_live_run_id(payload: StampRunIdRequest) -> dict:
+    """Design-review finding, fixed here: fit_model() always writes
+    runId: null (training.py's own module docstring — "the id can only
+    ever be handed back this way, not looked up"), and model._load_artifact()
+    deliberately refuses to load any artifact with runId: null (Tier 1-only
+    fallback). Without this endpoint, /deploy's copy would carry that null
+    runId into the live directory forever, and Tier 2 would never activate
+    for an upload-deployed model. Node's deployCandidate()
+    (server/services/trainingService.js) calls this immediately after it inserts the training_runs row,
+    passing back the real Postgres id — the exact same fit -> insert ->
+    stamp handoff the CLI bootstrap flow already uses (recordBootstrapRun.js
+    -> `python -m pdm.app.training stamp-run-id`), just over HTTP instead of
+    a second CLI invocation."""
+    live_metadata_path = training._artifact_dir() / "metadata.json"
+    if not live_metadata_path.exists():
+        raise HTTPException(
+            status_code=409, detail="no live artifact to stamp — deploy a model first"
+        )
+    training.stamp_run_id(payload.runId)
+    model.reload()
+    return {"stamped": True, "runId": payload.runId}

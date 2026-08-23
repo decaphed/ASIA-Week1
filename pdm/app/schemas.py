@@ -217,3 +217,57 @@ class ProcessedRecordOut(BaseModel):
 class ProcessWindowResponse(BaseModel):
     processedRecord: ProcessedRecordOut
     tier1Verdict: ScoreResponse
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /training/* (Task 4, §15.7) — response models for the upload ->
+# quality-check -> fit -> compare -> deploy loop.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TrainingUploadResponse(BaseModel):
+    uploadId: str
+    verdict: Literal["PASS", "REJECTED"]
+    qualityScore: float
+    rowCount: int
+    reasons: list[str]
+
+
+class PerClassMetric(BaseModel):
+    precision: float
+    recall: float
+    support: int
+
+
+class ModelMetrics(BaseModel):
+    perClass: dict[str, PerClassMetric]
+    overallAccuracy: float
+
+
+class TrainingFitResponse(BaseModel):
+    uploadId: str
+    candidateMetrics: ModelMetrics
+    deployedMetrics: Optional[ModelMetrics] = None
+
+
+class TrainingDeployResponse(BaseModel):
+    artifactSha256: str
+    trainedAt: str
+    metrics: ModelMetrics
+
+
+class StampRunIdRequest(BaseModel):
+    runId: int
+
+
+class DeleteResponse(BaseModel):
+    deleted: bool
+
+
+class ResetResponse(BaseModel):
+    reset: bool
+
+
+class StampRunIdResponse(BaseModel):
+    stamped: bool
+    runId: int
