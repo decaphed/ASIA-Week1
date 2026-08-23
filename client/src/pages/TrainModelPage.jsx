@@ -13,7 +13,7 @@ function MetricsTable({ title, metrics }) {
   }
   return (
     <div style={{ flex: 1, minWidth: 240 }}>
-      <CardLabel>{title}</CardLabel>
+      <CardLabel as="h3">{title}</CardLabel>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10, fontSize: 12.5 }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#8a99a8', fontSize: 11, textTransform: 'uppercase' }}>
