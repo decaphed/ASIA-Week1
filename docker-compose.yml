@@ -1,3 +1,17 @@
+# NETWORK TOPOLOGY: every service below uses network_mode: host instead of
+# the old edge/data bridge networks. Reason: this host's kernel has a bug
+# where a Linux bridge living inside this CT's own network namespace (which
+# is what Docker's per-project bridges are) silently drops all forwarded
+# traffic between two containers attached to it — confirmed with packet
+# captures, ruled out iptables/Docker/privilege-mode/offload/seccomp/eBPF as
+# causes. A bare veth pair or a bridge in the host's root namespace both
+# work fine; only bridge-forwarding *inside* a nested namespace is broken.
+# Host networking sidesteps it entirely (everything talks over 127.0.0.1,
+# no bridge hop). The tradeoff this reintroduces — postgres/redis/pdm/
+# backend/node-red/authentik-server binding directly on the CT's real
+# interface instead of being invisible outside Docker's bridge — is closed
+# by CT-level iptables rules dropping non-loopback traffic to every port
+# except 80/443 (Traefik), not by Docker network isolation anymore.
 services:
   postgres:
     image: timescale/timescaledb:2.17.2-pg16
@@ -39,7 +53,7 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    networks: [data]
+    network_mode: host
 
   pdm:
     build: ./pdm
@@ -49,7 +63,7 @@ services:
       # (see pdm/app/corpus.py's module docstring and db/init/03-create-
       # pdm-corpus-readonly-role.sh). Never DATABASE_URL/pdm_app — that
       # role is backend's, not pdm's.
-      PDM_CORPUS_DB_URL: postgresql://pdm_corpus_readonly:${PDM_CORPUS_READONLY_PASSWORD:?PDM_CORPUS_READONLY_PASSWORD must be set}@postgres:5432/pump_telemetry
+      PDM_CORPUS_DB_URL: postgresql://pdm_corpus_readonly:${PDM_CORPUS_READONLY_PASSWORD:?PDM_CORPUS_READONLY_PASSWORD must be set}@127.0.0.1:5432/pump_telemetry
       # §15.1/D51 — the bootstrap artifact store, a small first slice of
       # §14.3's full artifact-store design (hot reload / retention pruning
       # NOT built here, out of this task's scope). training.py writes
@@ -78,7 +92,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [data]
+    network_mode: host
 
   backend:
     build: ./server
@@ -93,9 +107,9 @@ services:
       # (server/middleware/authentikIdentity.js) fails closed on requests
       # with no Authentik identity unless NODE_ENV is development/test.
       NODE_ENV: production
-      DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@postgres:5432/pump_telemetry
+      DATABASE_URL: postgres://pdm_app:${PDM_APP_PASSWORD}@127.0.0.1:5432/pump_telemetry
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://dashboard.home}
-      PDM_SERVICE_URL: http://pdm:8000
+      PDM_SERVICE_URL: http://127.0.0.1:8000
       # Only trusted when paired with the matching secret client/nginx.conf.template
       # stamps on requests it proxies — see server/middleware/authentikIdentity.js
       # for why X-authentik-* headers alone aren't enough (node-red and any other
@@ -108,21 +122,21 @@ services:
       - ./pump-physics.yaml:/pump-physics.yaml:ro
     restart: unless-stopped
     # Renamed from "server" — see §2/§3. Directory stays ./server.
-    # No ports: — Node-RED now runs internally (see node-red service below)
-    # and posts to http://backend:3000/api/data over the Compose network, so
-    # nothing outside this stack needs to reach backend directly anymore.
-    # Previously published 3000:3000 for an external Node-RED host; that was
-    # also, unintentionally, an unauthenticated LAN-wide path into every
-    # /api/* route (not just the ingestion POST it was meant for), bypassing
-    # Traefik + Authentik entirely. Removed at the source rather than bolted
-    # shut with backend-side auth.
+    # Node-RED posts to http://127.0.0.1:3000/api/data (network_mode: host —
+    # see top-of-file note). Port 3000 is bound on the CT's real interface
+    # as a result, same as every other service here; the CT-level firewall
+    # is what keeps it off the LAN, not Docker networking. An unauthenticated
+    # LAN-wide path into every /api/* route (not just the ingestion POST
+    # it's meant for), bypassing Traefik + Authentik entirely, is exactly
+    # what that firewall rule for port 3000 exists to prevent — don't remove
+    # it in favor of relying on backend-side auth alone.
     mem_limit: 512m
     cpus: 1.0
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [edge, data]
+    network_mode: host
 
   client:
     build:
@@ -156,7 +170,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [edge]
+    network_mode: host
 
   node-red:
     image: nodered/node-red:4.0.9
@@ -185,7 +199,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [edge]
+    network_mode: host
 
   authentik-redis:
     image: redis:7.4.2-alpine
@@ -212,7 +226,7 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    networks: [data]
+    network_mode: host
 
   authentik-server:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
@@ -226,12 +240,12 @@ services:
         condition: service_healthy
     environment:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__HOST: 127.0.0.1
       AUTHENTIK_POSTGRESQL__PORT: 5432
       AUTHENTIK_POSTGRESQL__USER: authentik_svc
       AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
       AUTHENTIK_POSTGRESQL__NAME: authentik_db
-      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_REDIS__HOST: 127.0.0.1
       AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
@@ -256,7 +270,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [edge, data]
+    network_mode: host
 
   authentik-worker:
     image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG}
@@ -271,12 +285,12 @@ services:
       # first-boot bootstrap, not the server process. (Unchanged reasoning from
       # the prior plan.)
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__HOST: 127.0.0.1
       AUTHENTIK_POSTGRESQL__PORT: 5432
       AUTHENTIK_POSTGRESQL__USER: authentik_svc
       AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
       AUTHENTIK_POSTGRESQL__NAME: authentik_db
-      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_REDIS__HOST: 127.0.0.1
       AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
@@ -293,13 +307,13 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    networks: [data]
+    network_mode: host
 
   traefik:
     image: traefik:v3.7.10
-    ports:
-      - "80:80"
-      - "443:443"
+    # No ports: — network_mode: host means traefik.yml's own entryPoints
+    # (:80/:443) bind directly; a ports: mapping would be a no-op here and
+    # Compose warns if you leave one in.
     volumes:
       - ./authentik/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./authentik/traefik/dynamic:/etc/traefik/dynamic:ro
@@ -333,41 +347,7 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
-    networks: [edge]
-
-networks:
-  edge:
-    driver: bridge
-  data:
-    driver: bridge
-    internal: true
-    # internal: true restored 2026-08-19, after re-verifying on this host
-    # (Docker 29.7.2 / Debian 12 bookworm, kernel 7.0.2-6-pve) that the
-    # DOCKER-INTERNAL chain no longer applies its DROP rules unscoped to
-    # other bridges: with the flag re-enabled, `curl --resolve
-    # dashboard.home:443:127.0.0.1 https://dashboard.home/` still returned
-    # 302 (edge -> traefik -> authentik-server forward-auth unaffected) and
-    # `docker compose exec postgres wget -qO- --timeout=3 https://1.1.1.1`
-    # timed out (data's egress is actually blocked again). Earlier the same
-    # day, on this same host/version, the flag caused the DOCKER-INTERNAL
-    # chain's DROP rules to also apply to the edge network, breaking that
-    # forward-auth path — see git history on this file for the prior
-    # incident and the temporary removal. If this ever regresses again,
-    # suspect a Docker/iptables change and re-run both checks above before
-    # re-adding the flag.
-    #
-    # KNOWN GAP: this only blocks egress for members that are data-only
-    # (postgres, authentik-redis, authentik-worker, pdm — confirmed above
-    # and, separately, for authentik-worker directly). authentik-server is
-    # dual-homed on [edge, data], and `edge` has no internal: true of its
-    # own, so authentik-server still has full internet egress via its edge
-    # interface regardless of this flag (confirmed live: a Python socket
-    # connect from inside authentik-server to 1.1.1.1:443 succeeds).
-    # Closing that would need either host-level egress filtering (item 1's
-    # Proxmox firewall, or an OUTPUT-chain rule on this CT) as a
-    # compensating control, or splitting authentik-server's edge-facing
-    # surface from its data-facing surface — neither is in scope of this
-    # network-flag change alone.
+    network_mode: host
 
 volumes:
   pg_data:

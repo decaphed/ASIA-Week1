@@ -23,7 +23,7 @@ http:
         servers:
           # :8080, not :80 — client runs on nginxinc/nginx-unprivileged so
           # the container has no root process at all (see client/Dockerfile).
-          - url: "http://client:8080"
+          - url: "http://127.0.0.1:8080"
         # Required so nginx on the client service receives the real Host
         # header (dashboard.home) to correctly proxy /api/ to Express —
         # NOT because the outpost needs it (the outpost reads
@@ -34,17 +34,17 @@ http:
     authentik:
       loadBalancer:
         servers:
-          - url: "http://authentik-server:9000"
+          - url: "http://127.0.0.1:9000"
 
     node-red:
       loadBalancer:
         servers:
-          - url: "http://node-red:1880"
+          - url: "http://127.0.0.1:1880"
 
   middlewares:
     authentik-auth:
       forwardAuth:
-        address: "http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        address: "http://127.0.0.1:9000/outpost.goauthentik.io/auth/traefik"
         # authentik's own Traefik forwardAuth reference config sets this
         # true: the EntryPoint sanitizes X-Forwarded-* from untrusted
         # clients, and trustForwardHeader:true is what makes Traefik

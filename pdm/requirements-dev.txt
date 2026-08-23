@@ -2,3 +2,7 @@
 pytest==8.3.4
 pandas==2.3.3
 pyarrow==23.0.1
+
+# starlette==1.6.0's TestClient (used by tests/test_training_endpoints.py)
+# requires httpx2, not the legacy httpx package.
+httpx2==2.12.0

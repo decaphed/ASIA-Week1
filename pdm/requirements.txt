@@ -11,6 +11,11 @@ pydantic==2.10.4
 pyyaml==6.0.2
 psycopg[binary]==3.2.3
 
+# Required by FastAPI's Form/UploadFile handling (training-CSV upload
+# endpoints in main.py) — fastapi does not pull this in as a hard
+# dependency, only checks for it lazily at route-registration time.
+python-multipart==0.0.32
+
 # §15.1/D51 — Tier 2 bootstrap fitting (training.py) and serving (model.py).
 # xgboost is deliberately NOT pinned here: PDM_MODEL_FAMILY=xgboost is
 # config-gated (§14.2.2/D20) and only imported lazily inside
