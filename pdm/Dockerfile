@@ -9,7 +9,15 @@ COPY app ./app
 
 # Non-root: this container only ever receives HTTP payloads and never
 # touches SQLite directly (§3.4) — no reason to run as root.
-RUN useradd --create-home --shell /bin/false pdm
+#
+# /app/artifacts is the pdm_artifacts volume mount point (§15.1/D51's
+# bootstrap artifact store, written by training.py, read by model.py) —
+# created and chowned to pdm here, before USER switches away from root, so
+# Docker seeds a freshly-created named volume with pdm-owned permissions
+# instead of the root:root a bare mkdir under a volume mount would leave.
+RUN useradd --create-home --shell /bin/false pdm \
+    && mkdir -p /app/artifacts \
+    && chown pdm:pdm /app/artifacts
 USER pdm
 
 EXPOSE 8000
