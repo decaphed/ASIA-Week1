@@ -486,7 +486,16 @@ In `pdm/app/model.py`, the file already defines `_load_artifact()` (lines 46-88)
 def reload() -> None:
     """Re-runs _load_artifact() and swaps it into the module-level
     _artifact in place — how /training/deploy (Task 4) makes a newly
-    written artifact live without a container restart."""
+    written artifact live without a container restart.
+
+    SINGLE-WORKER ASSUMPTION: safe only because pdm's Dockerfile CMD runs
+    uvicorn with no --workers flag (1 worker, 1 process) — the module-level
+    _artifact global is single-writer/single-reader, and CPython's GIL
+    makes this one-line reassignment an atomic pointer swap (no torn read
+    for a concurrent /score call). If pdm is ever scaled to multiple
+    workers/processes, this reload() no longer reaches every process and
+    needs a real cross-process signal (e.g. a shared version file each
+    worker polls) instead — do not add --workers without also fixing this."""
     global _artifact
     _artifact = _load_artifact()
 
@@ -723,6 +732,7 @@ to:
 
 ```python
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -763,8 +773,27 @@ def _live_metrics() -> Optional[dict]:
         return json.load(f).get("metrics")
 
 
+CANDIDATE_MAX_AGE_SECONDS = 24 * 60 * 60  # design-review finding: candidates/ lives on the
+# persistent pdm_artifacts Docker volume (docker-compose.yml), not ephemeral container storage —
+# an abandoned upload (never deployed, never explicitly discarded) would otherwise sit there
+# forever. Every /training/upload call sweeps stale candidate dirs first, since this route is
+# open to anyone with no auth gate and no other cleanup trigger exists.
+def _sweep_stale_candidates() -> None:
+    import time
+
+    candidates_dir = _candidates_dir()
+    if not candidates_dir.exists():
+        return
+    now = time.time()
+    for entry in candidates_dir.iterdir():
+        if entry.is_dir() and (now - entry.stat().st_mtime) > CANDIDATE_MAX_AGE_SECONDS:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 @app.post("/training/upload", response_model=TrainingUploadResponse)
 async def upload_training_csv(file: UploadFile) -> dict:
+    _sweep_stale_candidates()
+
     df = pd.read_csv(file.file)
     report = training_quality.assess(df)
 
@@ -807,10 +836,18 @@ def deploy_candidate(upload_id: str) -> dict:
     if not candidate_model.exists() or not candidate_metadata.exists():
         raise HTTPException(status_code=404, detail=f"no fitted candidate found for uploadId={upload_id} — call /fit first")
 
+    # Design-review finding: copy to temp names first, then rename both into
+    # place — os.replace() is atomic on the same filesystem, so a failure
+    # partway through (disk full, permissions) never leaves the live
+    # directory with a new model.joblib but a stale/missing metadata.json.
     live_dir = training._artifact_dir()
     live_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(candidate_model, live_dir / "model.joblib")
-    shutil.copy2(candidate_metadata, live_dir / "metadata.json")
+    tmp_model = live_dir / ".model.joblib.tmp"
+    tmp_metadata = live_dir / ".metadata.json.tmp"
+    shutil.copy2(candidate_model, tmp_model)
+    shutil.copy2(candidate_metadata, tmp_metadata)
+    os.replace(tmp_model, live_dir / "model.joblib")
+    os.replace(tmp_metadata, live_dir / "metadata.json")
     model.reload()
 
     with open(live_dir / "metadata.json", "r", encoding="utf-8") as f:
@@ -938,6 +975,18 @@ export function fitCandidate(uploadId) {
 export async function deployCandidate(uploadId) {
   const result = await pdmJsonPost(`/training/${encodeURIComponent(uploadId)}/deploy`, DEPLOY_TIMEOUT_MS);
 
+  // Design-review finding, accepted as a known interaction rather than
+  // fixed here: this INSERT reuses the same training_runs table and the
+  // same `promoted` flag retrain.py's (currently unwired — see its own
+  // _main() stub) corpus-based champion/challenger loop expects
+  // trainingRunModel.getChampion() to reflect. An upload-deployed model
+  // becomes the next corpus-based challenger's comparison baseline, mixing
+  // two different data lineages under one pointer. Acceptable today since
+  // retrain.py's CLI entry point isn't wired to anything yet (see its
+  // module docstring: "actual Tier 2 training is explicitly out of
+  // scope"); revisit this if/when that loop is built for real — either
+  // give upload-sourced runs a filterable marker getChampion() can
+  // exclude, or make the two flows explicitly aware of each other.
   await trainingRunModel.insertRun({
     corpusContentHash: `bootstrap:upload:${result.artifactSha256}`,
     corpusRowManifest: JSON.stringify({ source: 'upload', uploadId }),
@@ -1067,7 +1116,7 @@ import {
 } from '../controllers/trainingController.js';
 ```
 
-Add the routes near the existing `/pdm/fault-events/*` routes (after the `router.post('/pdm/fault-events/manual-buffer', ...)` line):
+Add the routes near the existing `/pdm/fault-events/*` routes. **Insertion point correction (design-review finding):** do NOT insert directly after the `manual-buffer` line — that line is immediately followed by the `§10.4 Entry point 2` comment block documenting the next two routes (`external-upload`/`external-upload/:uploadId/confirm`), and inserting between them would split that comment from what it describes. Insert this new block instead right after those two `external-upload` routes end (i.e., after `router.post('/pdm/fault-events/external-upload/:uploadId/confirm', ...)`, before whatever route currently follows it):
 
 ```javascript
 // §15.7 — open to any authenticated app user (requireTrustedProxy only,
@@ -1483,3 +1532,17 @@ Confirm `POST /api/pdm/training/reset`'s response is `{"success":true,"data":{"r
 - **Spec coverage:** §1 (start over) → Tasks 3/4/8. §2 (quality gate + preprocessing) → Task 2. §3 (endpoints) → Task 4. §4 (Node proxy) → Task 5. §5 (FE panel) → Tasks 6/7. §6 (Needs Review collapse) → Task 1. Error handling section → covered inline in Task 4's endpoint bodies (422 on reject, 404 on unknown uploadId, live artifact only touched by `/deploy`). Testing section → Tasks 2/3/4's pytest files; Node/manual testing called out explicitly in Task 5 (no existing Node test convention found in `server/tests` to follow, so this plan uses manual `curl` verification instead of inventing a new Node test pattern).
 - **Type/name consistency checked:** `training_quality.assess()`'s return shape (Task 2) matches exactly what Task 4's `/training/upload` handler reads (`report["verdict"]`, `report["reasons"]`, `report["qualityScore"]`, `report["rowCount"]`). `training.fit_model`'s new `artifact_dir` param (Task 3) matches Task 4's call in `fit_candidate()`. `model.reload()`/`model.reset()` (Task 3) match Task 4's calls in `deploy_candidate()`/`reset_live_model()`. Node's `trainingService.js` function names (Task 5) match `trainingController.js`'s imports and `api/client.js`'s Task 6 calls one-for-one.
 - **Fixed during self-review:** Task 5 Step 1's `uploadCsv()` originally imported an unused `createReadStream` and read the file via `readFile` for buffering — corrected in the code block above (the final version has no `createReadStream` import, only `readFile`/`unlink`, so there's nothing left to strip in the implementer's own pass).
+
+## Post-Plan Review (ecc:code-explorer + ecc:code-architect)
+
+Both agents reviewed this plan against the actual codebase before implementation started.
+
+**code-explorer (line-by-line accuracy):** every cited line number, signature, and find/replace snippet matched the current code verbatim — no factual errors. One structural nit, fixed above: Task 5's route-insertion point originally split the `§10.4 Entry point 2` comment away from the `external-upload` route it documents; corrected to insert after both `external-upload` routes instead.
+
+**code-architect (design review) — fixed inline above:**
+- Blocking: `candidates/<uploadId>/` on the persistent `pdm_artifacts` volume had no cleanup path for abandoned uploads → Task 4 now sweeps candidate dirs older than 24h on every `/training/upload` call (`_sweep_stale_candidates()`).
+- Blocking: `/deploy`'s two-file copy wasn't atomic (a failure between `model.joblib` and `metadata.json` could leave a torn live artifact) → Task 4's `deploy_candidate()` now copies to temp names and `os.replace()`s both into place.
+- `model.reload()`'s single-worker assumption was implicit → now documented explicitly in its docstring (Task 3), including what breaks if pdm is ever scaled to multiple uvicorn workers.
+- The `training_runs`/`getChampion()` collision with `retrain.py`'s (currently unwired) corpus-based champion/challenger loop is now called out explicitly as a comment in `deployCandidate()` (Task 5) — accepted as-is since `retrain.py`'s CLI has no real caller yet, flagged to revisit if that loop is ever built out.
+
+**Accepted as documented product decisions, not changed:** no `requireGroup` on `/deploy`/`/reset` (deliberate — matches the "anyone can upload" requirement you gave; code-architect flagged this is the one place most analogous to `external-upload`'s group-gated `/confirm` step, worth a second look if you want tighter control later) — fitted-but-discarded candidates leave no `training_runs` trace (only `/deploy` persists a row; acceptable for v1, `DELETE /training/{uploadId}` is explicitly non-load-bearing) — quality gate doesn't check feature leakage or train/live distribution drift (correctly out of scope per the spec, flagged as future work only).
