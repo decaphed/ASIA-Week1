@@ -257,7 +257,9 @@ services:
       # the embedded outpost (that's the outpost's own `authentik_host` —
       # see dashboard-proxy-provider.yaml) — kept here as a harmless,
       # possibly-relevant-elsewhere default matching that same value.
-      AUTHENTIK_HOST_BROWSER: https://auth.home
+      # TEMPORARY: cloudflared quick-tunnel hostname — see the matching note
+      # in authentik/blueprints/dashboard-proxy-provider.yaml.
+      AUTHENTIK_HOST_BROWSER: https://collaborative-visited-delhi-things.trycloudflare.com
     volumes:
       - authentik_media:/media
       - authentik_certs:/certs
@@ -285,6 +287,21 @@ services:
       # first-boot bootstrap, not the server process. (Unchanged reasoning from
       # the prior plan.)
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      # Every authentik process (server AND worker) starts its own embedded
+      # router/outpost listener regardless of `command:` — harmless under
+      # separate bridge networks (each container had its own isolated port
+      # space), but under network_mode: host both processes fight over the
+      # SAME real ports 9000/9300. Whichever loses just logs a warning and
+      # keeps running in a degraded state — it does NOT crash — which
+      # silently defeated the Traefik forwardAuth gate stack-wide when the
+      # worker happened to win the race (confirmed: dashboard.home served
+      # unauthenticated content instead of redirecting to login). The
+      # worker doesn't need to actually serve outpost/HTTP traffic, so give
+      # it non-conflicting ports instead of fighting authentik-server for
+      # the ones Traefik's dynamic.yml actually points at.
+      AUTHENTIK_LISTEN__HTTP: 127.0.0.1:19000
+      AUTHENTIK_LISTEN__HTTPS: 127.0.0.1:19443
+      AUTHENTIK_LISTEN__METRICS: 127.0.0.1:19300
       AUTHENTIK_POSTGRESQL__HOST: 127.0.0.1
       AUTHENTIK_POSTGRESQL__PORT: 5432
       AUTHENTIK_POSTGRESQL__USER: authentik_svc
@@ -296,7 +313,9 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
-      AUTHENTIK_HOST_BROWSER: https://auth.home
+      # TEMPORARY: cloudflared quick-tunnel hostname — see the matching note
+      # in authentik/blueprints/dashboard-proxy-provider.yaml.
+      AUTHENTIK_HOST_BROWSER: https://collaborative-visited-delhi-things.trycloudflare.com
     volumes:
       - authentik_media:/media
       - ./authentik/blueprints:/blueprints/custom:ro
