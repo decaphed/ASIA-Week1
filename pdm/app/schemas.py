@@ -258,3 +258,16 @@ class TrainingDeployResponse(BaseModel):
 
 class StampRunIdRequest(BaseModel):
     runId: int
+
+
+class DeleteResponse(BaseModel):
+    deleted: bool
+
+
+class ResetResponse(BaseModel):
+    reset: bool
+
+
+class StampRunIdResponse(BaseModel):
+    stamped: bool
+    runId: int

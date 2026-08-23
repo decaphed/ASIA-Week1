@@ -19,8 +19,9 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from . import model, rules, training, training_quality
 from .preprocessing.pipeline import AllSamplesInvalidError, process_window
 from .schemas import (
-    ProcessedRecordIn, ProcessWindowRequest, ProcessWindowResponse, ScoreResponse,
-    StampRunIdRequest, TrainingDeployResponse, TrainingFitResponse, TrainingUploadResponse,
+    DeleteResponse, ProcessedRecordIn, ProcessWindowRequest, ProcessWindowResponse, ResetResponse,
+    ScoreResponse, StampRunIdRequest, StampRunIdResponse, TrainingDeployResponse,
+    TrainingFitResponse, TrainingUploadResponse,
 )
 
 app = FastAPI(title="PdM Tier 1 Rule Engine")
@@ -129,7 +130,12 @@ def _sweep_stale_candidates() -> None:
             shutil.rmtree(entry, ignore_errors=True)
 
 
-@app.post("/training/upload", response_model=TrainingUploadResponse, status_code=201)
+@app.post(
+    "/training/upload",
+    response_model=TrainingUploadResponse,
+    status_code=201,
+    responses={422: {"model": TrainingUploadResponse}},
+)
 def upload_training_csv(file: UploadFile) -> dict:
     # Plain `def`, not `async def`: FastAPI runs sync handlers in a
     # threadpool, but an `async def` handler runs directly on the event
@@ -142,7 +148,7 @@ def upload_training_csv(file: UploadFile) -> dict:
 
     try:
         df = pd.read_csv(file.file)
-    except (pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as exc:
         raise HTTPException(
             status_code=422,
             detail={
@@ -177,7 +183,12 @@ def fit_candidate(upload_id: str) -> dict:
     if not train_csv_path.exists():
         raise HTTPException(status_code=404, detail=f"no upload found for uploadId={upload_id}")
 
-    fitted = training.fit_model(str(train_csv_path), artifact_dir=candidate_dir)
+    try:
+        fitted = training.fit_model(str(train_csv_path), artifact_dir=candidate_dir)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"could not fit a model from this upload: {exc}"
+        ) from exc
 
     return {
         "uploadId": upload_id,
@@ -198,23 +209,33 @@ def deploy_candidate(upload_id: str) -> dict:
     # place — os.replace() is atomic on the same filesystem, so a failure
     # partway through (disk full, permissions) never leaves the live
     # directory with a new model.joblib but a stale/missing metadata.json.
-    live_dir = training._artifact_dir()
-    live_dir.mkdir(parents=True, exist_ok=True)
-    tmp_model = live_dir / ".model.joblib.tmp"
-    tmp_metadata = live_dir / ".metadata.json.tmp"
-    shutil.copy2(candidate_model, tmp_model)
-    shutil.copy2(candidate_metadata, tmp_metadata)
-    os.replace(tmp_model, live_dir / "model.joblib")
-    os.replace(tmp_metadata, live_dir / "metadata.json")
-    model.reload()
+    try:
+        live_dir = training._artifact_dir()
+        live_dir.mkdir(parents=True, exist_ok=True)
+        tmp_model = live_dir / ".model.joblib.tmp"
+        tmp_metadata = live_dir / ".metadata.json.tmp"
+        shutil.copy2(candidate_model, tmp_model)
+        shutil.copy2(candidate_metadata, tmp_metadata)
+        # NOTE: the two replace() calls below are each individually atomic,
+        # but not atomic AS A PAIR — a process crash between them could leave
+        # a live directory with a new model.joblib but the previous
+        # deployment's metadata.json (or vice versa). Full pair-atomicity
+        # would need a manifest/generation-number scheme; out of scope here,
+        # but this is why model.reload() (called immediately after both) is
+        # the very next line — the window is microseconds.
+        os.replace(tmp_model, live_dir / "model.joblib")
+        os.replace(tmp_metadata, live_dir / "metadata.json")
+        model.reload()
 
-    with open(live_dir / "metadata.json", "r", encoding="utf-8") as f:
-        metadata = json.load(f)
+        with open(live_dir / "metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"deploy failed: {exc}") from exc
 
     return {"artifactSha256": metadata["artifactSha256"], "trainedAt": metadata["trainedAt"], "metrics": metadata["metrics"]}
 
 
-@app.delete("/training/{upload_id}")
+@app.delete("/training/{upload_id}", response_model=DeleteResponse)
 def discard_candidate(upload_id: str) -> dict:
     candidate_dir = _candidate_dir(upload_id)
     if candidate_dir.exists():
@@ -222,13 +243,13 @@ def discard_candidate(upload_id: str) -> dict:
     return {"deleted": True}
 
 
-@app.post("/training/reset")
+@app.post("/training/reset", response_model=ResetResponse)
 def reset_live_model() -> dict:
     model.reset()
     return {"reset": True}
 
 
-@app.post("/training/stamp-run-id")
+@app.post("/training/stamp-run-id", response_model=StampRunIdResponse)
 def stamp_live_run_id(payload: StampRunIdRequest) -> dict:
     """Design-review finding, fixed here: fit_model() always writes
     runId: null (training.py's own module docstring — "the id can only
@@ -242,6 +263,11 @@ def stamp_live_run_id(payload: StampRunIdRequest) -> dict:
     stamp handoff the CLI bootstrap flow already uses (recordBootstrapRun.js
     -> `python -m pdm.app.training stamp-run-id`), just over HTTP instead of
     a second CLI invocation."""
+    live_metadata_path = training._artifact_dir() / "metadata.json"
+    if not live_metadata_path.exists():
+        raise HTTPException(
+            status_code=409, detail="no live artifact to stamp — deploy a model first"
+        )
     training.stamp_run_id(payload.runId)
     model.reload()
     return {"stamped": True, "runId": payload.runId}

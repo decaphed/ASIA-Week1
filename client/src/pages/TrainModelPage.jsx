@@ -6,7 +6,7 @@ function MetricsTable({ title, metrics }) {
   if (!metrics) {
     return (
       <div style={{ flex: 1, minWidth: 240 }}>
-        <CardLabel>{title}</CardLabel>
+        <CardLabel as="h3">{title}</CardLabel>
         <div style={{ padding: '18px 0', color: '#8a99a8', fontSize: 13 }}>No model currently deployed.</div>
       </div>
     );
@@ -48,11 +48,16 @@ export default function TrainModelPage({ showToast }) {
   const [fitting, setFitting] = useState(false);
   const [fitResult, setFitResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [resetCount, setResetCount] = useState(0);
 
   const reset = () => {
     setFile(null);
     setUploadResult(null);
     setFitResult(null);
+    // Forces the (uncontrolled) file input to remount so its displayed
+    // filename clears too — clearing `file` state alone doesn't touch what
+    // the browser shows in the native file picker.
+    setResetCount((n) => n + 1);
   };
 
   const handleUpload = async () => {
@@ -113,6 +118,10 @@ export default function TrainModelPage({ showToast }) {
     setBusy(true);
     try {
       await api.resetTrainingModel();
+      // Invalidate the comparison table's "Currently deployed" column
+      // specifically — don't call the full reset() here, that would also
+      // wipe the upload/fit results and force the operator to re-upload.
+      setFitResult(null);
       showToast('Live model reset — Tier 1 only until a new model is deployed.', '#8a99a8');
     } catch (err) {
       showToast(`Reset failed: ${err.message}`, '#B3282D');
@@ -147,7 +156,7 @@ export default function TrainModelPage({ showToast }) {
       <Card>
         <CardLabel>1. Upload training CSV</CardLabel>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
-          <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input key={resetCount} type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           <button
             type="button"
             className="hover-outline-btn"

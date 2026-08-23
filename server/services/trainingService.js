@@ -10,7 +10,8 @@
 // recordBootstrapRun.js uses for the CLI-piped bootstrap path.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { readFile, unlink } from 'node:fs/promises';
+import { openAsBlob } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 
 import * as trainingRunModel from '../models/trainingRunModel.js';
 import { logger } from '../utils/logger.js';
@@ -39,9 +40,14 @@ async function pdmJsonPost(path, timeoutMs) {
 /** @param tempFilePath a just-uploaded temp CSV (multer diskStorage, uploadFile.js). */
 export async function uploadCsv(tempFilePath, originalFilename) {
   try {
-    const fileBuffer = await readFile(tempFilePath);
+    // openAsBlob() (Node >=19.8) gives FormData a Blob-like handle backed by
+    // the file on disk — the bytes are streamed to pdm as fetch consumes the
+    // multipart body, not read into a single in-memory Buffer first, unlike
+    // the readFile()+`new Blob([...])` approach this replaced. Same
+    // streaming discipline server/utils/csvParse.js already uses (via
+    // createReadStream) for the pre-existing external-upload CSV path.
     const form = new FormData();
-    form.append('file', new Blob([fileBuffer]), originalFilename);
+    form.append('file', await openAsBlob(tempFilePath), originalFilename);
 
     let res;
     try {
