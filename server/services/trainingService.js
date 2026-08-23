@@ -82,36 +82,46 @@ export async function deployCandidate(uploadId) {
   // scope"); revisit this if/when that loop is built for real — either
   // give upload-sourced runs a filterable marker getChampion() can
   // exclude, or make the two flows explicitly aware of each other.
-  const { id: trainingRunId } = await trainingRunModel.insertRun({
-    corpusContentHash: `bootstrap:upload:${result.artifactSha256}`,
-    corpusRowManifest: JSON.stringify({ source: 'upload', uploadId }),
-    corpusRowCount: 0,
-    trainedAt: result.trainedAt,
-    metrics: JSON.stringify(result.metrics),
-    artifactPath: null,
-    promoted: true,
-    promotionReason: 'operator-deployed candidate from an uploaded training CSV (§15.7)',
-    championRunIdAtEval: null,
-  });
-
-  // Design-review finding, fixed: without this call, the live metadata.json
-  // pdm's /deploy just wrote keeps runId: null forever, and
-  // model._load_artifact() refuses to load a null-runId artifact — Tier 2
-  // would never activate. Same fit -> insert -> stamp handoff the CLI
-  // bootstrap flow already uses (recordBootstrapRun.js -> `python -m
-  // pdm.app.training stamp-run-id`), just over HTTP.
-  let stampRes;
+  // Design-review finding, fixed: pdm's /deploy above already overwrote the
+  // live model.joblib/metadata.json and called model.reload() — since the
+  // copied metadata.json still has runId: null at that point, Tier 2 is
+  // ALREADY inactive the instant /deploy returns, whether or not the rest
+  // of this function succeeds. If insertRun() or the stamp-run-id call
+  // below fails, the previous working model is gone (overwritten), the new
+  // one is unloadable (runId still null), and Tier 2 stays dark until deploy
+  // is retried. Wrap both steps so the thrown error says so explicitly,
+  // instead of leaking a generic DB/fetch error that gives the operator no
+  // hint the live artifact was already replaced.
+  let trainingRunId;
   try {
-    stampRes = await fetch(`${PDM_SERVICE_URL}/training/stamp-run-id`, {
+    ({ id: trainingRunId } = await trainingRunModel.insertRun({
+      corpusContentHash: `bootstrap:upload:${result.artifactSha256}`,
+      corpusRowManifest: JSON.stringify({ source: 'upload', uploadId }),
+      corpusRowCount: 0,
+      trainedAt: result.trainedAt,
+      metrics: JSON.stringify(result.metrics),
+      artifactPath: null,
+      promoted: true,
+      promotionReason: 'operator-deployed candidate from an uploaded training CSV (§15.7)',
+      championRunIdAtEval: null,
+    }));
+
+    // Same fit -> insert -> stamp handoff the CLI bootstrap flow already
+    // uses (recordBootstrapRun.js -> `python -m pdm.app.training
+    // stamp-run-id`), just over HTTP.
+    const stampRes = await fetch(`${PDM_SERVICE_URL}/training/stamp-run-id`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runId: trainingRunId }),
       signal: AbortSignal.timeout(DEPLOY_TIMEOUT_MS),
     });
+    if (!stampRes.ok) throw new Error(`pdm /training/stamp-run-id responded ${stampRes.status}`);
   } catch (err) {
-    throw httpError(502, `pdm /training/stamp-run-id call failed: ${err.message}`);
+    throw httpError(
+      502,
+      'model file was deployed but activation failed (Tier 2 is currently INACTIVE) — re-run deploy or contact an operator: ' + err.message,
+    );
   }
-  if (!stampRes.ok) throw httpError(stampRes.status, `pdm /training/stamp-run-id responded ${stampRes.status}`);
 
   return { ...result, trainingRunId };
 }

@@ -560,10 +560,10 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
     return rank(a) - rank(b) || Date.parse(a.detectedAt) - Date.parse(b.detectedAt);
   });
 
-  const sortedKey = sorted.map((q) => q.id).join(',');
-  const prevSortedKey = useRef(sortedKey);
-  if (prevSortedKey.current !== sortedKey) {
-    prevSortedKey.current = sortedKey;
+  const filtersKey = JSON.stringify(filters);
+  const prevFiltersKey = useRef(filtersKey);
+  if (prevFiltersKey.current !== filtersKey) {
+    prevFiltersKey.current = filtersKey;
     setVisibleCount(10);
   }
 

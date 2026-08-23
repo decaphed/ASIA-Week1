@@ -67,6 +67,29 @@ def assess(df: pd.DataFrame) -> dict[str, Any]:
             f"{MIN_MINORITY_SHARE} minimum needed for a stratified split"
         )
 
+    # training.fit_model() does `"FAULT" if int(v) == 1 else "NORMAL"` on
+    # every present label value — a plausible-but-wrong export (e.g. the
+    # strings "NORMAL"/"FAULT", or any non-0/1 value) would sail through
+    # this quality gate and then raise ValueError inside /fit, after the
+    # CSV was already accepted. Catch it here instead: every non-null label
+    # value must be numeric AND exactly 0 or 1 (values like 0.0 or "0" are
+    # fine post-coercion; anything that fails to coerce, or coerces to
+    # something other than 0/1, is invalid).
+    present_labels = df[TRAIN_CSV_LABEL_COLUMN].dropna()
+    numeric_labels = pd.to_numeric(present_labels, errors="coerce")
+    invalid_label_mask = numeric_labels.isna() | ~numeric_labels.isin([0, 1])
+    if invalid_label_mask.any():
+        bad_values = present_labels[invalid_label_mask].unique().tolist()
+        if len(bad_values) <= 5:
+            bad_values_desc = ", ".join(repr(v) for v in bad_values)
+            structural_reasons.append(
+                f"label column '{TRAIN_CSV_LABEL_COLUMN}' has invalid value(s) (must be 0 or 1): {bad_values_desc}"
+            )
+        else:
+            structural_reasons.append(
+                f"label column '{TRAIN_CSV_LABEL_COLUMN}' has {int(invalid_label_mask.sum())} invalid value(s) (must be 0 or 1)"
+            )
+
     if structural_reasons:
         # Too few rows, or too imbalanced to stratify — no meaningful score
         # to compute, reject outright.
@@ -76,7 +99,17 @@ def assess(df: pd.DataFrame) -> dict[str, Any]:
         }
 
     feature_columns = list(TRAIN_CSV_COLUMN_MAP)
-    missing_count = int(df[feature_columns + [TRAIN_CSV_LABEL_COLUMN]].isna().any(axis=1).sum())
+
+    # A numeric feature column containing any non-numeric token (e.g.
+    # "N/A") comes through as object dtype, and comparing that against a
+    # numeric bound below raises TypeError. Coerce a working copy of just
+    # the feature columns to numeric first — unparseable values become
+    # NaN, which correctly counts as "missing" (see missing_count below)
+    # rather than crashing the range comparison. The caller's df is left
+    # untouched.
+    numeric_features = df[feature_columns].apply(pd.to_numeric, errors="coerce")
+
+    missing_count = int((numeric_features.isna().any(axis=1) | df[TRAIN_CSV_LABEL_COLUMN].isna()).sum())
     missing_rate = missing_count / row_count if row_count else 0.0
 
     duplicate_count = int(df.duplicated().sum())
@@ -86,9 +119,9 @@ def assess(df: pd.DataFrame) -> dict[str, Any]:
     out_of_range_row_mask = pd.Series(False, index=df.index)
     for csv_column, metric_name in TRAIN_CSV_COLUMN_MAP.items():
         bounds = ranges.get(metric_name)
-        if bounds is None or csv_column not in df.columns:
+        if bounds is None or csv_column not in numeric_features.columns:
             continue
-        column_out_of_range = (df[csv_column] < bounds["min"]) | (df[csv_column] > bounds["max"])
+        column_out_of_range = (numeric_features[csv_column] < bounds["min"]) | (numeric_features[csv_column] > bounds["max"])
         out_of_range_row_mask = out_of_range_row_mask | column_out_of_range.fillna(False)
     out_of_range_rate = float(out_of_range_row_mask.sum()) / row_count if row_count else 0.0
 

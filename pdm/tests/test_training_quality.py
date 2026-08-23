@@ -8,12 +8,18 @@ from app.training_quality import MIN_MINORITY_SHARE, MIN_ROWS, assess
 
 
 def _good_df(n=300):
-    # Per-row jitter keeps every row unique (no accidental duplicates) while
-    # staying comfortably inside pump-physics.yaml's ranges (rpm 0-5000,
-    # suctionPressure 0-10, dischargePressure 0-25, flowRate 0-500,
-    # motorTemp 0-150, vibration 0-25).
+    # Engine_rpm is strictly increasing across all n rows, which alone
+    # guarantees every full row is unique (no accidental duplicates)
+    # regardless of how the other, smaller-range columns happen to cycle —
+    # a periodic Engine_rpm (e.g. `1800.0 + (i % 50)`) combined with the
+    # other columns' periods can produce a combined row-uniqueness period
+    # far shorter than n, silently reintroducing duplicate rows for larger
+    # n (same bug class already fixed in test_training_endpoints.py's
+    # _good_csv_bytes()). Values stay comfortably inside pump-physics.yaml's
+    # ranges (rpm 0-5000, suctionPressure 0-10, dischargePressure 0-25,
+    # flowRate 0-500, motorTemp 0-150, vibration 0-25).
     return pd.DataFrame({
-        "Engine_rpm": [1800.0 + (i % 50) for i in range(n)],
+        "Engine_rpm": [1800.0 + i for i in range(n)],
         "suctionPressure": [4.5 + (i % 10) * 0.01 for i in range(n)],
         "dischargePressure": [5.2 + (i % 10) * 0.01 for i in range(n)],
         "flowRate": [90.0 + (i % 20) for i in range(n)],
@@ -66,6 +72,22 @@ def test_out_of_range_values_drag_score_below_pass():
     result = assess(df)
     assert result["verdict"] == "REJECTED"
     assert result["outOfRangeRate"] > 0
+
+
+def test_invalid_label_values_hard_rejected():
+    # A plausible-but-wrong export format (e.g. "NORMAL"/"FAULT" strings
+    # instead of 0/1) must be caught here, at upload time — not left to
+    # blow up training.fit_model()'s `int(v) == 1` inside /fit after the
+    # CSV already passed the quality gate.
+    n = 300
+    df = _good_df(n=n)
+    labels = [0, 1] * (n // 2)
+    labels[0] = "NORMAL"
+    labels[1] = "FAULT"
+    df["Engine_Condition"] = labels
+    result = assess(df)
+    assert result["verdict"] == "REJECTED"
+    assert any("Engine_Condition" in r or "invalid" in r.lower() for r in result["reasons"])
 
 
 def test_imbalanced_labels_hard_rejected():

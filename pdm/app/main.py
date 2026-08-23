@@ -7,6 +7,7 @@ file I/O on a hot path.
 
 import json
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -90,9 +91,16 @@ def _candidates_dir() -> Path:
 
 
 def _candidate_dir(upload_id: str) -> Path:
-    # upload_id always comes from uuid.uuid4().hex (this module's own
-    # /training/upload), never from unsanitized user input, so it's safe
-    # to use directly as a path segment.
+    # upload_id is a raw FastAPI/Starlette path parameter (matches
+    # `[^/]+` by default, which includes "..") — NOT guaranteed to be a
+    # uuid4().hex we minted ourselves. Without this check, a caller could
+    # hit e.g. DELETE /training/.. and have _candidates_dir() / ".."
+    # resolve to PDM_ARTIFACT_DIR itself, letting shutil.rmtree() in
+    # discard_candidate() wipe the live model artifact. Validating the
+    # exact uuid4().hex shape (32 lowercase hex chars) before ever
+    # building a path is what makes the path construction below safe.
+    if not re.fullmatch(r"[0-9a-f]{32}", upload_id):
+        raise HTTPException(status_code=404, detail=f"invalid uploadId: {upload_id}")
     return _candidates_dir() / upload_id
 
 
@@ -122,10 +130,29 @@ def _sweep_stale_candidates() -> None:
 
 
 @app.post("/training/upload", response_model=TrainingUploadResponse, status_code=201)
-async def upload_training_csv(file: UploadFile) -> dict:
+def upload_training_csv(file: UploadFile) -> dict:
+    # Plain `def`, not `async def`: FastAPI runs sync handlers in a
+    # threadpool, but an `async def` handler runs directly on the event
+    # loop. pd.read_csv/training_quality.assess/cleaned.to_csv below are
+    # all blocking calls with no `await` in this function, so as `async
+    # def` this handler would stall the whole pdm process — including the
+    # live /score and /process-window paths — for the duration of parsing
+    # a large CSV.
     _sweep_stale_candidates()
 
-    df = pd.read_csv(file.file)
+    try:
+        df = pd.read_csv(file.file)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "verdict": "REJECTED",
+                "reasons": [f"could not parse CSV: {exc}"],
+                "qualityScore": 0.0,
+                "rowCount": 0,
+            },
+        ) from exc
+
     report = training_quality.assess(df)
 
     if report["verdict"] == "REJECTED":
@@ -209,8 +236,8 @@ def stamp_live_run_id(payload: StampRunIdRequest) -> dict:
     deliberately refuses to load any artifact with runId: null (Tier 1-only
     fallback). Without this endpoint, /deploy's copy would carry that null
     runId into the live directory forever, and Tier 2 would never activate
-    for an upload-deployed model. Node's deployCandidate() (Task 5, not yet
-    built) calls this immediately after it inserts the training_runs row,
+    for an upload-deployed model. Node's deployCandidate()
+    (server/services/trainingService.js) calls this immediately after it inserts the training_runs row,
     passing back the real Postgres id — the exact same fit -> insert ->
     stamp handoff the CLI bootstrap flow already uses (recordBootstrapRun.js
     -> `python -m pdm.app.training stamp-run-id`), just over HTTP instead of
