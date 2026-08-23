@@ -6,6 +6,7 @@ import OverviewPage from './pages/OverviewPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
 import PredictionsPage from './pages/PredictionsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
+import TrainModelPage from './pages/TrainModelPage.jsx';
 import { api } from './api/client.js';
 import { usePolling } from './hooks/usePolling.js';
 import { useLiveBuffer } from './hooks/useLiveBuffer.js';
@@ -89,6 +90,7 @@ export default function App() {
         {page === 'reports' && (
           <ReportsPage queue={queue} audit={audit} showToast={showToast} />
         )}
+        {page === 'train' && <TrainModelPage showToast={showToast} />}
       </main>
       <Toast toast={toast} />
     </div>
