@@ -17,14 +17,13 @@ from .config import EXPECTED_SAMPLE_COUNT
 # loudly (see the "unmatched" bucket below) rather than silently
 # miscounting.
 VIOLATION_CATEGORY = {
-    "flowRate out of range": "flowRate",
-    "rpm out of range": "rpm",
-    "vibration out of range": "vibration",
-    "suctionPressure out of range": "suctionPressure",
-    "dischargePressure out of range": "dischargePressure",
-    "motorTemp out of range": "motorTemp",
-    "dischargePressure must exceed suctionPressure": "dischargePressureVsSuction",
-    "STOPPED status but flow/rpm indicate the pump is running": "statusMismatch",
+    "engineRpm out of range": "engineRpm",
+    "lubOilPressure out of range": "lubOilPressure",
+    "fuelPressure out of range": "fuelPressure",
+    "coolantPressure out of range": "coolantPressure",
+    "lubOilTemperature out of range": "lubOilTemperature",
+    "coolantTemperature out of range": "coolantTemperature",
+    "STOPPED status but engineRpm indicates the engine is running": "statusMismatch",
 }
 
 VIOLATION_CATEGORIES = list(dict.fromkeys(VIOLATION_CATEGORY.values()))

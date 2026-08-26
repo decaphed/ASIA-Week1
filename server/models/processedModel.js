@@ -7,7 +7,7 @@
 
 import pool, { toIso } from '../database/db.js';
 
-const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
+const METRICS = ['engineRpm', 'lubOilPressure', 'fuelPressure', 'coolantPressure', 'lubOilTemperature', 'coolantTemperature'];
 const STATS = ['Mean', 'Median', 'Min', 'Max', 'StdDev', 'Last'];
 const METRIC_COLUMNS = METRICS.flatMap((metric) => STATS.map((stat) => `${metric}${stat}`));
 

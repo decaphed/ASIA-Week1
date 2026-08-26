@@ -1,5 +1,11 @@
 # Training CSV Upload & Model Reset Implementation Plan
 
+> **⚠ CORRECTED, NOT SUPERSEDED (2026-08-26):** see the identical note atop
+> `docs/superpowers/specs/2026-08-23-training-csv-upload-design.md` — this
+> plan's architecture stands, but every pump-shaped column name/fixture in
+> its task breakdown must be read against the real engine column map fixed
+> in `pdm/app/training.py::TRAIN_CSV_COLUMN_MAP`, not as written here.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let anyone upload a training CSV through the FE, gate it with a quality check + preprocessing, fit a candidate Tier 2 model from it, compare the candidate against whatever's currently deployed, and only deploy on explicit operator confirmation — plus wipe the current live model (start over) and stop the Needs Review tab from scrolling forever.

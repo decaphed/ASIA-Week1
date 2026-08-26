@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────
+# engine-physics.yaml — plausible physical ranges for an engine, shared by
+# both server/ (hard-reject at ingest, server/utils/validation.js) and
+# pdm/ (soft-annotate physics validation, pdm/app/preprocessing/validator.py).
+#
+# Replaces pump-physics.yaml (docs/plan/2026-08-26-pump-to-engine-migration.md,
+# Phase 1). Single source of truth for RANGES — see
+# docs/plan/2026-08-05-pdm-implementation.md §11.5 item 3 / §11.6.1 for why
+# this is a single shared file rather than duplicated per-language constants.
+#
+# PROVISIONAL, same status pump-physics.yaml carried: ranges are derived
+# empirically from data/train.csv (docs/analysis/2026-08-26-train-csv-
+# characterization.md — the single source for every number below; re-derive
+# from that artifact if data/train.csv changes, do not hand-edit these
+# numbers), NOT from a real OT/instrumentation spec. Units are ASSUMED —
+# data/train.csv does not label units for any of the five non-RPM columns;
+# bar/°C are plausible given the magnitudes but unconfirmed (plan §2.2,
+# open question §12 Q5).
+#
+# coolantTemperature's hard bound is derived EXCLUDING 2 known outlier rows
+# in data/train.csv (195.5 and 118.4, both far above every other reading,
+# which maxes out at 95.9 otherwise) — see the characterization artifact's
+# "Coolant_Temperature confirmed outlier" finding. Those 2 rows are treated
+# as bad sensor data, not physically plausible readings; a live reading of
+# 195°C should hard-reject at ingest, which this bound now does correctly.
+# ─────────────────────────────────────────────────────────────────────────
+
+version: "1"
+
+metrics:
+  engineRpm:            { min: 0,  max: 2500 } # RPM
+  lubOilPressure:       { min: 0,  max: 8.5 }  # bar (ASSUMED unit)
+  fuelPressure:         { min: 0,  max: 23 }   # bar (ASSUMED unit)
+  coolantPressure:      { min: 0,  max: 9 }    # bar (ASSUMED unit)
+  lubOilTemperature:    { min: 65, max: 95 }   # degC
+  coolantTemperature:   { min: 60, max: 108 }  # degC (outlier-excluded — see header)

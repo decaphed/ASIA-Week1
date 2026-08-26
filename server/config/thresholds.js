@@ -15,23 +15,28 @@
 // "never triggered on that side".
 // ─────────────────────────────────────────────────────────────────────────
 
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 3. warnLow/warnHigh = Phase 0 p5/p95; alarmLow/alarmHigh
+// = Phase 0 p1/p99 (docs/analysis/2026-08-26-train-csv-characterization.md)
+// — alarm bounds equal trendService.js's OPERATING_RANGE boundary exactly,
+// satisfying rangeConsistency.js's nesting requirement by construction.
 export const THRESHOLDS = {
-  flowRate: { warnLow: 80, alarmLow: 60, warnHigh: 270, alarmHigh: 295 },
-  rpm: { warnLow: 1200, alarmLow: 1050, warnHigh: 3400, alarmHigh: 3550 },
-  vibration: { warnHigh: 7.1, alarmHigh: 11.2 },
-  suctionPressure: { warnLow: 0.8, alarmLow: 0.6, warnHigh: 2.8, alarmHigh: 2.95 },
-  dischargePressure: { warnLow: 3, alarmLow: 2.2, warnHigh: 10.5, alarmHigh: 11.5 },
-  motorTemp: { warnHigh: 75, alarmHigh: 85 },
+  engineRpm: { warnLow: 444, alarmLow: 382, warnHigh: 1322.65, alarmHigh: 1565 },
+  lubOilPressure: { warnLow: 1.939, alarmLow: 0.858, warnHigh: 5.064, alarmHigh: 5.605 },
+  fuelPressure: { warnLow: 3.112, alarmLow: 1.396, warnHigh: 12.200, alarmHigh: 16.161 },
+  coolantPressure: { warnLow: 1.084, alarmLow: 0.723, warnHigh: 4.458, alarmHigh: 5.950 },
+  lubOilTemperature: { warnLow: 74.268, alarmLow: 73.413, warnHigh: 84.978, alarmHigh: 87.350 },
+  coolantTemperature: { warnLow: 68.404, alarmLow: 65.740, warnHigh: 88.636, alarmHigh: 91.780 },
 };
 
 // The six numeric metrics, in a stable order shared by the series + summary
 // responses. Kept alongside the thresholds so both features iterate the same
 // canonical list.
 export const SUMMARY_METRICS = [
-  'flowRate',
-  'rpm',
-  'vibration',
-  'suctionPressure',
-  'dischargePressure',
-  'motorTemp',
+  'engineRpm',
+  'lubOilPressure',
+  'fuelPressure',
+  'coolantPressure',
+  'lubOilTemperature',
+  'coolantTemperature',
 ];

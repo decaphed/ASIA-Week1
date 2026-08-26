@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 // unitConversion.js — §10.4.1 Stage B's fixed per-metric source-unit lists
 // and conversion functions. Every metric's internal unit (what
-// pump-physics.yaml's RANGES and this system's own six metrics are always
+// engine-physics.yaml's RANGES and this system's own six metrics are always
 // expressed in) is always the identity entry in its list — a mapped column
 // declared in the internal unit is a no-op conversion, not a special case.
 //
@@ -10,39 +10,42 @@
 // fuzzy column-name matching applies equally here: an operator's unit
 // choice is only as trustworthy as the human asserting it.
 //
-// vibration's list deliberately excludes 'g' (acceleration) — converting
-// acceleration to velocity requires the vibration frequency (v = a / 2πf),
-// which a scalar CSV column can't supply. Offering a fixed-multiplier
-// "g -> mm/s" conversion would be physically wrong and would fabricate
-// confidence this system's design repeatedly refuses to fabricate (§3.2).
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 3. flowRate and vibration have no engine analogue and
+// are dropped outright (not renamed). The three pressure metrics' and two
+// temperatures' internal units (bar, degC) are themselves UNCONFIRMED —
+// data/train.csv does not label units for any non-RPM column (plan §2.2) —
+// so these bar/psi/kPa and degC/degF/K conversion tables are offered on the
+// same ASSUMED basis as engine-physics.yaml, not a confirmed spec.
 // ─────────────────────────────────────────────────────────────────────────
 
 const PSI_TO_BAR = 0.06894757293168361;
 
 export const UNIT_CONVERSIONS = {
-  flowRate: {
-    'L/min': (v) => v,
-    GPM: (v) => v * 3.785411784,
-    'm3/h': (v) => (v * 1000) / 60,
+  engineRpm: {
+    RPM: (v) => v,
   },
-  rpm: {
-    rpm: (v) => v,
-  },
-  vibration: {
-    'mm/s': (v) => v,
-    'in/s': (v) => v * 25.4,
-  },
-  suctionPressure: {
+  lubOilPressure: {
     bar: (v) => v,
     psi: (v) => v * PSI_TO_BAR,
     kPa: (v) => v * 0.01,
   },
-  dischargePressure: {
+  fuelPressure: {
     bar: (v) => v,
     psi: (v) => v * PSI_TO_BAR,
     kPa: (v) => v * 0.01,
   },
-  motorTemp: {
+  coolantPressure: {
+    bar: (v) => v,
+    psi: (v) => v * PSI_TO_BAR,
+    kPa: (v) => v * 0.01,
+  },
+  lubOilTemperature: {
+    '°C': (v) => v,
+    '°F': (v) => ((v - 32) * 5) / 9,
+    K: (v) => v - 273.15,
+  },
+  coolantTemperature: {
     '°C': (v) => v,
     '°F': (v) => ((v - 32) * 5) / 9,
     K: (v) => v - 273.15,

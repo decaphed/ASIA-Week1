@@ -42,16 +42,16 @@ def test_quality_label_boundaries():
 
 def test_violations_by_metric_tallying_and_unmatched_bucket():
     window = make_window(3)
-    window[0]["physicsViolations"] = ["vibration out of range"]
-    window[1]["physicsViolations"] = ["dischargePressure must exceed suctionPressure"]
+    window[0]["physicsViolations"] = ["coolantTemperature out of range"]
+    window[1]["physicsViolations"] = ["STOPPED status but engineRpm indicates the engine is running"]
     window[2]["physicsViolations"] = ["some future violation string not in the map"]
 
     result = compute_quality(
         window=window, missing_count=0, outlier_count=0, metric_count=6,
         evaluated_sample_count=3, imputed_sample_count=0,
     )
-    assert result["violationsByMetric"]["vibration"] == 1
-    assert result["violationsByMetric"]["dischargePressureVsSuction"] == 1
+    assert result["violationsByMetric"]["coolantTemperature"] == 1
+    assert result["violationsByMetric"]["statusMismatch"] == 1
     # An unrecognized violation string must NOT be silently dropped.
     assert result["violationsByMetric"]["unmatched"] == 1
 

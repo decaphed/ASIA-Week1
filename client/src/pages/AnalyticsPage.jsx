@@ -33,9 +33,11 @@ function trendChip(entry, metricKey) {
   const up = dir === 'increasing' || dir === 'rising' || dir === 'up';
   const sharp = /sharp/i.test(label);
   const arrow = up ? (sharp ? '↑' : '↗') : sharp ? '↓' : '↘';
-  // Rising is the bad direction for every channel except suction pressure,
-  // where a falling reading is what signals trouble (loss of NPSH).
-  const bad = metricKey === 'suctionPressure' ? !up : up;
+  // Rising is the bad direction for every channel except lube oil pressure,
+  // where a falling reading is what signals trouble (oil pressure loss —
+  // see docs/plan/2026-08-26-pump-to-engine-migration.md §4.2's
+  // OIL_PRESSURE_LOSS fault mode).
+  const bad = metricKey === 'lubOilPressure' ? !up : up;
   if (!bad) return { arrow, label: label.toLowerCase(), c: '#177E4D', bg: '#E4F3EB' };
   return sharp
     ? { arrow, label: label.toLowerCase(), c: '#B3282D', bg: '#FBEAE8' }
@@ -59,7 +61,7 @@ function EmptyChart({ message }) {
 }
 
 function AnalyticsPage() {
-  const [metricKey, setMetricKey] = useState('vibration');
+  const [metricKey, setMetricKey] = useState('engineRpm');
   const [rangeId, setRangeId] = useState('24h');
 
   const { data: seriesRes, loading: seriesLoading, error: seriesError } = usePolling(
@@ -283,7 +285,7 @@ function AnalyticsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 20 }}>
           {[
             { k: 'Availability', v: summaryHead.availabilityPct == null ? '—' : `${fmt(summaryHead.availabilityPct, 1)} %`, sub: `over the last ${summaryRange === '7d' ? '7 days' : '24 hours'}` },
-            { k: 'Run time', v: summaryHead.runHours == null ? '—' : `${fmt(summaryHead.runHours, 2)} h`, sub: 'pump in RUNNING state' },
+            { k: 'Run time', v: summaryHead.runHours == null ? '—' : `${fmt(summaryHead.runHours, 2)} h`, sub: 'engine in RUNNING state' },
             { k: 'Warning excursions', v: fmt(summaryHead.excursions?.warn, 0), sub: 'distinct periods above a warning level' },
             { k: 'Alarm excursions', v: fmt(summaryHead.excursions?.alarm, 0), sub: 'distinct periods above an alarm limit' },
           ].map((s) => (

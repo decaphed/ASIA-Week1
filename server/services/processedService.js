@@ -17,7 +17,7 @@ import { onNewProcessedRecord as pdmOnNewRecord } from './pdmService.js';
 import { computeFeaturesForNewRow, INGEST_FETCH_ROWS } from '../preprocessing/historicalFeatures.js';
 import { logger } from '../utils/logger.js';
 
-const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
+const METRICS = ['engineRpm', 'lubOilPressure', 'fuelPressure', 'coolantPressure', 'lubOilTemperature', 'coolantTemperature'];
 
 /**
  * Convert a raw DB row into the nested object the API exposes.

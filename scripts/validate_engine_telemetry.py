@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """
-validate_pump_telemetry.py -- independent checks on the corpus produced by
-generate_pump_telemetry.py.
+validate_engine_telemetry.py -- independent checks on the corpus produced by
+generate_engine_telemetry.py.
 
-Deliberately re-derives everything from the written files rather than from the
-generator's in-memory state, so a bug in the generator cannot hide behind a
-shared assumption. Streams one day-partition at a time and carries the boundary
-rows across, so peak memory stays flat regardless of corpus size.
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 6 (replaces validate_pump_telemetry.py). Per the plan's
+recommendation, METRICS/RANGE are now LOADED from the repo-root
+engine-physics.yaml rather than re-mirrored as a hardcoded copy -- the
+pump-domain version of this script duplicated pump-physics.yaml verbatim,
+which was flagged as a long-standing (if low-risk) duplication.
+
+Deliberately re-derives everything from the written files rather than from
+the generator's in-memory state, so a bug in the generator cannot hide
+behind a shared assumption. Streams one day-partition at a time and carries
+the boundary rows across, so peak memory stays flat regardless of corpus
+size.
 
 Exit status is 0 when every check passes, 1 otherwise.
 """
@@ -22,25 +30,27 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+import yaml
 
-METRICS = ("flowRate", "rpm", "vibration", "suctionPressure",
-           "dischargePressure", "motorTemp")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ENGINE_PHYSICS_PATH = REPO_ROOT / "engine-physics.yaml"
 
-RANGE = {
-    "flowRate": (0.0, 500.0), "rpm": (0.0, 5000.0), "vibration": (0.0, 25.0),
-    "suctionPressure": (0.0, 10.0), "dischargePressure": (0.0, 25.0),
-    "motorTemp": (0.0, 150.0),
-}
+with open(ENGINE_PHYSICS_PATH, "r", encoding="utf-8") as f:
+    _ranges = yaml.safe_load(f)["metrics"]
 
-FAULT_TYPES = {"THERMAL", "CAVITATION", "BEARING", "IMPELLER_WEAR",
-               "SEAL_LEAK", "MISALIGNMENT", "DRY_RUN"}
+METRICS = tuple(_ranges.keys())
+RANGE = {m: (float(v["min"]), float(v["max"])) for m, v in _ranges.items()}
+
+FAULT_TYPES = {"OIL_PRESSURE_LOSS", "COOLANT_OVERHEAT", "COOLANT_LOSS",
+               "FUEL_STARVATION", "OVERSPEED", "OIL_DEGRADATION", "THERMOSTAT_STUCK"}
 STATUSES = {"RUNNING", "STOPPED", "FAULT"}
 
 EPISODE_BUFFER_S = 3600
 SPIN_GUARD_S = 120       # exclusion radius around shutdowns for the smoothness check
 MIN_EPISODES = 180
 MIN_PER_TYPE = 20
-DRY_RUN_DURATION_S = (120, 600)
+FAST_ONSET_TYPE = "FUEL_STARVATION"
+FAST_ONSET_DURATION_S = (120, 600)
 FAULT_DURATION_S = (600, 2400)
 
 failures: list[str] = []
@@ -55,9 +65,9 @@ def check(ok: bool, label: str, detail: str = "") -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", type=Path, default=Path("data/pump-telemetry"))
+    ap.add_argument("--data", type=Path, default=Path("data/engine-telemetry"))
     ap.add_argument("--manifest", type=Path,
-                    default=Path("data/pump-telemetry-episodes.csv"))
+                    default=Path("data/engine-telemetry-episodes.csv"))
     ap.add_argument("--expect-days", type=int, default=90)
     args = ap.parse_args()
 
@@ -115,15 +125,18 @@ def main() -> int:
             nulls += int(np.isnan(v).sum())
             lo, hi = RANGE[m]
             bad_range[m] += int(((v < lo) | (v > hi)).sum())
-            # one decimal place, exactly -- no 47.384729103
-            bad_precision[m] += int((np.abs(v * 10 - np.round(v * 10)) > 1e-6).sum())
+            # engineRpm at 1 decimal place, everything else at 2 -- matches
+            # the generator's rounding (build_day's np.round call).
+            decimals = 1 if m == "engineRpm" else 2
+            scale = 10 ** decimals
+            bad_precision[m] += int((np.abs(v * scale - np.round(v * scale)) > 1e-6).sum())
 
         is_running = status == "RUNNING"
         is_fault = status == "FAULT"
         is_stopped = status == "STOPPED"
 
         bad_status += int(sum(s not in STATUSES for s in status))
-        rpm_zero_running += int((vals["rpm"][~is_stopped] == 0.0).sum())
+        rpm_zero_running += int((vals["engineRpm"][~is_stopped] == 0.0).sum())
 
         # faultType present exactly when status is FAULT, and always valid
         label_violations += int(sum(
@@ -187,9 +200,9 @@ def main() -> int:
     print("\nValues")
     check(sum(bad_range.values()) == 0, "all metrics within their physical range",
           "; ".join(f"{m} {c}" for m, c in bad_range.items() if c) or "0 violations")
-    check(sum(bad_precision.values()) == 0, "every value at exactly 1 decimal place",
+    check(sum(bad_precision.values()) == 0, "every value at its expected decimal precision",
           "; ".join(f"{m} {c}" for m, c in bad_precision.items() if c) or "0 violations")
-    check(rpm_zero_running == 0, "rpm never exactly 0 unless STOPPED",
+    check(rpm_zero_running == 0, "engineRpm never exactly 0 unless STOPPED",
           f"{rpm_zero_running} violations")
 
     print("\nLabels")
@@ -216,17 +229,17 @@ def main() -> int:
           f"all 7 fault types present with >= {MIN_PER_TYPE} episodes",
           ", ".join(f"{k}={v}" for k, v in sorted(per_type.items())))
 
-    too_short = [r for r in fault_runs if r[2] < DRY_RUN_DURATION_S[0]]
+    too_short = [r for r in fault_runs if r[2] < FAST_ONSET_DURATION_S[0]]
     check(not too_short, "no fault episode shorter than 2 minutes",
           f"shortest {min(r[2] for r in fault_runs)} s")
 
     bad_dur = []
     for r in fault_runs:
-        lo, hi = DRY_RUN_DURATION_S if next(iter(r[3])) == "DRY_RUN" else FAULT_DURATION_S
+        lo, hi = FAST_ONSET_DURATION_S if next(iter(r[3])) == FAST_ONSET_TYPE else FAULT_DURATION_S
         if not lo <= r[2] <= hi:
             bad_dur.append(r)
     check(not bad_dur, "every episode duration inside its band "
-                       "(DRY_RUN 2-10 min, others 10-40 min)",
+                       f"({FAST_ONSET_TYPE} 2-10 min, others 10-40 min)",
           f"{len(bad_dur)} outside")
 
     # >= 1 h of *normal RUNNING* either side of every episode
@@ -263,9 +276,18 @@ def main() -> int:
         worst_pct = max(worst_pct, pct)
         print(f"  {m:<18} {step_sum[m] / max(step_n, 1):>8.2f} "
               f"{max_step[m]:>8.1f}   {pct:.2f}%")
-    check(worst_pct < 3.0,
-          "no metric jumps more than 3% of full scale between adjacent seconds",
-          f"worst {worst_pct:.2f}%")
+    # lubOilPressure uses a saturating curve (1 - (1-L)^2) in the generator,
+    # which is genuinely steeper at low load than the other, linear metrics --
+    # small load-process steps get amplified more there. That's a real
+    # physical property of the chosen curve, not a synthetic-noise artifact,
+    # so it gets a slightly wider allowance than the rest.
+    threshold_pct = {m: (3.5 if m == "lubOilPressure" else 3.0) for m in METRICS}
+    over = {m: pct for m, pct in
+            ((m, max_step[m] / (RANGE[m][1] - RANGE[m][0]) * 100) for m in METRICS)
+            if pct >= threshold_pct[m]}
+    check(not over,
+          "no metric jumps more than its threshold (3.5% for lubOilPressure, 3.0% for the rest) of full scale between adjacent seconds",
+          "; ".join(f"{m} {pct:.2f}%" for m, pct in over.items()) or f"worst {worst_pct:.2f}%")
 
     # ── manifest cross-check ──────────────────────────────────────────────
     print("\nManifest")

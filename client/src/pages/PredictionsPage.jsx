@@ -460,7 +460,7 @@ function DetectTab({ queue, audit, stats }) {
         <CardLabel>Detection model</CardLabel>
         <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, marginTop: 10 }}>Automated fault detection</h3>
         <div style={{ fontSize: 12.5, color: '#5f6f7e', lineHeight: 1.55, marginTop: 6 }}>
-          Watches vibration, temperature and pressure for abnormal behavior. Every detection waits for engineer review before it enters the record.
+          Watches engine speed, temperature and pressure for abnormal behavior. Every detection waits for engineer review before it enters the record.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 16 }}>
           {[
@@ -727,7 +727,7 @@ function ReviewTab({ queue, onOpen, onDismissOne, onDismissMany, dismissingIds }
 }
 
 function PredictionsPage({ tab, setTab, queue, audit, reviewer, showToast, goReview, refreshEvents }) {
-  const [metricKey, setMetricKey] = useState('vibration');
+  const [metricKey, setMetricKey] = useState('engineRpm');
   const [drawerId, setDrawerId] = useState(null);
   const [dismissingIds, setDismissingIds] = useState(() => new Set());
 

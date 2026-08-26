@@ -81,8 +81,8 @@ test('Stage A: excessive exact-duplicate rows fail', () => {
 
 test('Stage B mapping: injective mapping required — two columns to the same metric fails', () => {
   const errors = validateStageBMapping(
-    { flow1: { metric: 'flowRate', unit: 'L/min' }, flow2: { metric: 'flowRate', unit: 'L/min' } },
-    ['flow1', 'flow2'],
+    { rpm1: { metric: 'engineRpm', unit: 'RPM' }, rpm2: { metric: 'engineRpm', unit: 'RPM' } },
+    ['rpm1', 'rpm2'],
   );
   assert.ok(errors.some((e) => e.includes('injective')));
 });
@@ -93,31 +93,31 @@ test('Stage B mapping: at least one metric must be mapped', () => {
 });
 
 test('Stage B mapping: an invalid unit for the metric fails', () => {
-  const errors = validateStageBMapping({ vib: { metric: 'vibration', unit: 'g' } }, ['vib']);
+  const errors = validateStageBMapping({ oil: { metric: 'lubOilPressure', unit: 'g' } }, ['oil']);
   assert.ok(errors.some((e) => e.includes("declares unit 'g'")));
 });
 
 test('Stage B mapping: a column not in survivingColumns fails', () => {
-  const errors = validateStageBMapping({ ghost: { metric: 'flowRate', unit: 'L/min' } }, ['flow']);
+  const errors = validateStageBMapping({ ghost: { metric: 'engineRpm', unit: 'RPM' } }, ['flow']);
   assert.ok(errors.some((e) => e.includes('not a column that survived Stage A')));
 });
 
 test('Stage B mapping: a fully valid mapping passes with no errors', () => {
   const errors = validateStageBMapping(
-    { flow: { metric: 'flowRate', unit: 'L/min' }, vib: { metric: 'vibration', unit: 'mm/s' }, extra: null },
-    ['flow', 'vib', 'extra'],
+    { rpm: { metric: 'engineRpm', unit: 'RPM' }, oil: { metric: 'lubOilPressure', unit: 'bar' }, extra: null },
+    ['rpm', 'oil', 'extra'],
   );
   assert.deepEqual(errors, []);
 });
 
 test('checkRangeSanity: values mostly outside the physical range require confirmation', () => {
-  const result = checkRangeSanity({ flowRate: [9999, 9998, 9997, 1] }, { flowRate: { min: 0, max: 500 } });
+  const result = checkRangeSanity({ engineRpm: [9999, 9998, 9997, 1] }, { engineRpm: { min: 0, max: 2500 } });
   assert.equal(result.requiresConfirmation, true);
-  assert.equal(result.warnings[0].metric, 'flowRate');
+  assert.equal(result.warnings[0].metric, 'engineRpm');
 });
 
 test('checkRangeSanity: values mostly inside the range do not require confirmation', () => {
-  const result = checkRangeSanity({ flowRate: [100, 200, 300, 9999] }, { flowRate: { min: 0, max: 500 } });
+  const result = checkRangeSanity({ engineRpm: [800, 900, 1000, 9999] }, { engineRpm: { min: 0, max: 2500 } });
   assert.equal(result.requiresConfirmation, false);
 });
 

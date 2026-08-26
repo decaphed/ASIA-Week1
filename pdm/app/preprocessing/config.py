@@ -4,8 +4,14 @@ missing.py, validator.py, outlier.py, transition.py, and fault_classifier.py.
 
 PROVISIONAL VALUES — same status as the JS original: SAMPLE_INTERVAL_SECONDS
 is confirmed only against this project's own simulator; the tolerance/ramp
-constants are physically-reasoned placeholders, not derived from real pump
-coast-down/equalization data.
+constants are physically-reasoned placeholders, not derived from real
+engine coast-down/equalization data.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 9 (missed in the original Phase 3 sweep — this file
+wasn't caught by the pump-identifier greps run at the time since it's a
+verbatim .py port of server/preprocessing/config.js rather than a file
+matched by name).
 """
 
 from ._stats import js_round
@@ -14,7 +20,7 @@ from ._stats import js_round
 # JS side's single source of truth, already relied on by aggregation.js/
 # faultClassifier.js) — order matters for tie-break-by-insertion-order logic
 # in aggregation.py's dominantStatus/dominantFaultType port.
-METRICS = ["flowRate", "rpm", "vibration", "suctionPressure", "dischargePressure", "motorTemp"]
+METRICS = ["engineRpm", "lubOilPressure", "fuelPressure", "coolantPressure", "lubOilTemperature", "coolantTemperature"]
 
 SAMPLE_INTERVAL_SECONDS = 1
 WINDOW_DURATION_SECONDS = 60
@@ -40,12 +46,12 @@ HALF_WINDOW_SECONDS = 3
 # Per-metric interpolation ceilings: how long a gap can be before a straight
 # line is trusted, differentiated by how fast each metric plausibly moves.
 MAX_FILLABLE_GAP_SECONDS_BY_METRIC = {
-    "motorTemp": 20,
-    "rpm": 8,
-    "flowRate": 7,
-    "suctionPressure": 6,
-    "dischargePressure": 6,
-    "vibration": 3,
+    "coolantTemperature": 20,
+    "lubOilTemperature": 20,
+    "engineRpm": 8,
+    "fuelPressure": 6,
+    "lubOilPressure": 6,
+    "coolantPressure": 6,
 }
 
 # The longest any single metric is ever willing to be bridged — used as the
@@ -56,16 +62,14 @@ MAX_FILLABLE_GAP_SECONDS = max(MAX_FILLABLE_GAP_SECONDS_BY_METRIC.values())
 # abrupt likely happened mid-gap" signal, even when status labels match at
 # both endpoints of a gap.
 MAX_RAMP_RATE_PER_SECOND = {
-    "rpm": 1500,
-    "flowRate": 100,
-    "vibration": 5,
-    "suctionPressure": 3,
-    "dischargePressure": 3,
+    "engineRpm": 1500,
+    "fuelPressure": 3,
+    "lubOilPressure": 3,
+    "coolantPressure": 3,
 }
 
-# How far discharge pressure may dip below suction pressure while
-# stopped/equalizing without being flagged a physics violation.
-PRESSURE_EQUALIZATION_TOLERANCE_BAR = 1.0
+# RETIRED (2026-08-26, plan §4.1): served only the deleted
+# dischargePressure > suctionPressure rule, which has no engine analogue.
 
 # A status change (or an already-invalid neighbor) within this many seconds
 # of a physics check is tolerated as a plausible transition (equalization,

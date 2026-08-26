@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 // driftService.js — sustained-degradation ("drift") detector for the 6
-// numeric pump metrics. This is deliberately separate from forecastService:
+// numeric engine metrics. This is deliberately separate from forecastService:
 // forecastService's damped-trend ETS answers "what's the next reading
 // likely to be", on a short horizon, and is intentionally biased to flatten
 // out transient trends. This service answers a different question — "has
@@ -62,20 +62,24 @@ const Z_THRESHOLD = 3; // standard errors from the reference mean
 // alongside the z-test's statistical significance. Needed because the
 // z-test's standard error (referenceStd / sqrt(RECENT_WINDOW_ROWS)) assumes
 // the recent window's samples are independent; per-minute pump metrics are
-// not (motorTemp's observed lag-1 autocorrelation is ~0.9), so the true
+// not (a slow-moving temperature metric's observed lag-1 autocorrelation is
+// ~0.9), so the true
 // uncertainty is far larger than sqrt(n) suggests and the naive z-test
 // reports "significant" drift almost continuously — including shifts under
 // 1% of a sensor's operating range, which is noise, not condition change.
 // Requiring the shift to also clear MIN_RANGE_PCT of the range keeps the
 // z-test (still useful for catching truly flat vs. truly moving) while
 // refusing to call a shift "drift" unless it's big enough to matter.
+// Values are the Phase 0 p1-p99 operating band from
+// docs/analysis/2026-08-26-train-csv-characterization.md, not hand-guessed
+// (docs/plan/2026-08-26-pump-to-engine-migration.md §2.3).
 const OPERATING_RANGE = {
-  flowRate: { min: 50, max: 300 },
-  rpm: { min: 1000, max: 3600 },
-  vibration: { min: 0.5, max: 12 },
-  suctionPressure: { min: 0.5, max: 3 },
-  dischargePressure: { min: 2, max: 12 },
-  motorTemp: { min: 20, max: 90 },
+  engineRpm: { min: 382, max: 1565 },
+  lubOilPressure: { min: 0.858, max: 5.605 },
+  fuelPressure: { min: 1.396, max: 16.161 },
+  coolantPressure: { min: 0.723, max: 5.950 },
+  lubOilTemperature: { min: 73.413, max: 87.350 },
+  coolantTemperature: { min: 65.740, max: 91.780 },
 };
 const MIN_RANGE_PCT = 5; // recentMean vs. referenceMean must differ by at least this % of the operating range
 // The simulator spends ~86% of its time in RUNNING and the rest in short

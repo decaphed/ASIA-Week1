@@ -10,7 +10,7 @@ import { toCsv } from '../utils/csv.js';
 
 const EXPORT_COLUMNS = [
   'faultEventId', 'phase', 'eventStatus', 'eventFaultType', 'timestamp',
-  'flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp', 'pumpStatus',
+  'engineRpm', 'lubOilPressure', 'fuelPressure', 'coolantPressure', 'lubOilTemperature', 'coolantTemperature', 'engineStatus',
 ];
 
 export async function listFaultEvents(req, res, next) {

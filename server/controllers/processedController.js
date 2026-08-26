@@ -14,7 +14,7 @@ import * as service from '../services/processedService.js';
 export async function createProcessedReading(req, res, next) {
   try {
     // req.body is already flat and validated — the same flat shape
-    // forecastService/driftService read (row.flowRateMean, row.dominantStatus).
+    // forecastService/driftService read (row.engineRpmMean, row.dominantStatus).
     const record = await service.saveAndTrigger(req.body);
     res.status(201).json({ success: true, data: record });
   } catch (err) {

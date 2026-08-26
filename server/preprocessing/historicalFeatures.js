@@ -30,7 +30,7 @@
 import { round2 } from './aggregation.js';
 import { classify, RECENT_WINDOW_ROWS, REFERENCE_WINDOW_ROWS } from '../services/driftService.js';
 
-export const METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
+export const METRICS = ['engineRpm', 'lubOilPressure', 'fuelPressure', 'coolantPressure', 'lubOilTemperature', 'coolantTemperature'];
 
 // Trailing window for the rolling mean/std/slope stand-in. Matches
 // forecastService's RESIDUAL_WINDOW (30) — long enough for a slope fit to

@@ -1,7 +1,7 @@
 """Pydantic models mirroring the flat processedRecord shape Node sends to
 POST /score (docs/plan/2026-08-05-pdm-implementation.md §3.4, §3.5).
 
-This is the flat, pre-insert shape (`flowRateMean`, `dominantStatus`, ...) —
+This is the flat, pre-insert shape (`engineRpmMean`, `dominantStatus`, ...) —
 the same object `pipeline.js` builds and forecast/drift/trend already
 receive — NOT the nested rowToProcessed() API-response shape. Declaring it
 as a Pydantic model means a shape drift on the Node side fails loudly here
@@ -10,13 +10,32 @@ as a Pydantic model means a shape drift on the Node side fails loudly here
 extra="ignore": the real payload carries many more fields (windowStart,
 sampleCount, quality counters, ...) that the rule engine doesn't need —
 only the fields actually used by rules.py are required below.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 2 step 3. Fault-type Literals updated to the engine
+failure modes proposed in plan §4.2 (engineering judgment, not derived from
+data/train.csv — it carries no fault-type supervision at all, per plan §3).
+tier2Label changed from "NORMAL"/"FAULT" to "CLASS_0"/"CLASS_1" per plan §5's
+resolved decision: Engine_Condition's polarity is not determinable from the
+data and is exposed neutrally rather than asserted.
 """
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-METRICS = ["flowRate", "rpm", "vibration", "suctionPressure", "dischargePressure", "motorTemp"]
+METRICS = ["engineRpm", "lubOilPressure", "fuelPressure", "coolantPressure", "lubOilTemperature", "coolantTemperature"]
+
+FaultType = Literal[
+    "OIL_PRESSURE_LOSS",
+    "COOLANT_OVERHEAT",
+    "COOLANT_LOSS",
+    "FUEL_STARVATION",
+    "OVERSPEED",
+    "OIL_DEGRADATION",
+    "THERMOSTAT_STUCK",
+    "OTHER",
+]
 
 
 class PrecapMetricFeatures(BaseModel):
@@ -32,18 +51,18 @@ class ProcessedRecordIn(BaseModel):
     dominantStatus: str
     precapFeaturesByMetric: dict[str, PrecapMetricFeatures]
 
-    flowRateMin: float
-    flowRateMax: float
-    rpmMin: float
-    rpmMax: float
-    vibrationMin: float
-    vibrationMax: float
-    suctionPressureMin: float
-    suctionPressureMax: float
-    dischargePressureMin: float
-    dischargePressureMax: float
-    motorTempMin: float
-    motorTempMax: float
+    engineRpmMin: float
+    engineRpmMax: float
+    lubOilPressureMin: float
+    lubOilPressureMax: float
+    fuelPressureMin: float
+    fuelPressureMax: float
+    coolantPressureMin: float
+    coolantPressureMax: float
+    lubOilTemperatureMin: float
+    lubOilTemperatureMax: float
+    coolantTemperatureMin: float
+    coolantTemperatureMax: float
 
     # §15.1/D51 — model.score() reads these *Mean fields (via
     # model.py's _PROCESSED_RECORD_FEATURE_FIELDS) to build its feature
@@ -54,12 +73,12 @@ class ProcessedRecordIn(BaseModel):
     # never loudly wrong, just silently inert. Declared required (not
     # Optional) like the existing *Min/*Max fields above: main.py's /score
     # handler needs them whether or not a Tier 2 model happens to be loaded.
-    flowRateMean: float
-    rpmMean: float
-    vibrationMean: float
-    suctionPressureMean: float
-    dischargePressureMean: float
-    motorTempMean: float
+    engineRpmMean: float
+    lubOilPressureMean: float
+    fuelPressureMean: float
+    coolantPressureMean: float
+    lubOilTemperatureMean: float
+    coolantTemperatureMean: float
 
     model_config = ConfigDict(extra="ignore")
 
@@ -78,7 +97,7 @@ class ScoreResponse(BaseModel):
     # every existing consumer/test is unaffected when no model is loaded.
     # Field naming is deliberately generic, not bootstrap-specific: a later
     # multi-class candidate's tier2Label values slot into the same field.
-    tier2Label: Optional[Literal["NORMAL", "FAULT"]] = None
+    tier2Label: Optional[Literal["CLASS_0", "CLASS_1"]] = None
     tier2Probability: Optional[float] = None
     tier2ModelRunId: Optional[int] = None
     tier2ArtifactSha256: Optional[str] = None
@@ -97,13 +116,13 @@ class ScoreResponse(BaseModel):
 class WindowSampleIn(BaseModel):
     timestamp: str
     status: Literal["RUNNING", "STOPPED", "FAULT"]
-    faultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING", "IMPELLER_WEAR", "SEAL_LEAK", "MISALIGNMENT", "DRY_RUN"]] = None
-    flowRate: Optional[float] = None
-    rpm: Optional[float] = None
-    vibration: Optional[float] = None
-    suctionPressure: Optional[float] = None
-    dischargePressure: Optional[float] = None
-    motorTemp: Optional[float] = None
+    faultType: Optional[FaultType] = None
+    engineRpm: Optional[float] = None
+    lubOilPressure: Optional[float] = None
+    fuelPressure: Optional[float] = None
+    coolantPressure: Optional[float] = None
+    lubOilTemperature: Optional[float] = None
+    coolantTemperature: Optional[float] = None
     provenance: Literal["MEASURED", "IMPUTED"] = "MEASURED"
     # Only meaningful (and required to be non-None) on prevSample — the
     # anchor sample's physicsValid must already be known from a prior
@@ -138,7 +157,7 @@ class ProcessedRecordOut(BaseModel):
     windowEnd: str
     timestamp: str
     dominantStatus: Literal["RUNNING", "STOPPED", "FAULT"]
-    dominantFaultType: Optional[Literal["THERMAL", "CAVITATION", "BEARING", "IMPELLER_WEAR", "SEAL_LEAK", "MISALIGNMENT", "DRY_RUN"]] = None
+    dominantFaultType: Optional[FaultType] = None
     runningSeconds: int
     faultSeconds: int
     stoppedSeconds: int
@@ -169,47 +188,47 @@ class ProcessedRecordOut(BaseModel):
     preprocessingVersion: str
     preprocessingTimestamp: str
 
-    flowRateMean: float
-    flowRateMedian: float
-    flowRateMin: float
-    flowRateMax: float
-    flowRateStdDev: float
-    flowRateLast: Optional[float] = None
+    engineRpmMean: float
+    engineRpmMedian: float
+    engineRpmMin: float
+    engineRpmMax: float
+    engineRpmStdDev: float
+    engineRpmLast: Optional[float] = None
 
-    rpmMean: float
-    rpmMedian: float
-    rpmMin: float
-    rpmMax: float
-    rpmStdDev: float
-    rpmLast: Optional[float] = None
+    lubOilPressureMean: float
+    lubOilPressureMedian: float
+    lubOilPressureMin: float
+    lubOilPressureMax: float
+    lubOilPressureStdDev: float
+    lubOilPressureLast: Optional[float] = None
 
-    vibrationMean: float
-    vibrationMedian: float
-    vibrationMin: float
-    vibrationMax: float
-    vibrationStdDev: float
-    vibrationLast: Optional[float] = None
+    fuelPressureMean: float
+    fuelPressureMedian: float
+    fuelPressureMin: float
+    fuelPressureMax: float
+    fuelPressureStdDev: float
+    fuelPressureLast: Optional[float] = None
 
-    suctionPressureMean: float
-    suctionPressureMedian: float
-    suctionPressureMin: float
-    suctionPressureMax: float
-    suctionPressureStdDev: float
-    suctionPressureLast: Optional[float] = None
+    coolantPressureMean: float
+    coolantPressureMedian: float
+    coolantPressureMin: float
+    coolantPressureMax: float
+    coolantPressureStdDev: float
+    coolantPressureLast: Optional[float] = None
 
-    dischargePressureMean: float
-    dischargePressureMedian: float
-    dischargePressureMin: float
-    dischargePressureMax: float
-    dischargePressureStdDev: float
-    dischargePressureLast: Optional[float] = None
+    lubOilTemperatureMean: float
+    lubOilTemperatureMedian: float
+    lubOilTemperatureMin: float
+    lubOilTemperatureMax: float
+    lubOilTemperatureStdDev: float
+    lubOilTemperatureLast: Optional[float] = None
 
-    motorTempMean: float
-    motorTempMedian: float
-    motorTempMin: float
-    motorTempMax: float
-    motorTempStdDev: float
-    motorTempLast: Optional[float] = None
+    coolantTemperatureMean: float
+    coolantTemperatureMedian: float
+    coolantTemperatureMin: float
+    coolantTemperatureMax: float
+    coolantTemperatureStdDev: float
+    coolantTemperatureLast: Optional[float] = None
 
     model_config = ConfigDict(extra="ignore")
 

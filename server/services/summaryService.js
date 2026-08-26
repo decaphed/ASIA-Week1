@@ -51,19 +51,19 @@ export async function getSeries(range) {
 
   const points = rows.map((row) => ({
     t: row.t,
-    flowRate: round2(row.flowRate),
-    rpm: round2(row.rpm),
-    vibration: round2(row.vibration),
-    suctionPressure: round2(row.suctionPressure),
-    dischargePressure: round2(row.dischargePressure),
-    motorTemp: round2(row.motorTemp),
+    engineRpm: round2(row.engineRpm),
+    lubOilPressure: round2(row.lubOilPressure),
+    fuelPressure: round2(row.fuelPressure),
+    coolantPressure: round2(row.coolantPressure),
+    lubOilTemperature: round2(row.lubOilTemperature),
+    coolantTemperature: round2(row.coolantTemperature),
   }));
 
   return { range, bucketSeconds, points };
 }
 
 // Severity of a single value against one metric's band. 0 = normal, 1 = warn,
-// 2 = alarm. Absent bounds (e.g. vibration/motorTemp lows) never trigger.
+// 2 = alarm. Absent bounds never trigger.
 function severity(value, band) {
   if (value == null) return 0;
   if ((band.alarmHigh != null && value >= band.alarmHigh) ||

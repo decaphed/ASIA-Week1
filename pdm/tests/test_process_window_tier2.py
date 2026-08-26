@@ -14,17 +14,17 @@ from app.preprocessing import pipeline
 
 THRESHOLDS = rules.load_thresholds()
 
-# Steady-state values well inside every pump-physics.yaml range and every
+# Steady-state values well inside every engine-physics.yaml range and every
 # thresholds.yaml limit — a quiet window, Tier 1 silent either way.
 STEADY_SAMPLE = {
     "status": "RUNNING",
     "faultType": None,
-    "flowRate": 90.0,
-    "rpm": 1500.0,
-    "vibration": 2.0,
-    "suctionPressure": 4.5,
-    "dischargePressure": 5.2,
-    "motorTemp": 75.0,
+    "engineRpm": 800.0,
+    "lubOilPressure": 4.0,
+    "fuelPressure": 8.0,
+    "coolantPressure": 3.0,
+    "lubOilTemperature": 80.0,
+    "coolantTemperature": 78.0,
     "provenance": "MEASURED",
 }
 
@@ -68,7 +68,7 @@ def test_process_window_unaffected_when_no_model_loaded(monkeypatch):
 
 def test_process_window_merges_tier2_fields_when_model_loaded(monkeypatch):
     tier2_verdict = {
-        "tier2Label": "FAULT",
+        "tier2Label": "CLASS_1",
         "tier2Probability": 0.87,
         "tier2ModelRunId": 1,
         "tier2ArtifactSha256": "deadbeef",

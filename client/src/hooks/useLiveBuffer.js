@@ -15,7 +15,7 @@ const emptyBuffers = () => Object.fromEntries(METRICS.map((m) => [m.key, []]));
 // per metric, driving the Overview cards, sparklines and schematic.
 //
 // Staleness is first-class. A failed poll previously left `latest` in place
-// indefinitely, so an outage rendered as a healthy pump showing
+// indefinitely, so an outage rendered as a healthy engine showing
 // current-looking numbers. Callers must treat `stale === true` as "no
 // current reading" rather than displaying the last value as live.
 //

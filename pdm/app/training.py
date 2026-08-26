@@ -38,13 +38,18 @@ DEFAULT_ARTIFACT_DIR = Path(__file__).parent / "artifacts"
 TRAINING_CONFIG_PATH = Path(__file__).parent / "training_config.yaml"
 
 # train.csv's own column names -> this codebase's metric names (§15.1).
+# Fixed 2026-08-26 (docs/plan/2026-08-26-pump-to-engine-migration.md Phase 2
+# step 5): the previous map here referenced columns that never existed in
+# the committed data/train.csv (it was written against a fictional
+# pump-shaped file) and made fit_model() raise ValueError against the real
+# one. These are the real column names, confirmed against the committed CSV.
 TRAIN_CSV_COLUMN_MAP = {
-    "Engine_rpm": "rpm",
-    "suctionPressure": "suctionPressure",
-    "dischargePressure": "dischargePressure",
-    "flowRate": "flowRate",
-    "motorTemp": "motorTemp",
-    "vibration": "vibration",
+    "Engine_RPM": "engineRpm",
+    "Lub_Oil_Pressure": "lubOilPressure",
+    "Fuel_Pressure": "fuelPressure",
+    "Coolant_Pressure": "coolantPressure",
+    "Lub_Oil_Temperature": "lubOilTemperature",
+    "Coolant_Temperature": "coolantTemperature",
 }
 TRAIN_CSV_LABEL_COLUMN = "Engine_Condition"
 
@@ -115,10 +120,17 @@ def fit_model(
     correction to §10.5's walk-forward-by-default approach, which only
     applies to timestamped corpus rows).
 
-    Labels are emitted as "NORMAL"/"FAULT" strings (§15.1/D56, §15.5's
-    settled naming) — never bare 0/1 — so training_runs history stays
-    self-describing without cross-referencing which model generation
-    produced a given run.
+    Labels are emitted as "CLASS_0"/"CLASS_1" strings, NOT "NORMAL"/"FAULT" —
+    per docs/plan/2026-08-26-pump-to-engine-migration.md §5's resolved
+    decision: Engine_Condition's polarity (which value means "faulty") is
+    NOT determinable from data/train.csv alone (see docs/analysis/2026-08-26-
+    train-csv-characterization.md's polarity finding — the dominant
+    separating feature, engineRpm, doesn't read as an unambiguous fault
+    direction either way) and no source documentation for the CSV exists in
+    this repo to disambiguate it. User decision: expose both classes
+    neutrally rather than assert either is "faulty" — do not reintroduce a
+    FAULT/NORMAL framing here without that polarity question being settled
+    first.
     """
     import pandas as pd
     from sklearn.model_selection import train_test_split
@@ -138,7 +150,7 @@ def fit_model(
     renamed = df.rename(columns=TRAIN_CSV_COLUMN_MAP)
     rows = renamed[FEATURE_ORDER].to_dict("records")
     X = [to_vector(row) for row in rows]
-    y = ["FAULT" if int(v) == 1 else "NORMAL" for v in df[TRAIN_CSV_LABEL_COLUMN]]
+    y = [f"CLASS_{int(v)}" for v in df[TRAIN_CSV_LABEL_COLUMN]]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=config["testSize"], random_state=random_state, stratify=y,

@@ -25,8 +25,8 @@ def test_reset_clears_artifact_files_and_module_state(tmp_path, monkeypatch):
     assert not (tmp_path / "model.joblib").exists()
     assert not (tmp_path / "metadata.json").exists()
     assert model._artifact is None
-    assert model.score({"rpmMean": 1800, "suctionPressureMean": 4.5, "dischargePressureMean": 5.2,
-                         "flowRateMean": 90, "motorTempMean": 70, "vibrationMean": 2.0}) is None
+    assert model.score({"engineRpmMean": 1200, "lubOilPressureMean": 4.5, "fuelPressureMean": 8.0,
+                         "coolantPressureMean": 3.5, "lubOilTemperatureMean": 80, "coolantTemperatureMean": 78}) is None
 
 
 def test_reload_picks_up_a_newly_written_artifact(tmp_path, monkeypatch):

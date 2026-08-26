@@ -14,9 +14,9 @@ const RANGES = [
 
 const METRIC_GROUPS = [
   { id: 'all', label: 'All channels', keys: METRICS.map((m) => m.key) },
-  { id: 'vibration', label: 'Vibration only', keys: ['vibration'] },
-  { id: 'pressures', label: 'Pressures', keys: ['suctionPressure', 'dischargePressure'] },
-  { id: 'temps', label: 'Temperatures', keys: ['motorTemp'] },
+  { id: 'speed', label: 'Engine speed only', keys: ['engineRpm'] },
+  { id: 'pressures', label: 'Pressures', keys: ['lubOilPressure', 'fuelPressure', 'coolantPressure'] },
+  { id: 'temps', label: 'Temperatures', keys: ['lubOilTemperature', 'coolantTemperature'] },
 ];
 
 const FORMATS = ['CSV', 'Excel', 'PDF'];
@@ -94,7 +94,7 @@ function openPrintView({ header, body }, title) {
       td{padding:4px;border-bottom:1px solid #eee;font-variant-numeric:tabular-nums}
     </style></head><body>
     <h1>${escapeXml(title)}</h1>
-    <div class="sub">P-101 · Cooling Water Pump · generated ${escapeXml(new Date().toLocaleString())}</div>
+    <div class="sub">E-101 · Engine Unit · generated ${escapeXml(new Date().toLocaleString())}</div>
     <table><thead><tr>${header.map((h) => `<th>${escapeXml(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
     </body></html>`);
   win.document.close();
@@ -122,8 +122,8 @@ function ExportCard({ showToast }) {
       const group = METRIC_GROUPS.find((g) => g.id === groupId);
       const rangeLabel = RANGES.find((r) => r.id === rangeId).label;
       const rows = buildRows(points, group.keys);
-      const stem = `pump-telemetry-${rangeId}-${groupId}`;
-      const title = `Pump telemetry · ${rangeLabel} · ${group.label}`;
+      const stem = `engine-telemetry-${rangeId}-${groupId}`;
+      const title = `Engine telemetry · ${rangeLabel} · ${group.label}`;
 
       if (format === 'CSV') {
         download(`${stem}.csv`, 'text/csv;charset=utf-8', toCsv(rows));

@@ -5,25 +5,33 @@
 // do not share a module boundary). Keep the two in sync when bands change.
 // ─────────────────────────────────────────────────────────────────────────
 
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 7. engineRpm's label is "Engine Rpm" (title case, not
+// all-caps "RPM") per the user's explicit naming decision (plan §12 Q4);
+// the other five labels are the plain-English names from plan §2. Units for
+// the three pressures and two temperatures are ASSUMED (bar / degC) —
+// data/train.csv does not label units for any non-RPM column (plan §2.2).
 export const METRICS = [
-  { key: 'flowRate', label: 'Flow Rate', short: 'FLW', unit: 'm³/h', dec: 0 },
-  { key: 'rpm', label: 'Pump Speed', short: 'RPM', unit: 'RPM', dec: 0 },
-  { key: 'vibration', label: 'Vibration', short: 'VIB', unit: 'mm/s', dec: 2 },
-  { key: 'suctionPressure', label: 'Suction Pressure', short: 'SUC', unit: 'bar', dec: 2 },
-  { key: 'dischargePressure', label: 'Discharge Pressure', short: 'DIS', unit: 'bar', dec: 2 },
-  { key: 'motorTemp', label: 'Motor Temp', short: 'TMP', unit: '°C', dec: 1 },
+  { key: 'engineRpm', label: 'Engine Rpm', short: 'RPM', unit: 'RPM', dec: 0 },
+  { key: 'lubOilPressure', label: 'Lube Oil Pressure', short: 'OIL-P', unit: 'bar', dec: 2 },
+  { key: 'fuelPressure', label: 'Fuel Pressure', short: 'FUEL-P', unit: 'bar', dec: 2 },
+  { key: 'coolantPressure', label: 'Coolant Pressure', short: 'CLT-P', unit: 'bar', dec: 2 },
+  { key: 'lubOilTemperature', label: 'Lube Oil Temperature', short: 'OIL-T', unit: '°C', dec: 1 },
+  { key: 'coolantTemperature', label: 'Coolant Temperature', short: 'CLT-T', unit: '°C', dec: 1 },
 ];
 
 export const METRIC_BY_KEY = Object.fromEntries(METRICS.map((m) => [m.key, m]));
 
 // Ported from server/config/thresholds.js — warn/alarm bands per metric.
+// Values are the Phase 0 p5/p95 (warn) and p1/p99 (alarm) bands from
+// docs/analysis/2026-08-26-train-csv-characterization.md, not hand-guessed.
 export const THRESHOLDS = {
-  flowRate: { warnLow: 80, alarmLow: 60, warnHigh: 270, alarmHigh: 295 },
-  rpm: { warnLow: 1200, alarmLow: 1050, warnHigh: 3400, alarmHigh: 3550 },
-  vibration: { warnHigh: 7.1, alarmHigh: 11.2 },
-  suctionPressure: { warnLow: 0.8, alarmLow: 0.6, warnHigh: 2.8, alarmHigh: 2.95 },
-  dischargePressure: { warnLow: 3, alarmLow: 2.2, warnHigh: 10.5, alarmHigh: 11.5 },
-  motorTemp: { warnHigh: 75, alarmHigh: 85 },
+  engineRpm: { warnLow: 444, alarmLow: 382, warnHigh: 1322.65, alarmHigh: 1565 },
+  lubOilPressure: { warnLow: 1.939, alarmLow: 0.858, warnHigh: 5.064, alarmHigh: 5.605 },
+  fuelPressure: { warnLow: 3.112, alarmLow: 1.396, warnHigh: 12.200, alarmHigh: 16.161 },
+  coolantPressure: { warnLow: 1.084, alarmLow: 0.723, warnHigh: 4.458, alarmHigh: 5.950 },
+  lubOilTemperature: { warnLow: 74.268, alarmLow: 73.413, warnHigh: 84.978, alarmHigh: 87.350 },
+  coolantTemperature: { warnLow: 68.404, alarmLow: 65.740, warnHigh: 88.636, alarmHigh: 91.780 },
 };
 
 // Status palette used across cards, chips and schematic.
@@ -73,15 +81,18 @@ export function pillFor(status) {
 export const AUTO_LABEL_BADGE = { label: 'Auto', color: '#5f6f7e', bg: '#eef1f4', border: '#dde4ea' };
 
 // Fault types accepted by PATCH /api/pdm/fault-events/:id (server enum) with
-// operator-friendly display labels.
+// operator-friendly display labels. Migrated pump -> engine failure modes
+// per docs/plan/2026-08-26-pump-to-engine-migration.md §4.2 — engineering
+// judgment, not derived from data/train.csv, which carries no fault-type
+// supervision at all (plan §3).
 export const FAULT_TYPES = [
-  { value: 'CAVITATION', label: 'Cavitation' },
-  { value: 'BEARING', label: 'Bearing wear' },
-  { value: 'THERMAL', label: 'Motor overheating' },
-  { value: 'IMPELLER_WEAR', label: 'Impeller wear/damage' },
-  { value: 'SEAL_LEAK', label: 'Seal leak' },
-  { value: 'MISALIGNMENT', label: 'Shaft misalignment' },
-  { value: 'DRY_RUN', label: 'Dry run / loss of prime' },
+  { value: 'OIL_PRESSURE_LOSS', label: 'Oil pressure loss' },
+  { value: 'COOLANT_OVERHEAT', label: 'Coolant overheat' },
+  { value: 'COOLANT_LOSS', label: 'Coolant loss' },
+  { value: 'FUEL_STARVATION', label: 'Fuel starvation' },
+  { value: 'OVERSPEED', label: 'Engine overspeed' },
+  { value: 'OIL_DEGRADATION', label: 'Oil degradation' },
+  { value: 'THERMOSTAT_STUCK', label: 'Thermostat stuck' },
   { value: 'OTHER', label: 'Other' },
 ];
 

@@ -5,73 +5,68 @@
 # events over time. Bump `version` on every retune; fault_events.thresholds
 # Version (Node-side) is read verbatim from this field.
 #
+# Migrated from the pump domain to the engine domain per
+# docs/plan/2026-08-26-pump-to-engine-migration.md Phase 1. Bumped to
+# version "2" to mark this migration.
+#
 # Sourcing, per column:
-#   min / max        — server/utils/validation.js's RANGES (physically-
-#                       possible hard bounds; already labeled provisional
-#                       there too).
-#   stdDevMax         — 15% of the metric's normal *operating* span (from
-#                       server/services/driftService.js's OPERATING_RANGE,
-#                       which is narrower than the hard min/max above) — a
-#                       window whose raw std dev exceeds that is reasoned to
-#                       be unusually noisy for normal operation. No existing
-#                       Node-side constant to port; this is PdM's own
-#                       starting value.
-#   rateOfChangeMax   — NOT a direct copy of server/preprocessing/config.js's
-#                       MAX_RAMP_RATE_PER_SECOND. That constant is an
-#                       INSTANTANEOUS per-tick ceiling; rawRateOfChange here
-#                       is the MEAN tick-to-tick delta averaged across an
-#                       entire 60-sample window, which sits far below the
-#                       instantaneous max even inside a real fault window (most
-#                       of a window is quiet). Seeded at 10% of the
-#                       instantaneous ceiling: a sustained ramp needs only a
-#                       modest fraction of ticks moving near the instantaneous
-#                       max to pull the window mean past this — tune against
-#                       known-fault windows from the simulator once available.
-#                       motorTemp has no MAX_RAMP_RATE_PER_SECOND entry at all
-#                       (thermal mass makes instantaneous ramp rate a poor
-#                       signal) — its value below is reasoned directly instead:
-#                       temperature moves slowly, so even a small sustained
-#                       per-second climb across a whole window is meaningful.
+#   min / max        — engine-physics.yaml's RANGES (physically-possible
+#                       hard bounds, derived from
+#                       docs/analysis/2026-08-26-train-csv-characterization.md).
+#   stdDevMax         — 15% of the metric's normal *operating* span (Phase 0
+#                       characterization's p1-p99 band, the same source that
+#                       will feed server/services/driftService.js's
+#                       OPERATING_RANGE in Phase 3): a window whose raw std
+#                       dev exceeds that is reasoned to be unusually noisy
+#                       for normal operation.
+#   rateOfChangeMax   — PLACEHOLDER, NOT yet derivable. data/train.csv has no
+#                       timestamp column (plan §3), so there is no tick-to-
+#                       tick rate of change to measure empirically — unlike
+#                       min/max/stdDevMax, which can be derived from the
+#                       static distribution alone. Seeded here at 10% of each
+#                       metric's Phase 0 operating span purely as an interim
+#                       placeholder (same heuristic shape the old pump file
+#                       used), and MUST be re-derived once the Phase 5
+#                       engine simulator emits real time-series output
+#                       (plan §7 Phase 5.3) — treat every value below as
+#                       provisional until then, more so than the others.
 # ─────────────────────────────────────────────────────────────────────────
 
-version: "1"
+version: "2"
 
 metrics:
-  flowRate:
+  engineRpm:
     min: 0
-    max: 500
-    stdDevMax: 37.5
-    rateOfChangeMax: 10.0     # 10% of MAX_RAMP_RATE_PER_SECOND.flowRate (100)
+    max: 2500
+    stdDevMax: 177.45
+    rateOfChangeMax: 118.3    # PLACEHOLDER — see header, re-derive in Phase 5.3
 
-  rpm:
+  lubOilPressure:
     min: 0
-    max: 5000
-    stdDevMax: 390.0
-    rateOfChangeMax: 150.0    # 10% of MAX_RAMP_RATE_PER_SECOND.rpm (1500)
+    max: 8.5
+    stdDevMax: 0.712
+    rateOfChangeMax: 0.475    # PLACEHOLDER — see header, re-derive in Phase 5.3
 
-  vibration:
+  fuelPressure:
     min: 0
-    max: 25
-    stdDevMax: 1.725
-    rateOfChangeMax: 0.5      # 10% of MAX_RAMP_RATE_PER_SECOND.vibration (5)
+    max: 23
+    stdDevMax: 2.215
+    rateOfChangeMax: 1.477    # PLACEHOLDER — see header, re-derive in Phase 5.3
 
-  suctionPressure:
+  coolantPressure:
     min: 0
-    max: 10
-    stdDevMax: 0.375
-    rateOfChangeMax: 0.3      # 10% of MAX_RAMP_RATE_PER_SECOND.suctionPressure (3)
+    max: 9
+    stdDevMax: 0.784
+    rateOfChangeMax: 0.523    # PLACEHOLDER — see header, re-derive in Phase 5.3
 
-  dischargePressure:
-    min: 0
-    max: 25
-    stdDevMax: 1.5
-    rateOfChangeMax: 0.3      # 10% of MAX_RAMP_RATE_PER_SECOND.dischargePressure (3)
+  lubOilTemperature:
+    min: 65
+    max: 95
+    stdDevMax: 2.091
+    rateOfChangeMax: 1.394    # PLACEHOLDER — see header, re-derive in Phase 5.3
 
-  motorTemp:
-    min: 0
-    max: 150
-    stdDevMax: 10.5
-    rateOfChangeMax: 0.15     # no instantaneous ceiling exists to derive from;
-                               # reasoned directly — motorTemp moves slowly, so
-                               # a sustained ~0.15 degC/s window-mean ramp is
-                               # already an anomalous thermal event.
+  coolantTemperature:
+    min: 60
+    max: 108
+    stdDevMax: 3.906
+    rateOfChangeMax: 2.604    # PLACEHOLDER — see header, re-derive in Phase 5.3

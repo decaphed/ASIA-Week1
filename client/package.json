@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "ASIA pump monitoring dashboard — live telemetry, analytics, forecasting and fault review.",
+  "description": "ASIA engine monitoring dashboard — live telemetry, analytics, forecasting and fault review.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

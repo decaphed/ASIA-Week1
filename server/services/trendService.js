@@ -78,12 +78,12 @@ const EXIT_FACTOR = 0.8; // hysteresis: must drop 20% below a bucket's enter thr
 // preprocessing/validator.js documents for RANGES) since client and server
 // don't share a module boundary.
 export const OPERATING_RANGE = {
-  flowRate: { min: 50, max: 300 },
-  rpm: { min: 1000, max: 3600 },
-  vibration: { min: 0.5, max: 12 },
-  suctionPressure: { min: 0.5, max: 3 },
-  dischargePressure: { min: 2, max: 12 },
-  motorTemp: { min: 20, max: 90 },
+  engineRpm: { min: 382, max: 1565 },
+  lubOilPressure: { min: 0.858, max: 5.605 },
+  fuelPressure: { min: 1.396, max: 16.161 },
+  coolantPressure: { min: 0.723, max: 5.950 },
+  lubOilTemperature: { min: 73.413, max: 87.350 },
+  coolantTemperature: { min: 65.740, max: 91.780 },
 };
 
 // Per-metric hysteresis/debounce state, persisted across calls.

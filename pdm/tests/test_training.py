@@ -1,15 +1,35 @@
 """Unit test for pdm/app/training.py::fit_model (§15.1/D51) — fits against a
-small fixture CSV (pdm/tests/fixtures/train_fixture.csv), asserts the
-artifact + metadata land on disk, labels are "NORMAL"/"FAULT" strings (never
-bare 0/1, §15.1/D56), and stamp_run_id() rewrites metadata.json's runId.
+real stratified sample of data/train.csv (pdm/tests/fixtures/train_fixture.csv),
+asserts the artifact + metadata land on disk, labels are neutral "CLASS_0"/
+"CLASS_1" strings (never "NORMAL"/"FAULT" — polarity is unresolved, plan §5),
+and stamp_run_id() rewrites metadata.json's runId.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 9. The fixture CSV used to be fabricated pump-shaped data;
+it is now a real 200-row stratified sample of the actual committed
+data/train.csv (100 rows per Engine_Condition class), generated deterministically
+with random_state=20260826. test_fixture_columns_match_real_train_csv guards
+against the two ever drifting apart again the way the pump-domain fixture did.
 """
 
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from app.training import fit_model, load_training_config, stamp_run_id
 
 FIXTURE_CSV = Path(__file__).parent / "fixtures" / "train_fixture.csv"
+REAL_TRAIN_CSV = Path(__file__).parent.parent.parent / "data" / "train.csv"
+
+
+def test_fixture_columns_match_real_train_csv():
+    """The fixture must never drift from the real file's column names again --
+    this is exactly the bug that made data/train.csv orphaned pre-migration
+    (plan §1)."""
+    fixture_cols = list(pd.read_csv(FIXTURE_CSV, nrows=0).columns)
+    real_cols = list(pd.read_csv(REAL_TRAIN_CSV, nrows=0).columns)
+    assert fixture_cols == real_cols
 
 
 def test_fit_model_writes_artifact_and_metadata(tmp_path, monkeypatch):
@@ -27,10 +47,13 @@ def test_fit_model_writes_artifact_and_metadata(tmp_path, monkeypatch):
 
     assert metadata["runId"] is None
     assert metadata["artifactSha256"] == fitted.artifact_sha256
-    assert set(fitted.label_classes) <= {"NORMAL", "FAULT"}
-    # Bare 0/1 must never appear as a label (§15.1/D56).
+    assert set(fitted.label_classes) <= {"CLASS_0", "CLASS_1"}
+    # Neither a bare 0/1 nor the old NORMAL/FAULT framing may appear as a
+    # label (plan §5 — polarity is unresolved, exposed neutrally).
     assert "0" not in fitted.label_classes
     assert "1" not in fitted.label_classes
+    assert "NORMAL" not in fitted.label_classes
+    assert "FAULT" not in fitted.label_classes
 
 
 def test_stamp_run_id_rewrites_metadata(tmp_path, monkeypatch):

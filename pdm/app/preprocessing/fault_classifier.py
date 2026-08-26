@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 EPSILON = 1e-6
 
-METRICS = ["flowRate", "rpm", "vibration", "suctionPressure", "dischargePressure", "motorTemp"]
+METRICS = ["engineRpm", "lubOilPressure", "fuelPressure", "coolantPressure", "lubOilTemperature", "coolantTemperature"]
 
 
 def _violates_range(sample: dict[str, Any], metric: str, ranges: dict[str, dict[str, float]]) -> bool:

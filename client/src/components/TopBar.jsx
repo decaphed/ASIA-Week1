@@ -21,7 +21,7 @@ function TopBar({ page, live, pendingCount, onOpenReview }) {
           <circle cx="10" cy="10" r="7.4" stroke="#1F3A6E" strokeWidth="1.7" />
           <path d="M10 10 L10 4.4 M10 10 L14.9 12.8" stroke="#1F3A6E" strokeWidth="1.7" strokeLinecap="round" />
         </svg>
-        P-101 · Cooling Water Pump
+        E-101 · Engine Unit
       </div>
       <div style={{ flex: 1 }} />
       <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#5f6f7e', fontWeight: 500 }}>

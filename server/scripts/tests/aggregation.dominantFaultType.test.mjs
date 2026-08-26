@@ -15,7 +15,7 @@ import { aggregateWindow } from '../../preprocessing/aggregation.js';
 import { METRICS } from '../../services/forecastService.js';
 
 const BASE_METRICS = {
-  flowRate: 150, rpm: 2000, vibration: 3, suctionPressure: 2, dischargePressure: 7, motorTemp: 50,
+  engineRpm: 800, lubOilPressure: 4, fuelPressure: 8, coolantPressure: 3, lubOilTemperature: 80, coolantTemperature: 78,
 };
 
 function makeSample({ status, faultType = null, offsetSec }) {
@@ -48,14 +48,14 @@ test('dominantFaultType is null when the window has no FAULT samples', () => {
 test('dominantFaultType is the most common faultType among FAULT samples', () => {
   const samples = [
     makeSample({ status: 'RUNNING', offsetSec: 0 }),
-    makeSample({ status: 'FAULT', faultType: 'BEARING', offsetSec: 1 }),
-    makeSample({ status: 'FAULT', faultType: 'BEARING', offsetSec: 2 }),
-    makeSample({ status: 'FAULT', faultType: 'THERMAL', offsetSec: 3 }),
+    makeSample({ status: 'FAULT', faultType: 'OIL_PRESSURE_LOSS', offsetSec: 1 }),
+    makeSample({ status: 'FAULT', faultType: 'OIL_PRESSURE_LOSS', offsetSec: 2 }),
+    makeSample({ status: 'FAULT', faultType: 'COOLANT_OVERHEAT', offsetSec: 3 }),
     makeSample({ status: 'RUNNING', offsetSec: 4 }),
   ];
   const { window, statsWindow, cappedByMetric } = buildInputs(samples);
 
   const agg = aggregateWindow(window, statsWindow, cappedByMetric);
 
-  assert.equal(agg.dominantFaultType, 'BEARING');
+  assert.equal(agg.dominantFaultType, 'OIL_PRESSURE_LOSS');
 });

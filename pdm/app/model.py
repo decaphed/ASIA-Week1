@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 # processedRecord's flat *Mean fields, remapped to features.FEATURE_ORDER's
 # plain names — the live equivalent of train.csv's already-plain columns.
 _PROCESSED_RECORD_FEATURE_FIELDS = {
-    "rpm": "rpmMean",
-    "suctionPressure": "suctionPressureMean",
-    "dischargePressure": "dischargePressureMean",
-    "flowRate": "flowRateMean",
-    "motorTemp": "motorTempMean",
-    "vibration": "vibrationMean",
+    "engineRpm": "engineRpmMean",
+    "lubOilPressure": "lubOilPressureMean",
+    "fuelPressure": "fuelPressureMean",
+    "coolantPressure": "coolantPressureMean",
+    "lubOilTemperature": "lubOilTemperatureMean",
+    "coolantTemperature": "coolantTemperatureMean",
 }
 
 

@@ -89,12 +89,12 @@ function toWindowSampleIn(sample) {
     timestamp: sample.timestamp,
     status: sample.status,
     faultType: sample.faultType ?? null,
-    flowRate: sample.flowRate,
-    rpm: sample.rpm,
-    vibration: sample.vibration,
-    suctionPressure: sample.suctionPressure,
-    dischargePressure: sample.dischargePressure,
-    motorTemp: sample.motorTemp,
+    engineRpm: sample.engineRpm,
+    lubOilPressure: sample.lubOilPressure,
+    fuelPressure: sample.fuelPressure,
+    coolantPressure: sample.coolantPressure,
+    lubOilTemperature: sample.lubOilTemperature,
+    coolantTemperature: sample.coolantTemperature,
   };
 }
 

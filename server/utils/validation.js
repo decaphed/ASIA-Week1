@@ -19,16 +19,16 @@ import yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Plausible physical ranges for a pump. Anything outside is almost certainly
-// a bad reading or a bug, so we refuse it. Ranges are wider than the
-// simulator's normal output so occasional fault-condition spikes still pass.
-// Loaded once at startup from the repo-root pump-physics.yaml — the single
-// source of truth also read by pdm/app/preprocessing/validator.py (docs/plan/
-// 2026-08-05-pdm-implementation.md §11.5 item 3 / §11.6.1) — not a hardcoded
-// copy in this file anymore.
-const PUMP_PHYSICS_PATH = path.join(__dirname, '..', '..', 'pump-physics.yaml');
+// Plausible physical ranges for an engine. Anything outside is almost
+// certainly a bad reading or a bug, so we refuse it. Ranges are derived
+// empirically from data/train.csv (docs/analysis/2026-08-26-train-csv-
+// characterization.md), not hand-guessed. Loaded once at startup from the
+// repo-root engine-physics.yaml — the single source of truth also read by
+// pdm/app/preprocessing/validator.py (docs/plan/2026-08-05-pdm-
+// implementation.md §11.5 item 3 / §11.6.1) — not a hardcoded copy here.
+const ENGINE_PHYSICS_PATH = path.join(__dirname, '..', '..', 'engine-physics.yaml');
 
-function loadRanges(filePath = PUMP_PHYSICS_PATH) {
+function loadRanges(filePath = ENGINE_PHYSICS_PATH) {
   const doc = yaml.load(fs.readFileSync(filePath, 'utf8'));
   return doc.metrics;
 }

@@ -28,7 +28,7 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function EvidenceChart({ event, points }) {
-  const metricKey = eventMetrics(event)[0] || 'vibration';
+  const metricKey = eventMetrics(event)[0] || 'engineRpm';
   const metric = METRIC_BY_KEY[metricKey];
   const th = THRESHOLDS[metricKey];
 

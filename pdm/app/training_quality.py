@@ -145,7 +145,7 @@ def assess(df: pd.DataFrame) -> dict[str, Any]:
     if duplicate_rate > 0:
         reasons.append(f"duplicate-row rate {_round2(duplicate_rate)}")
     if out_of_range_rate > 0:
-        reasons.append(f"out-of-range value rate {_round2(out_of_range_rate)} against pump-physics.yaml bounds")
+        reasons.append(f"out-of-range value rate {_round2(out_of_range_rate)} against engine-physics.yaml bounds")
 
     verdict = "PASS" if quality_score >= PASS_THRESHOLD else "REJECTED"
     if verdict == "REJECTED" and not reasons:

@@ -1,5 +1,9 @@
 """End-to-end tests for the /training/* HTTP endpoints (Task 4) — the
-FE-facing upload -> quality-check -> fit -> compare -> deploy loop."""
+FE-facing upload -> quality-check -> fit -> compare -> deploy loop.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 9.
+"""
 
 import io
 from pathlib import Path
@@ -33,16 +37,16 @@ def _good_csv_bytes():
     # happy-path fixture.
     n = 300
     df = pd.DataFrame({
-        # Engine_rpm alone is strictly increasing across all n rows, which
+        # Engine_RPM alone is strictly increasing across all n rows, which
         # guarantees every full row is unique (duplicateRate == 0)
         # regardless of how the other, smaller-range columns happen to
         # cycle.
-        "Engine_rpm": [1800.0 + i * 0.5 for i in range(n)],
-        "suctionPressure": [4.5 + (i % 40) * 0.01 for i in range(n)],
-        "dischargePressure": [5.2 + (i % 40) * 0.01 for i in range(n)],
-        "flowRate": [90.0 + (i % 100) * 0.05 for i in range(n)],
-        "motorTemp": [70.0 + (i % 100) * 0.1 for i in range(n)],
-        "vibration": [2.0 + (i % 40) * 0.01 for i in range(n)],
+        "Engine_RPM": [800.0 + i * 0.5 for i in range(n)],
+        "Lub_Oil_Pressure": [4.0 + (i % 40) * 0.01 for i in range(n)],
+        "Fuel_Pressure": [8.0 + (i % 40) * 0.01 for i in range(n)],
+        "Coolant_Pressure": [3.0 + (i % 40) * 0.01 for i in range(n)],
+        "Lub_Oil_Temperature": [78.0 + (i % 100) * 0.1 for i in range(n)],
+        "Coolant_Temperature": [76.0 + (i % 100) * 0.1 for i in range(n)],
         "Engine_Condition": [0, 1] * (n // 2),
     })
     buf = io.BytesIO()
@@ -50,9 +54,20 @@ def _good_csv_bytes():
     return buf.getvalue()
 
 
+def _score_payload():
+    return {
+        "windowEnd": "2026-08-23T00:00:00Z", "dominantStatus": "RUNNING", "precapFeaturesByMetric": {},
+        "engineRpmMin": 700, "engineRpmMax": 900, "lubOilPressureMin": 3.5, "lubOilPressureMax": 4.5,
+        "fuelPressureMin": 7.5, "fuelPressureMax": 8.5, "coolantPressureMin": 2.5, "coolantPressureMax": 3.5,
+        "lubOilTemperatureMin": 75, "lubOilTemperatureMax": 85, "coolantTemperatureMin": 73, "coolantTemperatureMax": 83,
+        "engineRpmMean": 800, "lubOilPressureMean": 4.0, "fuelPressureMean": 8.0, "coolantPressureMean": 3.0,
+        "lubOilTemperatureMean": 80, "coolantTemperatureMean": 78,
+    }
+
+
 def test_upload_rejects_bad_quality_csv():
     client = TestClient(app)
-    bad_csv = b"Engine_rpm,suctionPressure\n1,2\n"
+    bad_csv = b"Engine_RPM,Lub_Oil_Pressure\n1,2\n"
     res = client.post("/training/upload", files={"file": ("bad.csv", bad_csv, "text/csv")})
     assert res.status_code == 422
     body = res.json()["detail"]
@@ -88,14 +103,7 @@ def test_upload_fit_deploy_happy_path():
     stamp_res = client.post("/training/stamp-run-id", json={"runId": 1})
     assert stamp_res.status_code == 200
 
-    score_res = client.post("/score", json={
-        "windowEnd": "2026-08-23T00:00:00Z", "dominantStatus": "RUNNING", "precapFeaturesByMetric": {},
-        "flowRateMin": 80, "flowRateMax": 100, "rpmMin": 1700, "rpmMax": 1900,
-        "vibrationMin": 1, "vibrationMax": 3, "suctionPressureMin": 4, "suctionPressureMax": 5,
-        "dischargePressureMin": 5, "dischargePressureMax": 6, "motorTempMin": 65, "motorTempMax": 75,
-        "flowRateMean": 90, "rpmMean": 1800, "vibrationMean": 2, "suctionPressureMean": 4.5,
-        "dischargePressureMean": 5.2, "motorTempMean": 70,
-    })
+    score_res = client.post("/score", json=_score_payload())
     assert score_res.status_code == 200
     assert score_res.json()["tier2Label"] is not None  # Tier 2 is live post-deploy
 
@@ -121,14 +129,7 @@ def test_reset_clears_live_artifact_and_score_has_no_tier2_fields():
     reset_res = client.post("/training/reset")
     assert reset_res.status_code == 200
 
-    score_res = client.post("/score", json={
-        "windowEnd": "2026-08-23T00:00:00Z", "dominantStatus": "RUNNING", "precapFeaturesByMetric": {},
-        "flowRateMin": 80, "flowRateMax": 100, "rpmMin": 1700, "rpmMax": 1900,
-        "vibrationMin": 1, "vibrationMax": 3, "suctionPressureMin": 4, "suctionPressureMax": 5,
-        "dischargePressureMin": 5, "dischargePressureMax": 6, "motorTempMin": 65, "motorTempMax": 75,
-        "flowRateMean": 90, "rpmMean": 1800, "vibrationMean": 2, "suctionPressureMean": 4.5,
-        "dischargePressureMean": 5.2, "motorTempMean": 70,
-    })
+    score_res = client.post("/score", json=_score_payload())
     assert score_res.json()["tier2Label"] is None
 
 

@@ -6,6 +6,9 @@
 //   • assembles derived data such as statistics and pagination metadata.
 //
 // Controllers stay thin because all of this lives here.
+//
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 4.
 // ─────────────────────────────────────────────────────────────────────────
 
 import * as model from '../models/sensorModel.js';
@@ -28,12 +31,12 @@ function rowToReading(row) {
   if (!row) return null;
   return {
     id: row.id,
-    flowRate: row.flowRate,
-    rpm: row.rpm,
-    vibration: row.vibration,
-    suctionPressure: row.suctionPressure,
-    dischargePressure: row.dischargePressure,
-    motorTemp: row.motorTemp,
+    engineRpm: row.engineRpm,
+    lubOilPressure: row.lubOilPressure,
+    fuelPressure: row.fuelPressure,
+    coolantPressure: row.coolantPressure,
+    lubOilTemperature: row.lubOilTemperature,
+    coolantTemperature: row.coolantTemperature,
     status: row.status,
     faultType: row.faultType ?? null,
     timestamp: row.timestamp,
@@ -59,12 +62,12 @@ function rowToReading(row) {
  */
 export async function saveReading(data) {
   const record = {
-    flowRate: data.flowRate,
-    rpm: data.rpm,
-    vibration: data.vibration,
-    suctionPressure: data.suctionPressure,
-    dischargePressure: data.dischargePressure,
-    motorTemp: data.motorTemp,
+    engineRpm: data.engineRpm,
+    lubOilPressure: data.lubOilPressure,
+    fuelPressure: data.fuelPressure,
+    coolantPressure: data.coolantPressure,
+    lubOilTemperature: data.lubOilTemperature,
+    coolantTemperature: data.coolantTemperature,
     status: data.status || 'RUNNING',
     faultType: data.faultType ?? null,
     // Trust the sensor's timestamp if provided; otherwise stamp it now.
@@ -124,11 +127,11 @@ export async function getStatistics() {
   return {
     totalRecords,
     latestTimestamp,
-    averageFlowRate: round2(averages.avgFlowRate),
-    averageRpm: round2(averages.avgRpm),
-    averageVibration: round2(averages.avgVibration),
-    averageSuctionPressure: round2(averages.avgSuctionPressure),
-    averageDischargePressure: round2(averages.avgDischargePressure),
-    averageMotorTemp: round2(averages.avgMotorTemp),
+    averageEngineRpm: round2(averages.avgEngineRpm),
+    averageLubOilPressure: round2(averages.avgLubOilPressure),
+    averageFuelPressure: round2(averages.avgFuelPressure),
+    averageCoolantPressure: round2(averages.avgCoolantPressure),
+    averageLubOilTemperature: round2(averages.avgLubOilTemperature),
+    averageCoolantTemperature: round2(averages.avgCoolantTemperature),
   };
 }

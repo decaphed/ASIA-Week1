@@ -1,5 +1,10 @@
 # Pump Schematic & Analytics Enhancement Implementation Plan
 
+> **⚠ HISTORICAL / SUPERSEDED (2026-08-26):** the pump-domain `ProcessSchematic.jsx`
+> this plan enhances was replaced during the pump-to-engine migration — see
+> `docs/plan/2026-08-26-pump-to-engine-migration.md` §12 Q8 and §7 Phase 7.
+> Retained for historical reference only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Port two visual improvements from the reference mockups in `components/` into the live dashboard's existing vanilla-CSS/JSX stack, using only real data already available in the app: a live status pill + background texture on the pump schematic, and a real min/avg/max metric summary strip on the Analytics page.

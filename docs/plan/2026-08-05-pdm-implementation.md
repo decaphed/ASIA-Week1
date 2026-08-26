@@ -7,6 +7,26 @@ model (Random Forest / XGBoost) to be trained later once enough labeled faults e
 
 **Status:** planning only — nothing here has been executed yet.
 
+> **⚠ PARTIALLY SUPERSEDED (2026-08-26):** this codebase has been migrated
+> from a pump domain to an engine domain — see
+> `docs/plan/2026-08-26-pump-to-engine-migration.md`. Most of this document's
+> architecture (tiering, windowing, HITL review flow, artifact lifecycle)
+> survives intact and is still accurate. Three sections are specifically
+> superseded and should be read through that later document instead:
+> - **§11.5 item 3 / §11.6.1** — `pump-physics.yaml` sourcing is now
+>   `engine-physics.yaml`, with ranges derived empirically from
+>   `docs/analysis/2026-08-26-train-csv-characterization.md` rather than
+>   reasoned from the simulator's own output.
+> - **§11.6.5** — the golden-value parity suite's "every metric within its
+>   `pump-physics.yaml` range" description now refers to `engine-physics.yaml`
+>   and the six engine metric names (`engineRpm`, `lubOilPressure`,
+>   `fuelPressure`, `coolantPressure`, `lubOilTemperature`,
+>   `coolantTemperature`).
+> - **§15.1** — the bootstrap Tier 2 model's description of `train.csv`
+>   assumed a fictional pump-shaped file; `data/train.csv` is real engine
+>   telemetry, and `pdm/app/training.py`'s column map/label handling were
+>   fixed accordingly (migration plan §5, §7 Phase 2).
+
 **Independent of the TimescaleDB migration** (`docs/plan/2026-08-04-timescaledb-migration.md`).
 This plan targets the current SQLite setup as-is and does not depend on that migration
 happening first, or at all. See §7 for the one thing to watch if both land close together.

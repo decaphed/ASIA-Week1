@@ -107,7 +107,7 @@ function toWindowSample(row, tsColumn, columnMapping) {
     timestamp: new Date(Date.parse(String(row[tsColumn]))).toISOString(),
     status: 'RUNNING', // D15 — no status column mapping offered
     faultType: null,
-    flowRate: null, rpm: null, vibration: null, suctionPressure: null, dischargePressure: null, motorTemp: null,
+    engineRpm: null, lubOilPressure: null, fuelPressure: null, coolantPressure: null, lubOilTemperature: null, coolantTemperature: null,
   };
   for (const [sourceColumn, mapping] of Object.entries(columnMapping)) {
     if (!mapping || !mapping.metric) continue;

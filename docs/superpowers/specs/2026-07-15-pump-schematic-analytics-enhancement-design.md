@@ -1,5 +1,14 @@
 # Pump Schematic & Analytics Enhancement — Design
 
+> **⚠ HISTORICAL / SUPERSEDED (2026-08-26):** the pump-domain P&ID schematic
+> this spec describes was replaced during the pump-to-engine migration (see
+> `docs/plan/2026-08-26-pump-to-engine-migration.md` §12 Q8 and §7 Phase 7).
+> A pump P&ID (supply tank, impeller, valves, pipe routing) has no verified
+> engine-domain equivalent, so `client/src/components/ProcessSchematic.jsx`
+> was redesigned as a plain per-sensor status grid rather than an invented
+> engine layout diagram. This document is retained for historical reference
+> only — its content describes the pump-era component, not the current one.
+
 ## Context
 
 A `components/` folder (shadcn/ui + Tailwind + Radix + Recharts TSX mockups, static/fake data)

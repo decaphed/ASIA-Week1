@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 // faultEvents.js — presentation helpers for /api/pdm/fault-events rows.
 //
-// A fault_events row carries triggeredRules like ["vibration.max",
-// "motorTemp.rateOfChange"] and confidence LOW|MEDIUM|HIGH (see
+// A fault_events row carries triggeredRules like ["engineRpm.max",
+// "coolantTemperature.rateOfChange"] and confidence LOW|MEDIUM|HIGH (see
 // pdm/app/rules.py). These helpers turn that into the operator-facing
 // strings the design shows.
 // ─────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ export function parseRules(row) {
   return Array.isArray(rules) ? rules : [];
 }
 
-/** "Discharge Pressure — rising too fast" from a raw "dischargePressure.rateOfChange" rule id. */
+/** "Coolant Pressure — rising too fast" from a raw "coolantPressure.rateOfChange" rule id. */
 export function ruleLabel(rule) {
   const [metricKey, ruleKind] = rule.split('.');
   const metric = METRIC_BY_KEY[metricKey];

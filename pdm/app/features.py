@@ -11,23 +11,25 @@ to_vector() never zero-fills a missing/non-numeric value (same "no silent
 fabrication" principle as §14.2.1/D19) — a live processedRecord or a corpus
 row missing one of these fields is a real data problem that must fail
 loudly, not silently train/score on a fabricated zero.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 2 step 2. Order is deliberate and MUST NOT be reordered
+independently of TRAIN_CSV_COLUMN_MAP in training.py — to_vector()'s
+positional semantics mean any later reordering silently invalidates every
+persisted model artifact fit against the old order.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# rpm <- Engine_rpm (train.csv's column name); the rest match this
-# codebase's existing metric names 1:1. Order here is what the trained
-# model expects, fixed at fit time and never reordered independently of
-# this constant.
 FEATURE_ORDER = [
-    "rpm",
-    "suctionPressure",
-    "dischargePressure",
-    "flowRate",
-    "motorTemp",
-    "vibration",
+    "engineRpm",
+    "lubOilPressure",
+    "fuelPressure",
+    "coolantPressure",
+    "lubOilTemperature",
+    "coolantTemperature",
 ]
 
 

@@ -56,7 +56,7 @@ export const COLUMN_MISSING_RATE_EXCLUDE = 0.5;
 export const MIN_MAPPED_METRICS = 1;
 export const RANGE_SANITY_IN_RANGE_FRACTION = 0.7;
 
-const KNOWN_METRICS = ['flowRate', 'rpm', 'vibration', 'suctionPressure', 'dischargePressure', 'motorTemp'];
+const KNOWN_METRICS = ['engineRpm', 'lubOilPressure', 'fuelPressure', 'coolantPressure', 'lubOilTemperature', 'coolantTemperature'];
 
 function isBlank(value) {
   return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');

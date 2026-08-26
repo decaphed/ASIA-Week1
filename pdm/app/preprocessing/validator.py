@@ -1,5 +1,5 @@
 """validator.py — physics-informed validation, ported from
-server/preprocessing/validator.js. Reads RANGES from pump-physics.yaml
+server/preprocessing/validator.js. Reads RANGES from engine-physics.yaml
 (pdm/app/physics.py) instead of a hardcoded copy — the same file
 server/utils/validation.js now also loads from (docs/plan/2026-08-05-pdm-
 implementation.md §11.5 item 3 / §11.6.1).
@@ -7,6 +7,17 @@ implementation.md §11.5 item 3 / §11.6.1).
 This NEVER rejects a reading — it only annotates it. Hard rejection of
 impossible values stays in Node (middleware/validateReading.js), unaffected
 by this migration.
+
+Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+migration.md Phase 2 step 4 / §4.1. The old dischargePressure > suctionPressure
+rule (centrifugal-pump head reasoning) has NO engine analogue and is deleted
+outright, not renamed. Per docs/analysis/2026-08-26-train-csv-
+characterization.md, every pairwise correlation among the six engine metrics
+is |r| <= 0.072 — far below the plan's |r| >= 0.15 evidentiary bar — so the
+proposed cross-variable rules R2 (oil pressure vs. speed), R3 (coolant
+pressure vs. coolant temp), and R4 (oil/coolant temp coupling) are NOT
+implemented for lack of evidence. Only R1 (stopped-engine consistency, the
+direct port of the surviving pump STOPPED rule) remains.
 """
 
 from __future__ import annotations
@@ -14,7 +25,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..physics import load_ranges
-from .config import PRESSURE_EQUALIZATION_TOLERANCE_BAR
 from .transition import detect_transition
 
 RANGES = load_ranges()
@@ -46,27 +56,15 @@ def validate_physics(
     )
     tolerated = bool(transition and transition["suspected"] and transition["withinGraceWindow"])
 
-    # A centrifugal pump always adds head while running; while stopped or
-    # during pressure equalization, discharge may legitimately approach or
-    # dip below suction — tolerate that within a transition grace window.
-    discharge = sample.get("dischargePressure")
-    suction = sample.get("suctionPressure")
-    if discharge is not None and suction is not None:
-        if sample.get("status") == "STOPPED" or tolerated:
-            within_tolerance = discharge >= suction - PRESSURE_EQUALIZATION_TOLERANCE_BAR
-        else:
-            within_tolerance = discharge > suction
-        if not within_tolerance:
-            violations.append("dischargePressure must exceed suctionPressure")
-
-    # Status/measurement consistency: a STOPPED pump should show ~zero
-    # flow/rpm, but inertia/drainage/backflow/coast-down can keep both
-    # nonzero briefly right after a stop — tolerate within the grace window.
-    flow_rate = sample.get("flowRate")
-    rpm = sample.get("rpm")
-    if sample.get("status") == "STOPPED" and flow_rate is not None and rpm is not None:
-        if not tolerated and (flow_rate > 20 or rpm > 200):
-            violations.append("STOPPED status but flow/rpm indicate the pump is running")
+    # R1 — status/measurement consistency: a STOPPED engine should show ~zero
+    # RPM, but inertia/coast-down can keep it nonzero briefly right after a
+    # stop — tolerate within the grace window. This cannot be validated
+    # against data/train.csv itself (no status column there); it can only be
+    # exercised once the Phase 5 engine simulator emits status.
+    engine_rpm = sample.get("engineRpm")
+    if sample.get("status") == "STOPPED" and engine_rpm is not None:
+        if not tolerated and engine_rpm > 200:
+            violations.append("STOPPED status but engineRpm indicates the engine is running")
 
     return {
         "physicsValid": len(violations) == 0,

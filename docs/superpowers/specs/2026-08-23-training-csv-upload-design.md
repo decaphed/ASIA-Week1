@@ -3,6 +3,24 @@
 **Date:** 2026-08-23
 **Status:** Approved design, pending implementation
 
+> **⚠ CORRECTED, NOT SUPERSEDED (2026-08-26):** this spec's architecture
+> (upload -> quality-check -> fit -> compare -> deploy) is sound and was
+> preserved through the pump-to-engine migration — see
+> `docs/plan/2026-08-26-pump-to-engine-migration.md` §8. What was wrong is
+> the domain vocabulary: every code sample and column-mapping reference here
+> assumed a fictional pump-shaped `train.csv` (columns like `suctionPressure`,
+> `flowRate`) that never matched the real committed file. The real column
+> map, now fixed in `pdm/app/training.py::TRAIN_CSV_COLUMN_MAP`, is
+> `Engine_RPM -> engineRpm, Lub_Oil_Pressure -> lubOilPressure,
+> Fuel_Pressure -> fuelPressure, Coolant_Pressure -> coolantPressure,
+> Lub_Oil_Temperature -> lubOilTemperature, Coolant_Temperature ->
+> coolantTemperature`, with `Engine_Condition` labels exposed as neutral
+> `CLASS_0`/`CLASS_1` (not `NORMAL`/`FAULT` — polarity is unresolved, plan
+> §5). Any future work against this spec should follow the current code
+> (`pdm/app/training.py`, `pdm/app/training_quality.py`,
+> `engine-physics.yaml`) as the source of truth, not this document's
+> pump-shaped examples.
+
 ## Problem
 
 The only Tier 2 model today is the one-off bootstrap fit from a git-committed `data/train.csv`, trained and promoted entirely via manual CLI (`python -m pdm.app.training fit ...` piped into `recordBootstrapRun.js`). There is no way for anyone to retrain from new data without shelling into the container, no quality gate on what gets trained, and no way to compare a new candidate against the currently-deployed model before it goes live. Separately, the "Needs Review" tab in `PredictionsPage.jsx` renders its entire queue with no cap, forcing endless scrolling on a busy queue.

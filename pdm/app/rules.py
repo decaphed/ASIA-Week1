@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-METRICS = ["flowRate", "rpm", "vibration", "suctionPressure", "dischargePressure", "motorTemp"]
+METRICS = ["engineRpm", "lubOilPressure", "fuelPressure", "coolantPressure", "lubOilTemperature", "coolantTemperature"]
 
 THRESHOLDS_PATH = Path(__file__).parent / "thresholds.yaml"
 

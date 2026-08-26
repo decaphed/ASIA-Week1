@@ -79,7 +79,7 @@ services:
       # the image). Build-context COPY can't reach this file since it lives
       # at the repo root, outside ./pdm's build context — bind-mount instead,
       # same convention as db/init and node-red/flow.json below.
-      - ./pump-physics.yaml:/pump-physics.yaml:ro
+      - ./engine-physics.yaml:/engine-physics.yaml:ro
       # §15.1/D51 bootstrap artifact store — rw since this same container
       # both fits (python -m pdm.app.training, run via `docker compose exec`)
       # and serves (model.py, loaded once at import) the artifact; see
@@ -119,7 +119,7 @@ services:
       # Shared physics RANGES (§11.6.1) — server/utils/validation.js resolves
       # this to /pump-physics.yaml (__dirname/../.. from /app/utils in the
       # image). Same reasoning as the pdm service's mount above.
-      - ./pump-physics.yaml:/pump-physics.yaml:ro
+      - ./engine-physics.yaml:/engine-physics.yaml:ro
     restart: unless-stopped
     # Renamed from "server" — see §2/§3. Directory stays ./server.
     # Node-RED posts to http://127.0.0.1:3000/api/data (network_mode: host —

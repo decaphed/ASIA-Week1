@@ -74,8 +74,8 @@ function HealthGauge({ health, statuses, unknown }) {
 }
 
 const ALARM_TAGS = {
-  flowRate: 'FT-101', rpm: 'P-101', vibration: 'VT-101',
-  suctionPressure: 'PT-101', dischargePressure: 'PT-102', motorTemp: 'TT-101',
+  engineRpm: 'ST-101', lubOilPressure: 'PT-101', fuelPressure: 'PT-102',
+  coolantPressure: 'PT-103', lubOilTemperature: 'TT-101', coolantTemperature: 'TT-102',
 };
 
 function alarmLimitOf(key, status) {
@@ -140,7 +140,7 @@ function AlarmsPanel({ reading, statuses, alarmStarts, stale }) {
         ))}
       </div>
       <div style={{ marginTop: 'auto', paddingTop: 10, borderTop: '1px solid #eef2f5', fontSize: 12, color: '#8a99a8' }}>
-        Alarm limits follow the warn/alarm bands configured for this pump class
+        Alarm limits follow the warn/alarm bands configured for this engine class
       </div>
     </Card>
   );

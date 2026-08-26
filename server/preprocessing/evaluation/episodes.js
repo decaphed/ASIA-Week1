@@ -80,7 +80,8 @@ export function checkEvaluationGate(rows) {
  * Chronological, campaign-level walk-forward split.
  *
  * Why not a random/k-fold split: adjacent 1-minute processed_telemetry rows
- * are highly autocorrelated (see driftService.js — motorTemp's observed
+ * are highly autocorrelated (see driftService.js — a slow-moving
+ * temperature metric's observed
  * lag-1 autocorrelation is ~0.9). A random or k-fold split would routinely
  * place near-duplicate neighboring minutes on both sides of the split,
  * letting a model "predict" the test set by interpolating between

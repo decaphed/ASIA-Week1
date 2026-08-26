@@ -11,6 +11,9 @@
 // every camelCase field on every row. Values are always bound as $1, $2, …
 // (never string-concatenated), same injection-safety property the old
 // prepared statements had.
+//
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 4 (Strategy A, drop-and-recreate).
 // ─────────────────────────────────────────────────────────────────────────
 
 import pool, { toIso } from '../database/db.js';
@@ -24,13 +27,13 @@ function mapRow(row) {
 export async function insertReading(record) {
   const result = await pool.query(
     `INSERT INTO raw_telemetry
-      ("flowRate", "rpm", "vibration", "suctionPressure", "dischargePressure", "motorTemp", "status", "faultType", "timestamp",
+      ("engineRpm", "lubOilPressure", "fuelPressure", "coolantPressure", "lubOilTemperature", "coolantTemperature", "status", "faultType", "timestamp",
        "provenance", "physicsValid", "physicsViolations", "unfilledMetrics", "abnormalOperation")
      VALUES
       ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING id`,
     [
-      record.flowRate, record.rpm, record.vibration, record.suctionPressure, record.dischargePressure, record.motorTemp,
+      record.engineRpm, record.lubOilPressure, record.fuelPressure, record.coolantPressure, record.lubOilTemperature, record.coolantTemperature,
       record.status, record.faultType, record.timestamp,
       record.provenance, record.physicsValid, JSON.stringify(record.physicsViolations), JSON.stringify(record.unfilledMetrics), record.abnormalOperation,
     ],
@@ -98,15 +101,15 @@ export async function getCount() {
   return Number(result.rows[0].count);
 }
 
-/** @returns { avgFlowRate, avgRpm, avgVibration, avgSuctionPressure, avgDischargePressure, avgMotorTemp } (values may be null). */
+/** @returns { avgEngineRpm, avgLubOilPressure, avgFuelPressure, avgCoolantPressure, avgLubOilTemperature, avgCoolantTemperature } (values may be null). */
 export async function getAverages() {
   const result = await pool.query(`
-    SELECT AVG("flowRate")          AS "avgFlowRate",
-           AVG("rpm")                AS "avgRpm",
-           AVG("vibration")          AS "avgVibration",
-           AVG("suctionPressure")    AS "avgSuctionPressure",
-           AVG("dischargePressure")  AS "avgDischargePressure",
-           AVG("motorTemp")          AS "avgMotorTemp"
+    SELECT AVG("engineRpm")           AS "avgEngineRpm",
+           AVG("lubOilPressure")      AS "avgLubOilPressure",
+           AVG("fuelPressure")        AS "avgFuelPressure",
+           AVG("coolantPressure")     AS "avgCoolantPressure",
+           AVG("lubOilTemperature")   AS "avgLubOilTemperature",
+           AVG("coolantTemperature")  AS "avgCoolantTemperature"
     FROM raw_telemetry
   `);
   return result.rows[0];
@@ -124,19 +127,20 @@ export async function getLatestTimestamp() {
  *   bucketSeconds — bucket width in seconds (bound, not concatenated);
  *   sinceModifier — an interval string like '24 hours' / '7 days', used with
  *   Postgres's `now() - $2::interval`.
- * @returns rows: { bucket, t, flowRate, rpm, vibration, suctionPressure,
- *                  dischargePressure, motorTemp } (metric values are bucket AVGs).
+ * @returns rows: { bucket, t, engineRpm, lubOilPressure, fuelPressure,
+ *                  coolantPressure, lubOilTemperature, coolantTemperature }
+ *   (metric values are bucket AVGs).
  */
 export async function getSeries({ bucketSeconds, sinceModifier }) {
   const result = await pool.query(
     `SELECT FLOOR(EXTRACT(EPOCH FROM "timestamp") / $1)::bigint AS bucket,
-            MIN("timestamp")          AS t,
-            AVG("flowRate")           AS "flowRate",
-            AVG("rpm")                AS "rpm",
-            AVG("vibration")          AS "vibration",
-            AVG("suctionPressure")    AS "suctionPressure",
-            AVG("dischargePressure")  AS "dischargePressure",
-            AVG("motorTemp")          AS "motorTemp"
+            MIN("timestamp")           AS t,
+            AVG("engineRpm")           AS "engineRpm",
+            AVG("lubOilPressure")      AS "lubOilPressure",
+            AVG("fuelPressure")        AS "fuelPressure",
+            AVG("coolantPressure")     AS "coolantPressure",
+            AVG("lubOilTemperature")   AS "lubOilTemperature",
+            AVG("coolantTemperature")  AS "coolantTemperature"
      FROM raw_telemetry
      WHERE "timestamp" >= now() - $2::interval
      GROUP BY bucket
@@ -155,26 +159,26 @@ export async function getSummaryAggregate({ sinceModifier }) {
   const result = await pool.query(
     `SELECT COUNT(*)                                        AS "sampleCount",
             SUM(CASE WHEN "status" = 'RUNNING' THEN 1 ELSE 0 END) AS "runningCount",
-            MIN("timestamp")          AS "firstTs",
-            MAX("timestamp")          AS "lastTs",
-            MIN("flowRate")           AS "flowRateMin",
-            MAX("flowRate")           AS "flowRateMax",
-            AVG("flowRate")           AS "flowRateAvg",
-            MIN("rpm")                AS "rpmMin",
-            MAX("rpm")                AS "rpmMax",
-            AVG("rpm")                AS "rpmAvg",
-            MIN("vibration")          AS "vibrationMin",
-            MAX("vibration")          AS "vibrationMax",
-            AVG("vibration")          AS "vibrationAvg",
-            MIN("suctionPressure")    AS "suctionPressureMin",
-            MAX("suctionPressure")    AS "suctionPressureMax",
-            AVG("suctionPressure")    AS "suctionPressureAvg",
-            MIN("dischargePressure")  AS "dischargePressureMin",
-            MAX("dischargePressure")  AS "dischargePressureMax",
-            AVG("dischargePressure")  AS "dischargePressureAvg",
-            MIN("motorTemp")          AS "motorTempMin",
-            MAX("motorTemp")          AS "motorTempMax",
-            AVG("motorTemp")          AS "motorTempAvg"
+            MIN("timestamp")            AS "firstTs",
+            MAX("timestamp")            AS "lastTs",
+            MIN("engineRpm")            AS "engineRpmMin",
+            MAX("engineRpm")            AS "engineRpmMax",
+            AVG("engineRpm")            AS "engineRpmAvg",
+            MIN("lubOilPressure")       AS "lubOilPressureMin",
+            MAX("lubOilPressure")       AS "lubOilPressureMax",
+            AVG("lubOilPressure")       AS "lubOilPressureAvg",
+            MIN("fuelPressure")         AS "fuelPressureMin",
+            MAX("fuelPressure")         AS "fuelPressureMax",
+            AVG("fuelPressure")         AS "fuelPressureAvg",
+            MIN("coolantPressure")      AS "coolantPressureMin",
+            MAX("coolantPressure")      AS "coolantPressureMax",
+            AVG("coolantPressure")      AS "coolantPressureAvg",
+            MIN("lubOilTemperature")    AS "lubOilTemperatureMin",
+            MAX("lubOilTemperature")    AS "lubOilTemperatureMax",
+            AVG("lubOilTemperature")    AS "lubOilTemperatureAvg",
+            MIN("coolantTemperature")   AS "coolantTemperatureMin",
+            MAX("coolantTemperature")   AS "coolantTemperatureMax",
+            AVG("coolantTemperature")   AS "coolantTemperatureAvg"
      FROM raw_telemetry
      WHERE "timestamp" >= now() - $1::interval`,
     [sinceModifier],

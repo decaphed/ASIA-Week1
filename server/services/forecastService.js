@@ -57,12 +57,12 @@ import * as model from '../models/forecastModel.js';
 import { logger } from '../utils/logger.js';
 
 export const METRICS = [
-  'flowRate',
-  'rpm',
-  'vibration',
-  'suctionPressure',
-  'dischargePressure',
-  'motorTemp',
+  'engineRpm',
+  'lubOilPressure',
+  'fuelPressure',
+  'coolantPressure',
+  'lubOilTemperature',
+  'coolantTemperature',
 ];
 
 const REFIT_WINDOW = 200; // ~3.3 hours of one-minute processed records

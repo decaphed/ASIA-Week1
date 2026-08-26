@@ -35,15 +35,16 @@ export const HALF_WINDOW_SECONDS = 3;
 
 // Per-metric interpolation ceilings: how long a gap can be before a straight
 // line is trusted, differentiated by how fast each metric plausibly moves.
-// Motor temperature has high thermal mass and changes slowly; vibration can
-// contain short transient events a longer interpolation would conceal.
+// Migrated pump -> engine domain per docs/plan/2026-08-26-pump-to-engine-
+// migration.md Phase 3. The two temperatures have high thermal mass and
+// change slowly (long fillable gap); the two pressures and RPM move faster.
 export const MAX_FILLABLE_GAP_SECONDS_BY_METRIC = {
-  motorTemp: 20,
-  rpm: 8,
-  flowRate: 7,
-  suctionPressure: 6,
-  dischargePressure: 6,
-  vibration: 3,
+  coolantTemperature: 20,
+  lubOilTemperature: 20,
+  engineRpm: 8,
+  fuelPressure: 6,
+  lubOilPressure: 6,
+  coolantPressure: 6,
 };
 
 // The longest any single metric is ever willing to be bridged — used as the
@@ -52,18 +53,19 @@ export const MAX_FILLABLE_GAP_SECONDS = Math.max(...Object.values(MAX_FILLABLE_G
 
 // Implied rate-of-change ceilings (unit/sec) used as a proxy "something
 // abrupt likely happened mid-gap" signal, even when status labels match at
-// both endpoints of a gap.
+// both endpoints of a gap. Both temperatures are intentionally omitted (same
+// as motorTemp before them) — thermal mass makes instantaneous ramp rate a
+// poor signal; see thresholds.yaml's rateOfChangeMax reasoning for the
+// window-mean alternative used there instead.
 export const MAX_RAMP_RATE_PER_SECOND = {
-  rpm: 1500,
-  flowRate: 100,
-  vibration: 5,
-  suctionPressure: 3,
-  dischargePressure: 3,
+  engineRpm: 1500,
+  fuelPressure: 3,
+  lubOilPressure: 3,
+  coolantPressure: 3,
 };
 
-// How far discharge pressure may dip below suction pressure while
-// stopped/equalizing without being flagged a physics violation.
-export const PRESSURE_EQUALIZATION_TOLERANCE_BAR = 1.0;
+// RETIRED (2026-08-26, plan §4.1): served only the deleted
+// dischargePressure > suctionPressure rule, which has no engine analogue.
 
 // A status change (or an already-invalid neighbor) within this many seconds
 // of a physics check is tolerated as a plausible transition (equalization,

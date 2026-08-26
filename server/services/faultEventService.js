@@ -214,12 +214,12 @@ function toWindowSampleIn(sample) {
     timestamp: sample.timestamp,
     status: sample.status,
     faultType: sample.faultType ?? null,
-    flowRate: sample.flowRate,
-    rpm: sample.rpm,
-    vibration: sample.vibration,
-    suctionPressure: sample.suctionPressure,
-    dischargePressure: sample.dischargePressure,
-    motorTemp: sample.motorTemp,
+    engineRpm: sample.engineRpm,
+    lubOilPressure: sample.lubOilPressure,
+    fuelPressure: sample.fuelPressure,
+    coolantPressure: sample.coolantPressure,
+    lubOilTemperature: sample.lubOilTemperature,
+    coolantTemperature: sample.coolantTemperature,
   };
 }
 
@@ -453,13 +453,13 @@ export async function exportBufferRows(status) {
         eventStatus: event.status,
         eventFaultType: event.faultType,
         timestamp: sample.timestamp,
-        flowRate: sample.flowRate,
-        rpm: sample.rpm,
-        vibration: sample.vibration,
-        suctionPressure: sample.suctionPressure,
-        dischargePressure: sample.dischargePressure,
-        motorTemp: sample.motorTemp,
-        pumpStatus: sample.status,
+        engineRpm: sample.engineRpm,
+        lubOilPressure: sample.lubOilPressure,
+        fuelPressure: sample.fuelPressure,
+        coolantPressure: sample.coolantPressure,
+        lubOilTemperature: sample.lubOilTemperature,
+        coolantTemperature: sample.coolantTemperature,
+        engineStatus: sample.status,
       });
     }
   }

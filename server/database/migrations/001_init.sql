@@ -27,9 +27,11 @@
 CREATE TABLE raw_telemetry (
   id                 BIGSERIAL,
 
-  -- Pump telemetry. DOUBLE PRECISION is the right call here, not NUMERIC:
-  -- these are physical sensor measurements (litres/min, RPM, mm/s, bar,
-  -- degrees C), not currency, so there is no requirement for exact
+  -- Engine telemetry (migrated from a pump domain, docs/plan/2026-08-26-
+  -- pump-to-engine-migration.md Phase 4; Strategy A drop-and-recreate — no
+  -- prior data preserved, confirmed disposable by the user). DOUBLE
+  -- PRECISION is the right call here, not NUMERIC: these are physical
+  -- sensor measurements, not currency, so there is no requirement for exact
   -- decimal representation — the sensors themselves have far less
   -- precision than an IEEE 754 double carries. NUMERIC would add storage
   -- and arithmetic overhead for zero real benefit here. Nullable: an
@@ -38,18 +40,27 @@ CREATE TABLE raw_telemetry (
   -- ceiling (see preprocessing/missing.js) — never true for a real
   -- MEASURED reading, which is still hard-required at the HTTP boundary
   -- (validateReading). Do NOT add NOT NULL to these columns.
-  "flowRate"           DOUBLE PRECISION,   -- litres/minute, ~50-300
-  "rpm"                DOUBLE PRECISION,   -- revolutions/minute, ~1000-3600
-  "vibration"          DOUBLE PRECISION,   -- mm/s, ~0.5-12
-  "suctionPressure"    DOUBLE PRECISION,   -- bar, ~0.5-3
-  "dischargePressure"  DOUBLE PRECISION,   -- bar, ~2-12
-  "motorTemp"          DOUBLE PRECISION,   -- degrees Celsius, ~20-90
+  --
+  -- Ranges below are the Phase 0 p1-p99 operating band from
+  -- docs/analysis/2026-08-26-train-csv-characterization.md, not
+  -- hand-guessed. Units for the three pressures and two temperatures are
+  -- ASSUMED (bar / degC) — data/train.csv does not label units for any
+  -- non-RPM column (plan §2.2), unconfirmed against any instrumentation spec.
+  "engineRpm"          DOUBLE PRECISION,   -- RPM, ~382-1565
+  "lubOilPressure"     DOUBLE PRECISION,   -- bar (ASSUMED unit), ~0.86-5.61
+  "fuelPressure"       DOUBLE PRECISION,   -- bar (ASSUMED unit), ~1.40-16.16
+  "coolantPressure"    DOUBLE PRECISION,   -- bar (ASSUMED unit), ~0.72-5.95
+  "lubOilTemperature"  DOUBLE PRECISION,   -- degrees Celsius (ASSUMED unit), ~73.4-87.4
+  "coolantTemperature" DOUBLE PRECISION,   -- degrees Celsius (ASSUMED unit), ~65.7-91.8
 
   -- Run state as a short text enum: 'RUNNING' | 'STOPPED' | 'FAULT'.
   "status"             TEXT NOT NULL DEFAULT 'STOPPED',
 
-  -- Failure signature, only set while status = 'FAULT': 'THERMAL' |
-  -- 'CAVITATION' | 'BEARING' (see node-red/flow.json's FAULT_PROFILES).
+  -- Failure signature, only set while status = 'FAULT': 'OIL_PRESSURE_LOSS' |
+  -- 'COOLANT_OVERHEAT' | 'COOLANT_LOSS' | 'FUEL_STARVATION' | 'OVERSPEED' |
+  -- 'OIL_DEGRADATION' | 'THERMOSTAT_STUCK' | 'OTHER' (see node-red/flow.json's
+  -- FAULT_PROFILES and plan §4.2 — engineering judgment, not derived from
+  -- data/train.csv, which carries no fault-type supervision at all).
   -- NULL for RUNNING/STOPPED rows.
   "faultType"          TEXT,
 
@@ -111,18 +122,19 @@ CREATE TABLE processed_telemetry (
   -- the outlier-capped series (see Outlier Handling in the design doc).
   -- DOUBLE PRECISION throughout for the same reason as raw_telemetry
   -- above: these are statistics over physical measurements, not money.
-  "flowRateMean" DOUBLE PRECISION NOT NULL, "flowRateMedian" DOUBLE PRECISION NOT NULL, "flowRateMin" DOUBLE PRECISION NOT NULL, "flowRateMax" DOUBLE PRECISION NOT NULL, "flowRateStdDev" DOUBLE PRECISION NOT NULL, "flowRateLast" DOUBLE PRECISION NOT NULL,
-  "rpmMean" DOUBLE PRECISION NOT NULL, "rpmMedian" DOUBLE PRECISION NOT NULL, "rpmMin" DOUBLE PRECISION NOT NULL, "rpmMax" DOUBLE PRECISION NOT NULL, "rpmStdDev" DOUBLE PRECISION NOT NULL, "rpmLast" DOUBLE PRECISION NOT NULL,
-  "vibrationMean" DOUBLE PRECISION NOT NULL, "vibrationMedian" DOUBLE PRECISION NOT NULL, "vibrationMin" DOUBLE PRECISION NOT NULL, "vibrationMax" DOUBLE PRECISION NOT NULL, "vibrationStdDev" DOUBLE PRECISION NOT NULL, "vibrationLast" DOUBLE PRECISION NOT NULL,
-  "suctionPressureMean" DOUBLE PRECISION NOT NULL, "suctionPressureMedian" DOUBLE PRECISION NOT NULL, "suctionPressureMin" DOUBLE PRECISION NOT NULL, "suctionPressureMax" DOUBLE PRECISION NOT NULL, "suctionPressureStdDev" DOUBLE PRECISION NOT NULL, "suctionPressureLast" DOUBLE PRECISION NOT NULL,
-  "dischargePressureMean" DOUBLE PRECISION NOT NULL, "dischargePressureMedian" DOUBLE PRECISION NOT NULL, "dischargePressureMin" DOUBLE PRECISION NOT NULL, "dischargePressureMax" DOUBLE PRECISION NOT NULL, "dischargePressureStdDev" DOUBLE PRECISION NOT NULL, "dischargePressureLast" DOUBLE PRECISION NOT NULL,
-  "motorTempMean" DOUBLE PRECISION NOT NULL, "motorTempMedian" DOUBLE PRECISION NOT NULL, "motorTempMin" DOUBLE PRECISION NOT NULL, "motorTempMax" DOUBLE PRECISION NOT NULL, "motorTempStdDev" DOUBLE PRECISION NOT NULL, "motorTempLast" DOUBLE PRECISION NOT NULL,
+  "engineRpmMean" DOUBLE PRECISION NOT NULL, "engineRpmMedian" DOUBLE PRECISION NOT NULL, "engineRpmMin" DOUBLE PRECISION NOT NULL, "engineRpmMax" DOUBLE PRECISION NOT NULL, "engineRpmStdDev" DOUBLE PRECISION NOT NULL, "engineRpmLast" DOUBLE PRECISION NOT NULL,
+  "lubOilPressureMean" DOUBLE PRECISION NOT NULL, "lubOilPressureMedian" DOUBLE PRECISION NOT NULL, "lubOilPressureMin" DOUBLE PRECISION NOT NULL, "lubOilPressureMax" DOUBLE PRECISION NOT NULL, "lubOilPressureStdDev" DOUBLE PRECISION NOT NULL, "lubOilPressureLast" DOUBLE PRECISION NOT NULL,
+  "fuelPressureMean" DOUBLE PRECISION NOT NULL, "fuelPressureMedian" DOUBLE PRECISION NOT NULL, "fuelPressureMin" DOUBLE PRECISION NOT NULL, "fuelPressureMax" DOUBLE PRECISION NOT NULL, "fuelPressureStdDev" DOUBLE PRECISION NOT NULL, "fuelPressureLast" DOUBLE PRECISION NOT NULL,
+  "coolantPressureMean" DOUBLE PRECISION NOT NULL, "coolantPressureMedian" DOUBLE PRECISION NOT NULL, "coolantPressureMin" DOUBLE PRECISION NOT NULL, "coolantPressureMax" DOUBLE PRECISION NOT NULL, "coolantPressureStdDev" DOUBLE PRECISION NOT NULL, "coolantPressureLast" DOUBLE PRECISION NOT NULL,
+  "lubOilTemperatureMean" DOUBLE PRECISION NOT NULL, "lubOilTemperatureMedian" DOUBLE PRECISION NOT NULL, "lubOilTemperatureMin" DOUBLE PRECISION NOT NULL, "lubOilTemperatureMax" DOUBLE PRECISION NOT NULL, "lubOilTemperatureStdDev" DOUBLE PRECISION NOT NULL, "lubOilTemperatureLast" DOUBLE PRECISION NOT NULL,
+  "coolantTemperatureMean" DOUBLE PRECISION NOT NULL, "coolantTemperatureMedian" DOUBLE PRECISION NOT NULL, "coolantTemperatureMin" DOUBLE PRECISION NOT NULL, "coolantTemperatureMax" DOUBLE PRECISION NOT NULL, "coolantTemperatureStdDev" DOUBLE PRECISION NOT NULL, "coolantTemperatureLast" DOUBLE PRECISION NOT NULL,
 
   -- Operating-status breakdown across the window (seconds, sums to ~sampleCount).
   "dominantStatus"          TEXT NOT NULL,
-  -- Dominant failure signature (THERMAL | CAVITATION | BEARING) among this
-  -- window's FAULT samples, or NULL if none — mirrors raw_telemetry.faultType,
-  -- rolled up the same way dominantStatus is (see preprocessing/aggregation.js).
+  -- Dominant failure signature (see raw_telemetry."faultType"'s comment for
+  -- the full engine fault-type enum) among this window's FAULT samples, or
+  -- NULL if none — mirrors raw_telemetry.faultType, rolled up the same way
+  -- dominantStatus is (see preprocessing/aggregation.js).
   "dominantFaultType"       TEXT,
   "runningSeconds"          INTEGER NOT NULL DEFAULT 0,
   "faultSeconds"            INTEGER NOT NULL DEFAULT 0,
