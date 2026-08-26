@@ -62,32 +62,6 @@ entries:
       slug: nodered
       provider: !KeyOf nodered-proxy-provider
 
-  # TEMPORARY: third forward_single provider/application, same pattern as
-  # dashboard-proxy-provider above, gating the SAME dashboard SPA but at the
-  # cloudflared quick-tunnel's public hostname instead of dashboard.home —
-  # forward_single scopes to exactly one external_host (see the comment on
-  # nodered-proxy-provider above), so reaching the dashboard from both
-  # dashboard.home (LAN) and the public tunnel URL needs its own provider
-  # for the tunnel host, not a reused/edited dashboard-proxy-provider.
-  # Remove this whole block once there's a stable public domain instead.
-  - model: authentik_providers_proxy.proxyprovider
-    id: tunnel-proxy-provider
-    identifiers:
-      name: tunnel-proxy-provider
-    attrs:
-      mode: forward_single
-      external_host: https://collaborative-visited-delhi-things.trycloudflare.com
-      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
-      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
-
-  - model: authentik_core.application
-    identifiers:
-      slug: tunnel-dashboard
-    attrs:
-      name: Dashboard (tunnel)
-      slug: tunnel-dashboard
-      provider: !KeyOf tunnel-proxy-provider
-
   # Updates the built-in embedded outpost, identified by its default name,
   # to add this provider and to correctly configure the browser-facing
   # Authentik URL.
@@ -132,11 +106,6 @@ entries:
       providers:
         - !KeyOf dashboard-proxy-provider
         - !KeyOf nodered-proxy-provider
-        - !KeyOf tunnel-proxy-provider
       config:
-        # TEMPORARY: pinned to the current cloudflared quick-tunnel hostname
-        # while there's no stable public domain — revert to https://auth.home/
-        # once one exists (see git history), since a quick tunnel's hostname
-        # changes on every restart and this has to be updated to match.
-        authentik_host: https://collaborative-visited-delhi-things.trycloudflare.com/
-        authentik_host_browser: https://collaborative-visited-delhi-things.trycloudflare.com/
+        authentik_host: https://auth.home/
+        authentik_host_browser: https://auth.home/

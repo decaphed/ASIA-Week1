@@ -118,10 +118,7 @@ http:
     # priority: must win over the dashboard catch-all or the callback gets
     # swallowed by forward-auth and you get a redirect loop.
     outpost:
-      # TEMPORARY: the trycloudflare.com alternative is the cloudflared
-      # quick-tunnel hostname (see docker-compose.yml's AUTHENTIK_HOST_BROWSER
-      # note) — remove once there's a stable public domain.
-      rule: "(Host(`dashboard.home`) || Host(`collaborative-visited-delhi-things.trycloudflare.com`)) && PathPrefix(`/outpost.goauthentik.io/`)"
+      rule: "Host(`dashboard.home`) && PathPrefix(`/outpost.goauthentik.io/`)"
       priority: 30
       entryPoints:
         - websecure
@@ -132,27 +129,6 @@ http:
       # No authentik-auth middleware attached — that would create a
       # redirect loop (the outpost's own auth check would gate the outpost).
       # rl-auth is safe here: it's a rate limit, not an auth check.
-
-    # TEMPORARY: on dashboard.home/nodered.home, authentik's own login UI
-    # (flow executor, OAuth2 authorize endpoint, its static assets) lives on
-    # the SEPARATE, wholly-ungated auth.home host/router below — that's what
-    # actually avoids the redirect loop, not the /outpost.goauthentik.io/
-    # carve-out alone. The public tunnel only has ONE hostname, so it has to
-    # serve both the gated dashboard AND authentik's own login UI on the SAME
-    # host — this router exempts authentik's core paths there the same way
-    # auth.home is exempt entirely. Remove once there's a stable second
-    # public hostname to give auth.home its own router again.
-    outpost-tunnel-core:
-      rule: "Host(`collaborative-visited-delhi-things.trycloudflare.com`) && (PathPrefix(`/application/`) || PathPrefix(`/if/`) || PathPrefix(`/static/`) || PathPrefix(`/media/`) || PathPrefix(`/api/v3/`))"
-      priority: 30
-      entryPoints:
-        - websecure
-      tls: {}
-      service: authentik
-      middlewares:
-        - rl-auth
-      # No authentik-auth — same reasoning as `outpost` above: this IS
-      # authentik's own login surface, gating it creates the loop.
 
     # Same callback carve-out as `outpost` above, but for the nodered.home
     # forward_single provider — forward_single's callback path lives on the
@@ -186,8 +162,7 @@ http:
     # rl-app runs first so a flood gets throttled before it ever reaches
     # the forward-auth subrequest (and authentik-server behind it).
     dashboard:
-      # TEMPORARY: see the outpost router's note above.
-      rule: "Host(`dashboard.home`) || Host(`collaborative-visited-delhi-things.trycloudflare.com`)"
+      rule: "Host(`dashboard.home`)"
       priority: 1
       entryPoints:
         - websecure

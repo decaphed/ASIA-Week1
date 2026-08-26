@@ -257,9 +257,7 @@ services:
       # the embedded outpost (that's the outpost's own `authentik_host` —
       # see dashboard-proxy-provider.yaml) — kept here as a harmless,
       # possibly-relevant-elsewhere default matching that same value.
-      # TEMPORARY: cloudflared quick-tunnel hostname — see the matching note
-      # in authentik/blueprints/dashboard-proxy-provider.yaml.
-      AUTHENTIK_HOST_BROWSER: https://collaborative-visited-delhi-things.trycloudflare.com
+      AUTHENTIK_HOST_BROWSER: https://auth.home
     volumes:
       - authentik_media:/media
       - authentik_certs:/certs
@@ -313,9 +311,7 @@ services:
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
       AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
-      # TEMPORARY: cloudflared quick-tunnel hostname — see the matching note
-      # in authentik/blueprints/dashboard-proxy-provider.yaml.
-      AUTHENTIK_HOST_BROWSER: https://collaborative-visited-delhi-things.trycloudflare.com
+      AUTHENTIK_HOST_BROWSER: https://auth.home
     volumes:
       - authentik_media:/media
       - ./authentik/blueprints:/blueprints/custom:ro
