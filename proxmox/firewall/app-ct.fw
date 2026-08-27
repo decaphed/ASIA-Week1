@@ -27,10 +27,10 @@ IN ACCEPT -p tcp -dport 8006 -source <MGMT_HOST_IP> -log nolog
 # host, so this is deliberately unscoped by -source.
 IN ACCEPT -p tcp -dport 80 -log nolog
 
-# Traefik HTTPS entrypoint. Commented out per the runbook's step 3 — enable
-# once TLS is confirmed live end-to-end (mkcert cert served on 443), then
-# re-test `https://dashboard.home/` the same way as the http check.
-#IN ACCEPT -p tcp -dport 443 -log nolog
+# Traefik HTTPS entrypoint. TLS confirmed live end-to-end (mkcert cert
+# served on 443, per docs/plan/2026-08-11-hardening.md) — enabled per the
+# runbook's step 3.
+IN ACCEPT -p tcp -dport 443 -log nolog
 
 # Everything else this CT runs (5432 postgres, 6379 authentik-redis, 3000
 # backend, 1880 node-red, 9000 authentik-server) is intentionally NOT
